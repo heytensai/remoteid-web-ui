@@ -1,0 +1,47 @@
+# Python
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Configuration (user-specific)
+config.yaml
+web_config.yaml
+
+# Database files
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Captured data
+*.pcap
+*.gpx
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Web interface
+web_interface/web.db
+web_interface/__pycache__/
