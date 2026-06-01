@@ -45,3 +45,4 @@ Thumbs.db
 # Web interface
 web_interface/web.db
 web_interface/__pycache__/
+*.key
