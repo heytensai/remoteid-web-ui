@@ -1,0 +1,46 @@
+# Remote ID Web Interface - Docker Compose Configuration
+# Production deployment configuration
+#
+# Usage:
+#   docker-compose up -d
+#
+# To update:
+#   docker-compose pull && docker-compose up -d
+
+version: '3.8'
+
+services:
+  web:
+    build: .
+    image: remoteid-web:latest
+    container_name: remoteid-web
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      # Configuration file (required)
+      - ./web_config.yaml:/app/config/web_config.yaml:ro
+      # Database persistence
+      - web-data:/app/data
+      # SSH keys for remote collector access (optional)
+      - ~/.ssh:/home/appuser/.ssh:ro
+    environment:
+      # Python settings
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/config')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - remoteid-network
+
+volumes:
+  web-data:
+    driver: local
+
+networks:
+  remoteid-network:
+    driver: bridge

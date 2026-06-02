@@ -1,0 +1,32 @@
+# Web Interface Configuration for Docker Development
+# This config is optimized for local development with Docker
+
+web_interface:
+  # Web server settings
+  host: "0.0.0.0"
+  port: 5000
+
+  # Path to web interface database (local SQLite inside container)
+  database_path: "/app/data/web.db"
+
+  # Sync settings
+  sync_interval: 30  # seconds between syncs from collectors
+
+  # Collector sources
+  # For Docker dev, we use a mock collector with sample data
+  collectors:
+    - name: "Mock-Collector"
+      # In Docker dev, we mount mock data at this path
+      remote_db_path: "/app/data/mock_collector.db"
+
+  # Map configuration
+  # Default to a demo location (San Francisco area)
+  map:
+    center_lat: 37.7749
+    center_lon: -122.4194
+    default_zoom: 11
+    tile_provider: "osm"
+
+  default_hours: 24
+  # Limit to prevent browser lag
+  max_positions_per_query: 5000

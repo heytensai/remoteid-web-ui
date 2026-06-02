@@ -68,7 +68,7 @@ A standalone web interface to visualize Remote ID drone data on an interactive m
 | Sync Interval | 30 seconds (configurable) |
 | Track Simplification | No (until usage data) |
 | Data Retention | Keep everything |
-| Deployment | Manual run |
+| Deployment | Docker or manual run |
 | Authentication | None (private network) |
 
 ---
@@ -286,6 +286,20 @@ The app uses a flexbox-based layout:
 ---
 
 ## 13. Installation
+
+### Option A: Docker (Recommended)
+
+```bash
+# Production deployment
+docker-compose up -d
+
+# Development with mock data
+docker-compose -f docker-compose.dev.yml up
+```
+
+See `docker-config/README.md` for detailed Docker configuration.
+
+### Option B: Manual Installation
 
 ```bash
 cd web_interface

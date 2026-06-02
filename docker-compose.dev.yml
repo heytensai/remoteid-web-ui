@@ -1,0 +1,68 @@
+# Remote ID Web Interface - Development Configuration
+# Local development with mock data source
+#
+# Usage:
+#   docker-compose -f docker-compose.dev.yml up
+#
+# Features:
+#   - Auto-reload on code changes
+#   - Mock collector with sample data
+#   - Volume mounts for live development
+
+version: '3.8'
+
+services:
+  web:
+    build: .
+    image: remoteid-web:dev
+    container_name: remoteid-web-dev
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      # Live code mounting for development
+      - ./app.py:/app/app.py:ro
+      - ./config.py:/app/config.py:ro
+      - ./database.py:/app/database.py:ro
+      - ./sync.py:/app/sync.py:ro
+      - ./templates:/app/templates:ro
+      - ./static:/app/static:ro
+      # Config file
+      - ./docker-config/web_config.docker.yaml:/app/config/web_config.yaml:ro
+      # Database persistence
+      - web-data-dev:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+    networks:
+      - remoteid-dev-network
+
+  # Optional: Mock data generator for development
+  # This generates sample drone data into a SQLite database
+  mock-collector:
+    image: python:3.11-slim
+    container_name: remoteid-mock-collector
+    volumes:
+      - ./docker-config:/app/config:ro
+      - mock-data:/app/data
+    command: >
+      bash -c "
+        pip install -q sqlite3-utils &&
+        python /app/config/generate_mock_data.py
+      "
+    networks:
+      - remoteid-dev-network
+    depends_on:
+      - web
+
+volumes:
+  web-data-dev:
+    driver: local
+  mock-data:
+    driver: local
+
+networks:
+  remoteid-dev-network:
+    driver: bridge
