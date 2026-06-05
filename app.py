@@ -31,7 +31,7 @@ CORS(app)  # Enable CORS for all routes
 @app.route("/")
 def index():
     """Main page"""
-    return render_template("index.html")
+    return render_template("index.html", url_prefix=CONFIG.url_prefix)
 
 
 @app.route("/api/config")

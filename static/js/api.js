@@ -9,7 +9,7 @@ const API = {
      * Initialize API client
      */
     init() {
-        this.baseUrl = '';
+        this.baseUrl = window.APP_BASE_URL || '';
     },
 
     /**
@@ -105,7 +105,7 @@ const API = {
         let lastError;
         for (let attempt = 0; attempt <= retries; attempt++) {
             try {
-                const response = await fetch(url);
+                const response = await fetch(this.baseUrl + url);
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 }
@@ -127,7 +127,7 @@ const API = {
         let lastError;
         for (let attempt = 0; attempt <= retries; attempt++) {
             try {
-                const response = await fetch(url, {
+                const response = await fetch(this.baseUrl + url, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'

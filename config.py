@@ -44,6 +44,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
     map: MapConfig = field(default_factory=MapConfig)
     collectors: List[CollectorConfig] = field(default_factory=list)
     api_keys: dict = field(default_factory=dict)
+    url_prefix: str = ""
 
     def __init__(self, yaml_file: str):
         with open(yaml_file, encoding="utf-8") as fh:
@@ -57,6 +58,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         self.sync_interval = web_data.get("sync_interval", 30)
         self.default_hours = web_data.get("default_hours", 24)
         self.max_positions_per_query = web_data.get("max_positions_per_query", 5000)
+        self.url_prefix = web_data.get("url_prefix", "")
 
         # Map configuration
         map_data = web_data.get("map") or {}
