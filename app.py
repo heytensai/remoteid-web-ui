@@ -182,6 +182,88 @@ def trigger_sync():
     return jsonify({"status": "sync disabled - no collectors configured"}), 400
 
 
+def _get_api_key_source():
+    """Extract source name from Authorization header.
+    Returns source name or None if invalid/missing.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None
+
+    api_key = auth_header[7:]  # Remove "Bearer " prefix
+    return CONFIG.api_keys.get(api_key)
+
+
+@app.route("/api/submit", methods=["POST"])
+def submit_data():
+    """Submit remote ID data from remote nodes.
+
+    Requires Authorization: Bearer <api_key> header.
+    Accepts JSON array of events.
+    """
+    # Validate API key
+    source = _get_api_key_source()
+    if source is None:
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+
+    # Parse JSON payload
+    try:
+        data = request.get_json()
+        if not isinstance(data, list):
+            return jsonify({"success": False, "error": "Expected JSON array"}), 400
+    except Exception:
+        return jsonify({"success": False, "error": "Invalid JSON"}), 400
+
+    if not data:
+        return jsonify(
+            {"success": True, "inserted": 0, "errors": [], "last_timestamp": None}
+        )
+
+    try:
+        # Insert records
+        inserted, errors, most_recent = DATABASE.insert_remoteid_records(source, data)
+
+        # Get the most recent timestamp for this source after insert
+        last_timestamp = DATABASE.get_most_recent_timestamp(source)
+
+        # Format timestamp as ISO string
+        last_ts_str = last_timestamp.isoformat() if last_timestamp else None
+
+        return jsonify(
+            {
+                "success": True,
+                "inserted": inserted,
+                "errors": errors,
+                "last_timestamp": last_ts_str,
+            }
+        )
+    except Exception as e:
+        logger.exception("Error submitting data from %s", source)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/last-timestamp", methods=["GET"])
+def get_last_timestamp():
+    """Get the most recent timestamp in the database.
+
+    If Authorization header is provided, returns max timestamp for that source.
+    Otherwise returns max timestamp across all sources.
+    """
+    try:
+        source = _get_api_key_source()
+
+        # Get most recent timestamp
+        last_timestamp = DATABASE.get_most_recent_timestamp(source)
+
+        # Format as ISO string
+        last_ts_str = last_timestamp.isoformat() if last_timestamp else None
+
+        return jsonify({"last_timestamp": last_ts_str})
+    except Exception as e:
+        logger.exception("Error getting last timestamp")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 def _parse_time_range(args):
     """Parse start/end time from request args"""
     end_time = datetime.now()

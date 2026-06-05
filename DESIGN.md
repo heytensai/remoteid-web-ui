@@ -1,8 +1,8 @@
 # Web Interface Design Document
 ## Remote ID CalTopo Tracker
 
-**Version**: 1.1  
-**Date**: 2026-05-29  
+**Version**: 1.2
+**Date**: 2026-06-02
 **Status**: Implemented & Refined
 
 ---
@@ -69,7 +69,7 @@ A standalone web interface to visualize Remote ID drone data on an interactive m
 | Track Simplification | No (until usage data) |
 | Data Retention | Keep everything |
 | Deployment | Docker or manual run |
-| Authentication | None (private network) |
+| Authentication | None for web UI (private network); API key (Bearer token) for `/api/submit` endpoint |
 
 ---
 
@@ -81,7 +81,7 @@ web_interface:
   host: "0.0.0.0"
   port: 5000
   database_path: "./web.db"
-  
+
   # Sync settings
   sync_interval: 30  # seconds
   collectors:
@@ -89,18 +89,23 @@ web_interface:
     - name: "Pi-Field-1"
       host: "rpi.local"
       remote_db_path: "/opt/remoteid/remoteid.db"
-    
+
     # Local collector (for development - no SSH/rsync needed)
     # - name: "Local-Dev"
     #   remote_db_path: "../remoteid.db"  # Path to local database file
-  
+
+  # API keys for remote node data submission
+  api_keys:
+    "your-secret-key-1": "Node-A"
+    "your-secret-key-2": "Node-B"
+
   # Map defaults (optional - auto-fit if not set)
   map:
     center_lat: 40.7128
     center_lon: -74.0060
     default_zoom: 12
     tile_provider: "osm"  # osm, carto-dark, carto-light
-  
+
   # Display defaults
   default_hours: 24
   max_positions_per_query: 5000
@@ -119,6 +124,7 @@ web_interface/
 ├── database.py               # Web DB read/write with explicit column mapping
 ├── sync.py                   # Background sync thread (rsync + local)
 ├── requirements.txt          # Flask, PyYAML, etc.
+├── CLIENT_API.md             # Client API documentation for remote nodes
 ├── static/
 │   ├── css/
 │   │   ├── style.css         # Mobile-first responsive styles
@@ -145,6 +151,8 @@ web_interface/
 | `/api/config` | GET | Get map config (center, zoom defaults) |
 | `/api/bounds` | GET | Get bounding box of all positions |
 | `/api/sync` | POST | Manually trigger sync from collectors |
+| `/api/last-timestamp` | GET | Get most recent timestamp (for bootstrapping clients) |
+| `/api/submit` | POST | Submit data from remote nodes (requires API key) |
 
 ### Query Parameters
 - `start`: ISO 8601 datetime
@@ -153,7 +161,84 @@ web_interface/
 
 ---
 
-## 8. Database Schema
+## 8. Remote Node API (Data Submission)
+
+Remote collectors can push data directly to the web interface via HTTP API, bypassing the rsync-based sync mechanism. This is useful for nodes that can establish outbound HTTP connections but cannot host an rsync/SSH server.
+
+### Authentication
+
+Remote node endpoints require Bearer token authentication:
+
+```http
+Authorization: Bearer <api_key>
+```
+
+API keys are configured in `web_config.yaml`:
+
+```yaml
+web_interface:
+  api_keys:
+    "your-secret-key-1": "Node-A"
+    "your-secret-key-2": "Node-B"
+```
+
+The source name associated with the API key is automatically assigned to all submitted records.
+
+### Endpoints
+
+#### GET /api/last-timestamp
+
+Returns the most recent timestamp in the database for a given source (or across all sources if no auth). Used by clients to determine where to resume uploading from.
+
+**Response:**
+```json
+{"last_timestamp": "2026-06-02T14:30:00"}
+```
+
+#### POST /api/submit
+
+Submit one or more Remote ID events.
+
+**Request:**
+```json
+[
+  {
+    "timestamp": "2026-06-02T14:30:00",
+    "uas_id": "drone-123",
+    "latitude": 43.51746,
+    "longitude": -112.01449,
+    "altitude": 100.5,
+    "operator_id": "op-789",
+    "operator_latitude": 43.51800,
+    "operator_longitude": -112.01500
+  }
+]
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "inserted": 1,
+  "errors": [],
+  "last_timestamp": "2026-06-02T14:30:00"
+}
+```
+
+### Behavior
+
+- **Duplicate Detection**: Records with matching `uas_id` + `timestamp` are silently skipped
+- **Partial Success**: Valid events are processed even if some events have validation errors
+- **Source Assignment**: The `source` field is automatically set based on the API key; clients should not include it
+- **Resume Capability**: The `last_timestamp` returned can be used by clients to track sync progress
+
+### Client Implementation
+
+See `CLIENT_API.md` for detailed client implementation guide including Python example code.
+
+---
+
+## 9. Database Schema
 
 Same as decoder schema, plus `source` column for multi-collector support:
 
@@ -191,7 +276,7 @@ CREATE TABLE sync_log(
 
 ---
 
-## 9. Sync Mechanism
+## 10. Sync Mechanism
 
 The sync system supports both remote (rsync) and local collectors:
 
@@ -218,7 +303,7 @@ def sync_loop():
 
 ---
 
-## 10. Color Generation
+## 11. Color Generation
 
 ```javascript
 // Deterministic color from drone ID
@@ -234,7 +319,7 @@ function getDroneColor(uasId) {
 
 ---
 
-## 11. Mobile UI Layout
+## 12. Mobile UI Layout
 
 ```
 ┌────────────────────────────────┐
@@ -263,7 +348,7 @@ function getDroneColor(uasId) {
 
 ---
 
-## 12. Layout Architecture
+## 13. Layout Architecture
 
 The app uses a flexbox-based layout:
 
@@ -285,7 +370,7 @@ The app uses a flexbox-based layout:
 
 ---
 
-## 13. Installation
+## 14. Installation
 
 ### Option A: Docker (Recommended)
 
@@ -312,7 +397,7 @@ Access at `http://localhost:5000`
 
 ---
 
-## 14. Known Issues & Solutions
+## 15. Known Issues & Solutions
 
 ### Coordinate Import Issue
 
