@@ -59,12 +59,12 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         self.max_positions_per_query = web_data.get("max_positions_per_query", 5000)
 
         # Map configuration
-        map_data = web_data.get("map", {})
+        map_data = web_data.get("map") or {}
         self.map = MapConfig(map_data)
 
         # Collector configuration
         self.collectors = []
-        for collector_data in web_data.get("collectors", []):
+        for collector_data in web_data.get("collectors") or []:
             self.collectors.append(
                 CollectorConfig(
                     name=collector_data["name"],
@@ -74,7 +74,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
             )
 
         # API key configuration: api_key -> source name
-        self.api_keys = web_data.get("api_keys", {})
+        self.api_keys = web_data.get("api_keys") or {}
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization"""
