@@ -288,32 +288,36 @@ def _parse_time_range(args):
     return start_time, end_time
 
 
-def main():
-    """Main entry point"""
+def _init_app(config_path: str):
+    """Initialize application components. Returns Flask app ready to serve."""
     # pylint: disable=global-statement
     global CONFIG, DATABASE, SYNC_MANAGER
 
-    parser = argparse.ArgumentParser(description="Remote ID Web Interface")
-    parser.add_argument(
-        "--config", required=True, help="Path to configuration YAML file"
-    )
-    args = parser.parse_args()
+    logger.info("Loading configuration from %s", config_path)
+    CONFIG = WebConfig(config_path)
 
-    # Load configuration
-    logger.info("Loading configuration from %s", args.config)
-    CONFIG = WebConfig(args.config)
-
-    # Initialize DATABASE
     logger.info("Initializing database at %s", CONFIG.database_path)
     DATABASE = WebDatabase(CONFIG.database_path)
 
-    # Initialize sync manager
     SYNC_MANAGER = create_sync_manager(
         DATABASE, CONFIG.collectors, CONFIG.sync_interval
     )
 
     if SYNC_MANAGER:
         SYNC_MANAGER.start()
+
+    return app
+
+
+def main():
+    """Main entry point for development server"""
+    parser = argparse.ArgumentParser(description="Remote ID Web Interface")
+    parser.add_argument(
+        "--config", required=True, help="Path to configuration YAML file"
+    )
+    args = parser.parse_args()
+
+    _init_app(args.config)
 
     try:
         logger.info("Starting web server on %s:%d", CONFIG.host, CONFIG.port)
