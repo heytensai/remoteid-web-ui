@@ -317,6 +317,10 @@ def main():
 
     try:
         logger.info("Starting web server on %s:%d", CONFIG.host, CONFIG.port)
+        if CONFIG.url_prefix:
+            logger.info("URL prefix: %s", CONFIG.url_prefix)
+        else:
+            logger.info("URL prefix: (none)")
         app.run(host=CONFIG.host, port=CONFIG.port, debug=False, threaded=True)
     finally:
         if SYNC_MANAGER:
