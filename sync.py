@@ -113,7 +113,9 @@ class SyncManager:
             logger.debug("Running: %s", " ".join(cmd))
 
             # Run rsync
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=60, check=False
+            )
 
             if result.returncode != 0:
                 logger.error("Rsync failed: %s", result.stderr)

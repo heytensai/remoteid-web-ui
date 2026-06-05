@@ -294,7 +294,9 @@ class WebDatabase:
             fval = float(value)
             if key in ("latitude", "operator_latitude") and (fval < -90 or fval > 90):
                 return None
-            if key in ("longitude", "operator_longitude") and (fval < -180 or fval > 180):
+            if key in ("longitude", "operator_longitude") and (
+                fval < -180 or fval > 180
+            ):
                 return None
             return fval
         except (TypeError, ValueError):
@@ -461,3 +463,145 @@ class WebDatabase:
             if row and row[0] is not None:
                 return row
             return None
+
+    def insert_remoteid_records(
+        self, source: str, records: List[Dict]
+    ) -> Tuple[int, List[Dict], Optional[datetime]]:
+        """Insert multiple records into remoteid table.
+
+        Args:
+            source: The source name to associate with records
+            records: List of record dictionaries
+
+        Returns:
+            Tuple of (inserted_count, errors, most_recent_timestamp)
+        """
+        inserted = 0
+        errors = []
+        most_recent = None
+
+        # Valid fields that can be set (excluding id and source)
+        valid_fields = {
+            "timestamp",
+            "mac_address",
+            "uas_id",
+            "session_id",
+            "latitude",
+            "longitude",
+            "altitude",
+            "operator_id",
+            "operator_latitude",
+            "operator_longitude",
+        }
+
+        with sqlite3.connect(
+            self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
+        ) as conn:
+            for idx, record in enumerate(records):
+                try:
+                    # Validate required fields
+                    if not record.get("uas_id"):
+                        errors.append({"index": idx, "reason": "Missing uas_id"})
+                        continue
+
+                    # Parse and validate timestamp
+                    ts_str = record.get("timestamp")
+                    if not ts_str:
+                        errors.append({"index": idx, "reason": "Missing timestamp"})
+                        continue
+
+                    try:
+                        timestamp = datetime.fromisoformat(
+                            ts_str.replace("Z", "+00:00").replace("+00:00", "")
+                        )
+                    except ValueError:
+                        errors.append(
+                            {"index": idx, "reason": f"Invalid timestamp: {ts_str}"}
+                        )
+                        continue
+
+                    # Check for duplicate (uas_id + timestamp)
+                    existing = conn.execute(
+                        "SELECT 1 FROM remoteid WHERE uas_id = ? AND timestamp = ?",
+                        (record["uas_id"], timestamp),
+                    ).fetchone()
+
+                    if existing:
+                        # Skip duplicate - don't count as error
+                        continue
+
+                    # Sanitize coordinates
+                    lat = self._sanitize_float(record.get("latitude"), "latitude")
+                    lon = self._sanitize_float(record.get("longitude"), "longitude")
+                    alt = self._sanitize_float(record.get("altitude"), "altitude")
+                    op_lat = self._sanitize_float(
+                        record.get("operator_latitude"), "operator_latitude"
+                    )
+                    op_lon = self._sanitize_float(
+                        record.get("operator_longitude"), "operator_longitude"
+                    )
+
+                    # Build insert parameters
+                    params = {
+                        "source": source,
+                        "timestamp": timestamp,
+                        "uas_id": record["uas_id"],
+                        "mac_address": record.get("mac_address"),
+                        "session_id": record.get("session_id"),
+                        "latitude": lat,
+                        "longitude": lon,
+                        "altitude": alt,
+                        "operator_id": record.get("operator_id"),
+                        "operator_latitude": op_lat,
+                        "operator_longitude": op_lon,
+                    }
+
+                    conn.execute(
+                        """
+                        INSERT INTO remoteid
+                        (source, timestamp, mac_address, uas_id, session_id,
+                         latitude, longitude, altitude, operator_id,
+                         operator_latitude, operator_longitude)
+                        VALUES (:source, :timestamp, :mac_address, :uas_id, :session_id,
+                                :latitude, :longitude, :altitude, :operator_id,
+                                :operator_latitude, :operator_longitude)
+                        """,
+                        params,
+                    )
+                    inserted += 1
+
+                    # Track most recent timestamp
+                    if most_recent is None or timestamp > most_recent:
+                        most_recent = timestamp
+
+                except Exception as e:
+                    errors.append({"index": idx, "reason": str(e)})
+
+            conn.commit()
+
+        return inserted, errors, most_recent
+
+    def get_most_recent_timestamp(
+        self, source: Optional[str] = None
+    ) -> Optional[datetime]:
+        """Get the most recent timestamp in the database.
+
+        Args:
+            source: Optional source name to filter by. If None, returns max across all sources.
+
+        Returns:
+            Most recent datetime or None if no records
+        """
+        with sqlite3.connect(
+            self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
+        ) as conn:
+            if source:
+                cursor = conn.execute(
+                    "SELECT MAX(timestamp) FROM remoteid WHERE source = ?",
+                    (source,),
+                )
+            else:
+                cursor = conn.execute("SELECT MAX(timestamp) FROM remoteid")
+
+            row = cursor.fetchone()
+            return row[0] if row and row[0] else None
