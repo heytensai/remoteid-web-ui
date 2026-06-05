@@ -227,7 +227,7 @@ def submit_data():
         last_timestamp = DATABASE.get_most_recent_timestamp(source)
 
         # Format timestamp as ISO string
-        last_ts_str = last_timestamp.isoformat() if last_timestamp else None
+        last_ts_str = last_timestamp.isoformat() if hasattr(last_timestamp, 'isoformat') else last_timestamp
 
         return jsonify(
             {
@@ -256,7 +256,7 @@ def get_last_timestamp():
         last_timestamp = DATABASE.get_most_recent_timestamp(source)
 
         # Format as ISO string
-        last_ts_str = last_timestamp.isoformat() if last_timestamp else None
+        last_ts_str = last_timestamp.isoformat() if hasattr(last_timestamp, 'isoformat') else last_timestamp
 
         return jsonify({"last_timestamp": last_ts_str})
     except Exception as e:
