@@ -16,7 +16,7 @@ services:
     container_name: remoteid-web
     restart: unless-stopped
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
     volumes:
       # Configuration file (required)
       - ./web_config.yaml:/app/config/web_config.yaml:ro
