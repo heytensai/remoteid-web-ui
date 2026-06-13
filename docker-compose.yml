@@ -20,8 +20,8 @@ services:
     volumes:
       # Configuration file (required)
       - ./web_config.yaml:/app/config/web_config.yaml:ro
-      # Database persistence
-      - web-data:/app/data
+      # Database persistence (bind mount to host directory)
+      - ./data:/app/data
       # SSH keys for remote collector access (optional)
       - ~/.ssh:/home/appuser/.ssh:ro
     environment:
@@ -36,10 +36,6 @@ services:
       start_period: 10s
     networks:
       - remoteid-network
-
-volumes:
-  web-data:
-    driver: local
 
 networks:
   remoteid-network:

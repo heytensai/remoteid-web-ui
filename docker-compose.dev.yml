@@ -29,8 +29,8 @@ services:
       - ./static:/app/static:ro
       # Config file
       - ./docker-config/web_config.docker.yaml:/app/config/web_config.yaml:ro
-      # Database persistence
-      - web-data-dev:/app/data
+      # Database persistence (bind mount to host directory)
+      - ./data:/app/data
     environment:
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
@@ -58,8 +58,6 @@ services:
       - web
 
 volumes:
-  web-data-dev:
-    driver: local
   mock-data:
     driver: local
 
