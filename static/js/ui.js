@@ -15,6 +15,7 @@ const UIController = {
     loadedTracks: new Set(),
     selectedDrone: null,
     selectedDroneTrack: null,
+    visibleSessions: new Set(), // Track which sessions are checked/visible
 
     // DOM Elements
     elements: {},
@@ -27,7 +28,32 @@ const UIController = {
         this._initEventListeners();
         await this._initTimePicker();
         await this._loadConfig();
+
+        // Wait for MapController to be ready
+        await this._waitForMapController();
+
+        // Clear any existing markers before loading data
+        MapController.clearAllDroneMarkers();
+        MapController.clearAllTracks();
+        MapController.clearAllOperators();
         await this.refreshData();
+    },
+
+    /**
+     * Wait for MapController to be ready
+     */
+    async _waitForMapController() {
+        let attempts = 0;
+        const maxAttempts = 50; // 5 seconds max
+
+        while (!MapController.ready && attempts < maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            attempts++;
+        }
+
+        if (!MapController.ready) {
+            console.error('MapController failed to initialize');
+        }
     },
 
     /**
@@ -268,26 +294,68 @@ const UIController = {
         this.elements.refreshBtn.classList.add('spinning');
 
         try {
-            // Close detail panel on refresh
+            // Close detail panel on refresh and clear all map layers
             this._closeDetailPanel();
+            MapController.clearAllDroneMarkers();
+            MapController.clearAllTracks();
+            MapController.clearAllOperators();
 
             // Fetch drones
             const dronesResponse = await API.getDrones(this.currentStartTime, this.currentEndTime);
             const drones = dronesResponse.drones || [];
 
-            // Update drone list
+            // Get current session keys from new data
+            const currentSessionKeys = new Set(drones.map(d => `${d.uas_id}:${d.computed_session_id || 'unknown'}`));
+
+            // Remove tracks for sessions that no longer exist
+            for (const sessionKey of this.loadedTracks) {
+                if (!currentSessionKeys.has(sessionKey)) {
+                    const [uasId] = sessionKey.split(':');
+                    MapController.removeTrack(uasId, sessionKey);
+                }
+            }
+            this.loadedTracks = new Set([...this.loadedTracks].filter(k => currentSessionKeys.has(k)));
+            this.visibleSessions = new Set([...this.visibleSessions].filter(k => currentSessionKeys.has(k)));
+
+            // Update drone list (this populates visibleSessions on initial load)
             this._updateDroneList(drones);
 
-            // Update map markers
-            MapController.updateDrones(drones);
+            // Get unique UAS IDs from visible sessions
+            const visibleUasIds = new Set();
+            for (const sessionKey of this.visibleSessions) {
+                const [uasId] = sessionKey.split(':');
+                visibleUasIds.add(uasId);
+            }
+
+            // Filter drones to only show visible UAS IDs
+            // Only include a drone if its UAS ID is in the visible set
+            const visibleDrones = drones.filter(d => visibleUasIds.has(d.uas_id));
 
             // Store drone data for lazy track loading
             this.droneMap = {};
             drones.forEach(d => { this.droneMap[d.uas_id] = d; });
 
-            // Fetch operators
-            const operatorsResponse = await API.getOperators(this.currentStartTime, this.currentEndTime);
-            MapController.updateOperators(operatorsResponse.operators || []);
+            // If no visible sessions, clear everything from the map
+            if (this.visibleSessions.size === 0) {
+                MapController.clearAllDroneMarkers();
+                MapController.clearAllTracks();
+                MapController.clearAllOperators();
+            } else {
+                // Update map markers - only show visible drones
+                MapController.updateDrones(visibleDrones);
+
+                // Clear tracks for sessions that are no longer visible
+                for (const sessionKey of this.loadedTracks) {
+                    if (!this.visibleSessions.has(sessionKey)) {
+                        const [uasId] = sessionKey.split(':');
+                        MapController.removeTrack(uasId, sessionKey);
+                    }
+                }
+                this.loadedTracks = new Set([...this.loadedTracks].filter(k => this.visibleSessions.has(k)));
+
+                // Update operator layer to show only visible UAS IDs
+                MapController.filterOperatorsByUasIds(visibleUasIds);
+            }
 
             // Try to fit bounds if no default center is set
             if (!MapController.config.center_lat) {
@@ -310,7 +378,7 @@ const UIController = {
     },
 
     /**
-     * Update the drone list in sidebar - now shows sessions as independent entries
+     * Update the drone list in sidebar - shows sessions as independent entries with checkboxes
      */
     _updateDroneList(drones) {
         const list = this.elements.droneList;
@@ -338,21 +406,44 @@ const UIController = {
 
         const sortedDates = Object.keys(groups).sort().reverse();
 
+        // Determine most recent date for default selection (only on initial load)
+        const mostRecentDate = sortedDates.length > 0 ? sortedDates[0] : null;
+        const isInitialLoad = this.visibleSessions.size === 0;
+
+        // Pre-populate visibleSessions for most recent date on initial load
+        if (isInitialLoad && mostRecentDate) {
+            groups[mostRecentDate].forEach(drone => {
+                const sessionKey = `${drone.uas_id}:${drone.computed_session_id || 'unknown'}`;
+                this.visibleSessions.add(sessionKey);
+            });
+        }
+
         let html = '';
         sortedDates.forEach(date => {
             const flightCount = groups[date].length;
             // Sort sessions within this date by timestamp (reverse chronological - newest first)
-            const sortedSessions = groups[date].sort((a, b) => 
+            const sortedSessions = groups[date].sort((a, b) =>
                 new Date(b.timestamp) - new Date(a.timestamp)
             );
+
+            // Check if all sessions for this date are visible
+            const dateSessionKeys = sortedSessions.map(d => `${d.uas_id}:${d.computed_session_id || 'unknown'}`);
+            const allVisible = dateSessionKeys.every(key => this.visibleSessions.has(key));
+            const someVisible = dateSessionKeys.some(key => this.visibleSessions.has(key));
+            const isIndeterminate = someVisible && !allVisible;
+
+            // On initial load, expand the most recent date
+            const isExpanded = isInitialLoad && date === mostRecentDate;
+
             html += `
                 <div class="date-group" data-date="${date}">
                     <div class="date-header">
+                        <input type="checkbox" class="date-checkbox" data-date="${date}" ${allVisible ? 'checked' : ''} ${isIndeterminate ? 'data-indeterminate="true"' : ''}>
                         <span class="date-label">${date}</span>
                         <span class="date-count">${flightCount} flight${flightCount !== 1 ? 's' : ''}</span>
-                        <i class="fas fa-chevron-right date-chevron"></i>
+                        <i class="fas fa-chevron-${isExpanded ? 'down' : 'right'} date-chevron"></i>
                     </div>
-                    <div class="date-items collapsed">
+                    <div class="date-items ${isExpanded ? '' : 'collapsed'}">
                         ${sortedSessions.map(drone => {
                             const color = MapController.getDroneColor(drone.uas_id);
                             const altitude = drone.altitude !== null && drone.altitude !== undefined
@@ -360,14 +451,16 @@ const UIController = {
                                 : 'N/A';
                             const time = new Date(drone.timestamp);
                             const timeStr = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-                            
+
                             // Create unique key for this session
                             const sessionKey = `${drone.uas_id}:${drone.computed_session_id || 'unknown'}`;
                             const sessionId = drone.computed_session_id ? drone.computed_session_id.replace('session_', '') : '';
                             const isSelected = this.selectedDrones.has(sessionKey);
+                            const isVisible = this.visibleSessions.has(sessionKey);
 
                             return `
-                                <div class="drone-item ${isSelected ? 'active' : ''}" data-uas-id="${drone.uas_id}" data-session-key="${sessionKey}" data-session-id="${drone.computed_session_id || ''}">
+                                <div class="drone-item ${isSelected ? 'active' : ''} ${isVisible ? '' : 'dimmed'}" data-uas-id="${drone.uas_id}" data-session-key="${sessionKey}" data-session-id="${drone.computed_session_id || ''}">
+                                    <input type="checkbox" class="drone-checkbox" data-session-key="${sessionKey}" ${isVisible ? 'checked' : ''}>
                                     <div class="drone-color" style="background-color: ${color};"></div>
                                     <div class="drone-info">
                                         <div class="drone-id">${this.getDroneName(drone.uas_id)}</div>
@@ -389,59 +482,157 @@ const UIController = {
 
         list.innerHTML = html;
 
-        // Add date header click handlers (toggle expand/collapse)
+        // Set indeterminate state for date checkboxes
+        list.querySelectorAll('.date-checkbox[data-indeterminate="true"]').forEach(cb => {
+            cb.indeterminate = true;
+        });
+
+        // Load tracks for initially visible sessions (most recent date)
+        if (isInitialLoad && mostRecentDate) {
+            const mostRecentSessions = groups[mostRecentDate];
+            const dateStart = new Date(mostRecentDate + 'T00:00:00');
+            const dateEnd = new Date(mostRecentDate + 'T23:59:59.999');
+
+            for (const drone of mostRecentSessions) {
+                const sessionKey = `${drone.uas_id}:${drone.computed_session_id || 'unknown'}`;
+                const sessionId = drone.computed_session_id;
+                if (sessionId && !this.loadedTracks.has(sessionKey)) {
+                    MapController.loadTrackSession(drone.uas_id, sessionId, dateStart, dateEnd);
+                    this.loadedTracks.add(sessionKey);
+                }
+            }
+        }
+
+        // Add date checkbox handlers
+        list.querySelectorAll('.date-checkbox').forEach(checkbox => {
+            checkbox.addEventListener('change', (e) => {
+                const date = e.target.dataset.date;
+                const group = e.target.closest('.date-group');
+                const droneCheckboxes = group.querySelectorAll('.drone-checkbox');
+                const isChecked = e.target.checked;
+
+                // Update all drone checkboxes in this group
+                droneCheckboxes.forEach(dc => {
+                    dc.checked = isChecked;
+                    const sessionKey = dc.dataset.sessionKey;
+                    const droneItem = dc.closest('.drone-item');
+
+                    if (isChecked) {
+                        this.visibleSessions.add(sessionKey);
+                        droneItem.classList.remove('dimmed');
+                        // Load track if not already loaded
+                        if (!this.loadedTracks.has(sessionKey)) {
+                            const uasId = droneItem.dataset.uasId;
+                            const sessionId = droneItem.dataset.sessionId;
+                            const dateStart = new Date(date + 'T00:00:00');
+                            const dateEnd = new Date(date + 'T23:59:59.999');
+                            if (sessionId) {
+                                MapController.loadTrackSession(uasId, sessionId, dateStart, dateEnd);
+                                this.loadedTracks.add(sessionKey);
+                            }
+                        }
+                    } else {
+                        this.visibleSessions.delete(sessionKey);
+                        droneItem.classList.add('dimmed');
+                        // Remove track
+                        const uasId = droneItem.dataset.uasId;
+                        MapController.removeTrack(uasId, sessionKey);
+                        this.loadedTracks.delete(sessionKey);
+
+                        // Close detail panel if this session is currently selected
+                        if (this.selectedSession === droneItem.dataset.sessionId) {
+                            this._closeDetailPanel();
+                        }
+                    }
+                });
+
+                e.target.indeterminate = false;
+            });
+        });
+
+        // Add date header click handlers (toggle expand/collapse only, no checkbox change)
         list.querySelectorAll('.date-header').forEach(header => {
-            header.addEventListener('click', async () => {
+            header.addEventListener('click', async (e) => {
+                // Don't toggle if clicking the checkbox
+                if (e.target.classList.contains('date-checkbox')) {
+                    return;
+                }
+
                 const group = header.closest('.date-group');
                 const items = group.querySelector('.date-items');
                 const chevron = header.querySelector('.date-chevron');
-                const dateStr = group.dataset.date;
 
                 if (items.classList.contains('collapsed')) {
                     items.classList.remove('collapsed');
                     chevron.classList.remove('fa-chevron-right');
                     chevron.classList.add('fa-chevron-down');
-
-                    // Calculate time range for this date
-                    const dateStart = new Date(dateStr + 'T00:00:00');
-                    const dateEnd = new Date(dateStr + 'T23:59:59.999');
-
-                    // Load tracks for all flights in this group
-                    const droneItems = items.querySelectorAll('.drone-item');
-                    for (const item of droneItems) {
-                        const uasId = item.dataset.uasId;
-                        const sessionKey = item.dataset.sessionKey;
-                        const sessionId = item.dataset.sessionId;
-                        if (sessionId && !this.loadedTracks.has(sessionKey)) {
-                            await MapController.loadTrackSession(uasId, sessionId, dateStart, dateEnd);
-                            this.loadedTracks.add(sessionKey);
-                        }
-                    }
                 } else {
                     items.classList.add('collapsed');
                     chevron.classList.remove('fa-chevron-down');
                     chevron.classList.add('fa-chevron-right');
-
-                    // Remove tracks for all flights in this group
-                    const droneItems = items.querySelectorAll('.drone-item');
-                    for (const item of droneItems) {
-                        const uasId = item.dataset.uasId;
-                        const sessionKey = item.dataset.sessionKey;
-                        MapController.removeTrack(uasId);
-                        this.loadedTracks.delete(sessionKey);
-                    }
                 }
             });
         });
 
-        // Add click handlers for drone items (now session-based)
+        // Add drone checkbox handlers
+        list.querySelectorAll('.drone-checkbox').forEach(checkbox => {
+            checkbox.addEventListener('change', (e) => {
+                e.stopPropagation();
+                const sessionKey = e.target.dataset.sessionKey;
+                const droneItem = e.target.closest('.drone-item');
+                const uasId = droneItem.dataset.uasId;
+                const sessionId = droneItem.dataset.sessionId;
+                const group = droneItem.closest('.date-group');
+                const dateStr = group.dataset.date;
+                const isChecked = e.target.checked;
+
+                if (isChecked) {
+                    this.visibleSessions.add(sessionKey);
+                    droneItem.classList.remove('dimmed');
+                    // Load track
+                    if (!this.loadedTracks.has(sessionKey)) {
+                        const dateStart = new Date(dateStr + 'T00:00:00');
+                        const dateEnd = new Date(dateStr + 'T23:59:59.999');
+                        if (sessionId) {
+                            MapController.loadTrackSession(uasId, sessionId, dateStart, dateEnd);
+                            this.loadedTracks.add(sessionKey);
+                        }
+                    }
+                } else {
+                    this.visibleSessions.delete(sessionKey);
+                    droneItem.classList.add('dimmed');
+                    // Remove track
+                    MapController.removeTrack(uasId, sessionKey);
+                    this.loadedTracks.delete(sessionKey);
+
+                    // Close detail panel if this session is currently selected
+                    if (this.selectedSession === sessionId) {
+                        this._closeDetailPanel();
+                    }
+                }
+
+                // Update date checkbox state
+                this._updateDateCheckboxState(group);
+            });
+        });
+
+        // Add click handlers for drone items (open detail panel only if visible)
         list.querySelectorAll('.drone-item').forEach(item => {
             item.addEventListener('click', (e) => {
+                // Don't open detail if clicking checkbox or focus button
+                if (e.target.classList.contains('drone-checkbox') ||
+                    e.target.closest('.focus-btn')) {
+                    return;
+                }
+
                 const uasId = item.dataset.uasId;
                 const sessionKey = item.dataset.sessionKey;
                 const sessionId = item.dataset.sessionId;
-                const group = item.closest('.date-group');
-                const dateStr = group ? group.dataset.date : null;
+
+                // Only open detail if this session is visible (checked)
+                if (!this.visibleSessions.has(sessionKey)) {
+                    return;
+                }
 
                 // Toggle selection
                 if (this.selectedDrones.has(sessionKey)) {
@@ -456,21 +647,6 @@ const UIController = {
 
                 // Focus on map
                 MapController.highlightDrone(uasId);
-
-                // Load track for this specific session
-                if (sessionId) {
-                    // Use date-specific range if available, otherwise fall back to current time window
-                    let trackStart, trackEnd;
-                    if (dateStr) {
-                        trackStart = new Date(dateStr + 'T00:00:00');
-                        trackEnd = new Date(dateStr + 'T23:59:59.999');
-                    } else {
-                        trackStart = this.currentStartTime;
-                        trackEnd = this.currentEndTime;
-                    }
-                    MapController.loadTrackSession(uasId, sessionId, trackStart, trackEnd);
-                    this.loadedTracks.add(sessionKey);
-                }
 
                 // Open detail panel for this session
                 this._openDetailPanel(uasId, sessionId);
@@ -492,21 +668,19 @@ const UIController = {
                 const sessionId = item.dataset.sessionId;
                 const group = item.closest('.date-group');
                 const dateStr = group ? group.dataset.date : null;
-                
+
+                // Only focus if visible
+                if (!this.visibleSessions.has(sessionKey)) {
+                    return;
+                }
+
                 MapController.panToDrone(uasId);
 
-                // Also load the track for this session
+                // Also load the track for this session if not loaded
                 if (sessionId && !this.loadedTracks.has(sessionKey)) {
-                    // Use date-specific range if available, otherwise fall back to current time window
-                    let trackStart, trackEnd;
-                    if (dateStr) {
-                        trackStart = new Date(dateStr + 'T00:00:00');
-                        trackEnd = new Date(dateStr + 'T23:59:59.999');
-                    } else {
-                        trackStart = this.currentStartTime;
-                        trackEnd = this.currentEndTime;
-                    }
-                    MapController.loadTrackSession(uasId, sessionId, trackStart, trackEnd);
+                    const dateStart = new Date(dateStr + 'T00:00:00');
+                    const dateEnd = new Date(dateStr + 'T23:59:59.999');
+                    MapController.loadTrackSession(uasId, sessionId, dateStart, dateEnd);
                     this.loadedTracks.add(sessionKey);
                 }
 
@@ -516,6 +690,28 @@ const UIController = {
                 }
             });
         });
+    },
+
+    /**
+     * Update the date checkbox state based on its sessions
+     */
+    _updateDateCheckboxState(group) {
+        const dateCheckbox = group.querySelector('.date-checkbox');
+        const droneCheckboxes = group.querySelectorAll('.drone-checkbox');
+
+        const checkedCount = Array.from(droneCheckboxes).filter(cb => cb.checked).length;
+        const totalCount = droneCheckboxes.length;
+
+        if (checkedCount === 0) {
+            dateCheckbox.checked = false;
+            dateCheckbox.indeterminate = false;
+        } else if (checkedCount === totalCount) {
+            dateCheckbox.checked = true;
+            dateCheckbox.indeterminate = false;
+        } else {
+            dateCheckbox.checked = false;
+            dateCheckbox.indeterminate = true;
+        }
     },
 
     /**
@@ -533,7 +729,7 @@ const UIController = {
         this.selectedDrone = uasId;
         this.selectedSession = sessionId;
         const displayName = this.getDroneName(uasId);
-        
+
         if (sessionId) {
             // Show shortened session ID in title
             const shortSessionId = sessionId.replace('session_', '');
@@ -541,7 +737,7 @@ const UIController = {
         } else {
             this.elements.detailUasId.textContent = displayName;
         }
-        
+
         this.elements.droneDetail.classList.add('open');
 
         // Fetch track data

@@ -16,6 +16,7 @@ const MapController = {
     config: null,
     bounds: null,
     droneAliases: {},
+    ready: false,
 
     /**
      * Initialize the map
@@ -51,6 +52,14 @@ const MapController = {
         this.layers.tracks = L.layerGroup().addTo(this.map);
         this.layers.drones = L.layerGroup().addTo(this.map);
         this.layers.operators = L.layerGroup().addTo(this.map);
+
+        // Reset marker tracking objects
+        this.markers = {};
+        this.tracks = {};
+        this.operatorMarkers = {};
+        this.sessionOperatorMarkers = {};
+
+        this.ready = true;
 
         // Handle window resize
         window.addEventListener('resize', () => {
@@ -105,21 +114,6 @@ const MapController = {
      */
     getDroneName(uasId) {
         return this.droneAliases[uasId] || uasId;
-    },
-
-    /**
-     * Create drone icon
-     */
-    createDroneIcon(color) {
-        return L.divIcon({
-            className: 'custom-div-icon',
-            html: `<div class="drone-icon" style="border: 3px solid ${color}; color: ${color};">
-                     <i class="fas fa-plane"></i>
-                   </div>`,
-            iconSize: [32, 32],
-            iconAnchor: [16, 16],
-            popupAnchor: [0, -16]
-        });
     },
 
     /**
@@ -181,55 +175,67 @@ const MapController = {
 
     /**
      * Update session-specific operator markers (called when showing track)
+     * Shows only ONE operator - the first valid operator position from the session
      */
     updateSessionOperators(uasId, sessionId, positions, color) {
-        // Remove any existing session operators for this uasId
-        this._clearSessionOperators(uasId);
+        // Remove any existing session operators for this session
+        const sessionKey = `${uasId}:${sessionId}`;
+        this._clearSessionOperatorsByKey(sessionKey);
 
-        // Find unique operator positions within this session
-        const operatorPositions = [];
-        const seenPositions = new Set();
-
+        // Find the FIRST valid operator position from this session
+        let firstOperator = null;
         for (const pos of positions) {
             if (pos.operator_latitude != null && pos.operator_longitude != null) {
-                const key = `${pos.operator_latitude.toFixed(6)},${pos.operator_longitude.toFixed(6)}`;
-                if (!seenPositions.has(key)) {
-                    seenPositions.add(key);
-                    operatorPositions.push({
-                        operator_id: pos.operator_id,
-                        operator_latitude: pos.operator_latitude,
-                        operator_longitude: pos.operator_longitude,
-                        uas_latitude: pos.latitude,
-                        uas_longitude: pos.longitude,
-                        timestamp: pos.timestamp
-                    });
-                }
+                firstOperator = {
+                    operator_id: pos.operator_id,
+                    operator_latitude: pos.operator_latitude,
+                    operator_longitude: pos.operator_longitude,
+                    uas_latitude: pos.latitude,
+                    uas_longitude: pos.longitude,
+                    timestamp: pos.timestamp
+                };
+                break; // Only take the first one
             }
         }
 
-        // Add markers for each unique operator position
+        // If no operator position found, don't add any marker
+        if (!firstOperator) {
+            return;
+        }
+
+        // Add marker for the first operator position
         if (!this.sessionOperatorMarkers) {
             this.sessionOperatorMarkers = {};
         }
-        if (!this.sessionOperatorMarkers[uasId]) {
-            this.sessionOperatorMarkers[uasId] = [];
+        if (!this.sessionOperatorMarkers[sessionKey]) {
+            this.sessionOperatorMarkers[sessionKey] = [];
         }
 
-        for (const op of operatorPositions) {
-            // Check if operator is at same location as UAS
-            const distance = this._calculateDistance(
-                op.operator_latitude, op.operator_longitude,
-                op.uas_latitude, op.uas_longitude
-            );
-            const isSameLocation = distance < 50; // Within 50 meters
+        // Check if operator is at same location as UAS
+        const distance = this._calculateDistance(
+            firstOperator.operator_latitude, firstOperator.operator_longitude,
+            firstOperator.uas_latitude, firstOperator.uas_longitude
+        );
+        const isSameLocation = distance < 50; // Within 50 meters
 
-            const marker = L.marker([op.operator_latitude, op.operator_longitude], {
-                icon: this.createSessionOperatorIcon(color, isSameLocation),
-                opacity: 0.85
-            }).addTo(this.layers.operators);
+        const marker = L.marker([firstOperator.operator_latitude, firstOperator.operator_longitude], {
+            icon: this.createSessionOperatorIcon(color, isSameLocation),
+            opacity: 0.85
+        }).addTo(this.layers.operators);
 
-            marker.bindPopup(this._createSessionOperatorPopup(uasId, sessionId, op, color, distance));
-            this.sessionOperatorMarkers[uasId].push(marker);
+        marker.bindPopup(this._createSessionOperatorPopup(uasId, sessionId, firstOperator, color, distance));
+        this.sessionOperatorMarkers[sessionKey].push(marker);
+    },
+
+    /**
+     * Clear session-specific operator markers for a session key
+     */
+    _clearSessionOperatorsByKey(sessionKey) {
+        if (this.sessionOperatorMarkers && this.sessionOperatorMarkers[sessionKey]) {
+            for (const marker of this.sessionOperatorMarkers[sessionKey]) {
+                this.layers.operators.removeLayer(marker);
+            }
+            delete this.sessionOperatorMarkers[sessionKey];
         }
     },
 
@@ -237,11 +243,15 @@ const MapController = {
      * Clear session-specific operator markers for a UAS
      */
     _clearSessionOperators(uasId) {
-        if (this.sessionOperatorMarkers && this.sessionOperatorMarkers[uasId]) {
-            for (const marker of this.sessionOperatorMarkers[uasId]) {
-                this.layers.operators.removeLayer(marker);
+        if (this.sessionOperatorMarkers) {
+            for (const sessionKey of Object.keys(this.sessionOperatorMarkers)) {
+                if (sessionKey.startsWith(`${uasId}:`)) {
+                    for (const marker of this.sessionOperatorMarkers[sessionKey]) {
+                        this.layers.operators.removeLayer(marker);
+                    }
+                    delete this.sessionOperatorMarkers[sessionKey];
+                }
             }
-            delete this.sessionOperatorMarkers[uasId];
         }
     },
 
@@ -250,13 +260,26 @@ const MapController = {
      */
     _clearAllSessionOperators() {
         if (this.sessionOperatorMarkers) {
-            for (const uasId of Object.keys(this.sessionOperatorMarkers)) {
-                for (const marker of this.sessionOperatorMarkers[uasId]) {
+            for (const sessionKey of Object.keys(this.sessionOperatorMarkers)) {
+                for (const marker of this.sessionOperatorMarkers[sessionKey]) {
                     this.layers.operators.removeLayer(marker);
                 }
             }
             this.sessionOperatorMarkers = {};
         }
+    },
+
+    /**
+     * Clear all operator markers (both global and session-specific)
+     */
+    clearAllOperators() {
+        if (!this.ready || !this.layers.operators) return;
+        // Clear global operators
+        this.layers.operators.clearLayers();
+        this.operatorMarkers = {};
+
+        // Clear session operators
+        this._clearAllSessionOperators();
     },
 
     /**
@@ -313,13 +336,34 @@ const MapController = {
     },
 
     /**
+     * Clear all drone markers
+     */
+    clearAllDroneMarkers() {
+        if (!this.ready || !this.layers.drones) return;
+        // Clear the entire drones layer group
+        this.layers.drones.clearLayers();
+        this.markers = {};
+    },
+
+    /**
+     * Clear all tracks
+     */
+    clearAllTracks() {
+        if (!this.ready || !this.layers.tracks) return;
+        this.layers.tracks.clearLayers();
+        this.tracks = {};
+    },
+
+    /**
      * Update drone markers (handles both UAS and session entries)
      */
     updateDrones(drones) {
+        if (!this.ready || !this.layers.drones) return;
+
         // Get unique UAS IDs (since we may have multiple sessions per UAS)
         const uasIds = [...new Set(drones.map(d => d.uas_id))];
         const currentIds = new Set(uasIds);
-        
+
         // Remove markers for drones no longer present
         for (const [id, marker] of Object.entries(this.markers)) {
             if (!currentIds.has(id)) {
@@ -328,33 +372,13 @@ const MapController = {
             }
         }
 
-        // Update or create markers (one per UAS, at the latest position)
-        for (const uasId of uasIds) {
-            // Find the latest position for this UAS across all sessions
-            const uasEntries = drones.filter(d => d.uas_id === uasId);
-            const latestEntry = uasEntries.reduce((latest, current) => {
-                return new Date(current.timestamp) > new Date(latest.timestamp) ? current : latest;
-            }, uasEntries[0]);
-
-            const color = this.getDroneColor(uasId);
-            const lat = latestEntry.latitude;
-            const lon = latestEntry.longitude;
-
-            if (this.markers[uasId]) {
-                // Update existing marker
-                this.markers[uasId].setLatLng([lat, lon]);
-            } else {
-                // Create new marker
-                const marker = L.marker([lat, lon], {
-                    icon: this.createDroneIcon(color)
-                }).addTo(this.layers.drones);
-
-                // Add popup
-                marker.bindPopup(this._createDronePopup(latestEntry, color));
-
-                this.markers[uasId] = marker;
-            }
+        // If no drones to show, clear everything
+        if (uasIds.length === 0) {
+            this.clearAllDroneMarkers();
+            return;
         }
+
+
     },
 
     /**
@@ -385,30 +409,67 @@ const MapController = {
     },
 
     /**
-     * Remove a specific drone track from the map
+     * Filter operators to only show specific UAS IDs
+     * Removes operators for UAS IDs not in the visible set
      */
-    removeTrack(uasId) {
-        if (this.tracks[uasId]) {
-            if (Array.isArray(this.tracks[uasId])) {
+    filterOperatorsByUasIds(visibleUasIds) {
+        if (!this.ready) return;
+
+        // Remove global operators for hidden UAS IDs
+        for (const [uasId, marker] of Object.entries(this.operatorMarkers)) {
+            if (!visibleUasIds.has(uasId)) {
+                this.layers.operators.removeLayer(marker);
+                delete this.operatorMarkers[uasId];
+            }
+        }
+
+        // Remove session operators for hidden sessions
+        if (this.sessionOperatorMarkers) {
+            for (const sessionKey of Object.keys(this.sessionOperatorMarkers)) {
+                const [uasId] = sessionKey.split(':');
+                if (!visibleUasIds.has(uasId)) {
+                    this._clearSessionOperatorsByKey(sessionKey);
+                }
+            }
+        }
+    },
+
+    /**
+     * Remove a specific drone track from the map (session-specific)
+     */
+    removeTrack(uasId, sessionKey) {
+        if (!this.ready || !this.layers.tracks) return;
+
+        // If sessionKey is provided, remove only that session's track
+        // Otherwise remove all tracks for this uasId
+        const trackKey = sessionKey || uasId;
+
+        if (this.tracks[trackKey]) {
+            if (Array.isArray(this.tracks[trackKey])) {
                 // Remove all session segments
-                for (const segment of this.tracks[uasId]) {
+                for (const segment of this.tracks[trackKey]) {
                     this.layers.tracks.removeLayer(segment);
                 }
                 // Remove session markers if they exist
-                if (this.tracks[uasId].markers) {
-                    for (const marker of this.tracks[uasId].markers) {
+                if (this.tracks[trackKey].markers) {
+                    for (const marker of this.tracks[trackKey].markers) {
                         this.layers.tracks.removeLayer(marker);
                     }
                 }
             } else {
                 // Legacy single track
-                this.layers.tracks.removeLayer(this.tracks[uasId]);
+                this.layers.tracks.removeLayer(this.tracks[trackKey]);
             }
-            delete this.tracks[uasId];
+            delete this.tracks[trackKey];
         }
 
-        // Also clear session operators for this UAS
-        this._clearSessionOperators(uasId);
+        // Also clear session operators for this specific session if sessionKey provided
+        if (sessionKey) {
+            this._clearSessionOperatorsByKey(sessionKey);
+        } else {
+            // Clear all session operators for this UAS
+            this._clearSessionOperators(uasId);
+        }
     },
 
     /**
@@ -439,6 +500,8 @@ const MapController = {
      * Load and draw a specific session track
      */
     async loadTrackSession(uasId, sessionId, start, end) {
+        if (!this.ready) return;
+
         try {
             const response = await API.getTrack(uasId, start, end, true);
             if (response.sessions && response.sessions.length > 0) {
@@ -453,6 +516,14 @@ const MapController = {
         } catch (e) {
             console.error(`Failed to get track for ${uasId}:${sessionId}:`, e);
         }
+    },
+
+    /**
+     * Clear all tracks
+     */
+    clearAllTracks() {
+        this.layers.tracks.clearLayers();
+        this.tracks = {};
     },
 
     /**
@@ -493,6 +564,8 @@ const MapController = {
      * Draw a track segment (single session) on the map
      */
     _drawTrackSegment(uasId, sessionId, positions, color) {
+        if (!this.ready || !this.layers.tracks) return;
+
         const points = positions.map(t => [t.latitude, t.longitude]);
 
         const polyline = L.polyline(points, {
@@ -503,14 +576,15 @@ const MapController = {
             lineJoin: 'round'
         }).addTo(this.layers.tracks);
 
-        // Store by UAS ID (array of segments)
-        if (!this.tracks[uasId]) {
-            this.tracks[uasId] = [];
+        // Store by session key instead of just UAS ID
+        const sessionKey = `${uasId}:${sessionId}`;
+        if (!this.tracks[sessionKey]) {
+            this.tracks[sessionKey] = [];
         }
-        this.tracks[uasId].push(polyline);
+        this.tracks[sessionKey].push(polyline);
 
         // Add start and end markers for this session
-        this._addSessionMarkers(uasId, sessionId, positions, color);
+        this._addSessionMarkers(uasId, sessionId, positions, color, sessionKey);
 
         // Add session-specific operator markers
         this.updateSessionOperators(uasId, sessionId, positions, color);
@@ -549,7 +623,7 @@ const MapController = {
     /**
      * Add start and end markers for a session
      */
-    _addSessionMarkers(uasId, sessionId, positions, color) {
+    _addSessionMarkers(uasId, sessionId, positions, color, sessionKey) {
         if (!positions || positions.length === 0) return;
 
         const startPos = positions[0];
@@ -563,11 +637,12 @@ const MapController = {
 
         startMarker.bindPopup(this._createSessionPointPopup(uasId, sessionId, startPos, 'Start', color));
 
-        // Store the markers with the track
-        if (!this.tracks[uasId].markers) {
-            this.tracks[uasId].markers = [];
+        // Store the markers with the track using session key
+        const trackKey = sessionKey || `${uasId}:${sessionId}`;
+        if (!this.tracks[trackKey].markers) {
+            this.tracks[trackKey].markers = [];
         }
-        this.tracks[uasId].markers.push(startMarker);
+        this.tracks[trackKey].markers.push(startMarker);
 
         // Add end marker (only if different from start)
         if (positions.length > 1) {
@@ -577,7 +652,7 @@ const MapController = {
             }).addTo(this.layers.tracks);
 
             endMarker.bindPopup(this._createSessionPointPopup(uasId, sessionId, endPos, 'End', color));
-            this.tracks[uasId].markers.push(endMarker);
+            this.tracks[trackKey].markers.push(endMarker);
         }
     },
 
@@ -635,54 +710,6 @@ const MapController = {
         }).addTo(this.layers.tracks);
 
         this.tracks[uasId] = polyline;
-    },
-
-    /**
-     * Create popup content for drone
-     */
-    _createDronePopup(drone, color) {
-        const altitude = drone.altitude !== null && drone.altitude !== undefined
-            ? `${drone.altitude.toFixed(1)}m`
-            : 'N/A';
-        const time = new Date(drone.timestamp);
-        const dateStr = time.toLocaleDateString('en-CA');
-        const timeStr = time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-        const displayTime = `${dateStr} ${timeStr}`;
-
-        // Show session info if available
-        let sessionInfo = '';
-        if (drone.computed_session_id) {
-            const shortSession = drone.computed_session_id.replace('session_', '');
-            sessionInfo = `
-                <div class="popup-row">
-                    <span class="popup-label">Session:</span>
-                    <span class="popup-value">${shortSession}</span>
-                </div>
-            `;
-        }
-
-        return `
-            <div class="popup-title" style="color: ${color};">
-                <i class="fas fa-plane"></i> ${this.getDroneName(drone.uas_id)}
-            </div>
-            ${sessionInfo}
-            <div class="popup-row">
-                <span class="popup-label">UAS ID:</span>
-                <span class="popup-value">${drone.uas_id}</span>
-            </div>
-            <div class="popup-row">
-                <span class="popup-label">Altitude:</span>
-                <span class="popup-value">${altitude}</span>
-            </div>
-            <div class="popup-row">
-                <span class="popup-label">Last seen:</span>
-                <span class="popup-value">${displayTime}</span>
-            </div>
-            <div class="popup-row">
-                <span class="popup-label">Position:</span>
-                <span class="popup-value">${drone.latitude.toFixed(6)}, ${drone.longitude.toFixed(6)}</span>
-            </div>
-        `;
     },
 
     /**
