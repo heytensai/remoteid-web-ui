@@ -444,62 +444,56 @@ class WebDatabase:
         """Get list of unique drones seen in time window with latest positions
 
         Returns drones grouped by session if session data is available.
+        Drones without session data are returned as single entries.
         """
         with sqlite3.connect(
             self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
         ) as conn:
             conn.row_factory = sqlite3.Row
 
-            # Check if we have computed_session_id data
+            # Get drones with session data - one entry per session
             cursor = conn.execute(
-                """SELECT COUNT(*) FROM remoteid
-                   WHERE timestamp BETWEEN ? AND ?
-                   AND computed_session_id IS NOT NULL""",
+                """
+                SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
+                       r1.timestamp, r1.operator_id, r1.operator_latitude, r1.operator_longitude,
+                       r1.source, r1.computed_session_id
+                FROM remoteid r1
+                INNER JOIN (
+                    SELECT uas_id, computed_session_id, MAX(timestamp) as max_ts
+                    FROM remoteid
+                    WHERE timestamp BETWEEN ? AND ?
+                    AND computed_session_id IS NOT NULL
+                    GROUP BY uas_id, computed_session_id
+                ) r2 ON r1.uas_id = r2.uas_id
+                    AND r1.computed_session_id = r2.computed_session_id
+                    AND r1.timestamp = r2.max_ts
+                ORDER BY r1.uas_id, r1.computed_session_id
+            """,
                 (start_time, end_time),
             )
-            has_session_data = cursor.fetchone()[0] > 0
+            results = cursor.fetchall()
 
-            if has_session_data:
-                # Return each session as a separate entry
-                cursor = conn.execute(
-                    """
-                    SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
-                           r1.timestamp, r1.operator_id, r1.operator_latitude, r1.operator_longitude,
-                           r1.source, r1.computed_session_id
-                    FROM remoteid r1
-                    INNER JOIN (
-                        SELECT uas_id, computed_session_id, MAX(timestamp) as max_ts
-                        FROM remoteid
-                        WHERE timestamp BETWEEN ? AND ?
-                        AND computed_session_id IS NOT NULL
-                        GROUP BY uas_id, computed_session_id
-                    ) r2 ON r1.uas_id = r2.uas_id
-                        AND r1.computed_session_id = r2.computed_session_id
-                        AND r1.timestamp = r2.max_ts
-                    ORDER BY r1.uas_id, r1.computed_session_id
-                """,
-                    (start_time, end_time),
-                )
-            else:
-                # Fallback to original behavior - one entry per UAS
-                cursor = conn.execute(
-                    """
-                    SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
-                           r1.timestamp, r1.operator_id, r1.operator_latitude, r1.operator_longitude,
-                           r1.source, r1.computed_session_id
-                    FROM remoteid r1
-                    INNER JOIN (
-                        SELECT uas_id, MAX(timestamp) as max_ts
-                        FROM remoteid
-                        WHERE timestamp BETWEEN ? AND ?
-                        GROUP BY uas_id
-                    ) r2 ON r1.uas_id = r2.uas_id AND r1.timestamp = r2.max_ts
-                    ORDER BY r1.uas_id
-                """,
-                    (start_time, end_time),
-                )
+            # Get drones without session data - one entry per UAS
+            cursor = conn.execute(
+                """
+                SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
+                       r1.timestamp, r1.operator_id, r1.operator_latitude, r1.operator_longitude,
+                       r1.source, r1.computed_session_id
+                FROM remoteid r1
+                INNER JOIN (
+                    SELECT uas_id, MAX(timestamp) as max_ts
+                    FROM remoteid
+                    WHERE timestamp BETWEEN ? AND ?
+                    AND computed_session_id IS NULL
+                    GROUP BY uas_id
+                ) r2 ON r1.uas_id = r2.uas_id AND r1.timestamp = r2.max_ts
+                ORDER BY r1.uas_id
+            """,
+                (start_time, end_time),
+            )
+            results.extend(cursor.fetchall())
 
-            return [self._sanitize_record(dict(row)) for row in cursor.fetchall()]
+            return [self._sanitize_record(dict(row)) for row in results]
 
     def get_positions(
         self,
