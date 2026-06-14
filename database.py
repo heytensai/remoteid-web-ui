@@ -193,12 +193,13 @@ class WebDatabase:
     def import_from_collector(
         self, source_db_path: str, source_name: str, session_gap_threshold: int = 600
     ) -> int:
+        # pylint: disable=too-many-locals
         """Import new records from a collector's database with session detection
 
         Args:
             source_db_path: Path to the source collector database
             source_name: Name of the source collector
-            session_gap_threshold: Time gap in seconds to trigger a new session (default: 600 = 10 minutes)
+            session_gap_threshold: Time gap in seconds to trigger a new session (default: 600)
         """
         count = 0
         skipped = 0
@@ -217,7 +218,8 @@ class WebDatabase:
             ) as src_conn:
                 if last_sync:
                     cursor = src_conn.execute(
-                        f"SELECT {columns} FROM remoteid WHERE timestamp > ? ORDER BY uas_id, timestamp",
+                        f"SELECT {columns} FROM remoteid WHERE timestamp > ? "
+                        "ORDER BY uas_id, timestamp",
                         (last_sync,),
                     )
                 else:
@@ -318,6 +320,7 @@ class WebDatabase:
         uas_sessions: dict,
         gap_threshold: int,
     ) -> str:
+        # pylint: disable=too-many-arguments,too-many-positional-arguments
         """Detect session based on time gap from last seen record
 
         Args:
@@ -336,17 +339,18 @@ class WebDatabase:
             gap = (timestamp - last_seen).total_seconds()
             if gap <= gap_threshold:
                 return current_session
-            else:
-                # New session due to gap
-                new_session = f"session_{timestamp.strftime('%Y%m%d_%H%M%S')}"
-                logger.debug(
-                    f"New session for {uas_id} at {timestamp} (gap: {gap:.1f}s)"
-                )
-                return new_session
+
+            # New session due to gap
+            new_session = f"session_{timestamp.strftime('%Y%m%d_%H%M%S')}"
+            logger.debug(
+                "New session for %s at %s (gap: %.1fs)", uas_id, timestamp, gap
+            )
+            return new_session
 
         # Check the database for most recent record of this UAS
         cursor = conn.execute(
-            "SELECT timestamp, computed_session_id FROM remoteid WHERE uas_id = ? ORDER BY timestamp DESC LIMIT 1",
+            "SELECT timestamp, computed_session_id FROM remoteid "
+            "WHERE uas_id = ? ORDER BY timestamp DESC LIMIT 1",
             (uas_id,),
         )
         row = cursor.fetchone()
@@ -358,16 +362,16 @@ class WebDatabase:
 
             if gap <= gap_threshold and last_session:
                 return last_session
-            else:
-                # New session
-                new_session = f"session_{timestamp.strftime('%Y%m%d_%H%M%S')}"
-                logger.debug(
-                    f"New session for {uas_id} at {timestamp} (gap: {gap:.1f}s)"
-                )
-                return new_session
-        else:
-            # First time seeing this UAS
-            return f"session_{timestamp.strftime('%Y%m%d_%H%M%S')}"
+
+            # New session
+            new_session = f"session_{timestamp.strftime('%Y%m%d_%H%M%S')}"
+            logger.debug(
+                "New session for %s at %s (gap: %.1fs)", uas_id, timestamp, gap
+            )
+            return new_session
+
+        # First time seeing this UAS
+        return f"session_{timestamp.strftime('%Y%m%d_%H%M%S')}"
 
     @staticmethod
     def _sanitize_record(record: dict) -> dict:
@@ -651,12 +655,13 @@ class WebDatabase:
         records: List[Dict],
         session_gap_threshold: int = 600,
     ) -> Tuple[int, List[Dict], Optional[datetime]]:
+        # pylint: disable=too-many-locals
         """Insert multiple records into remoteid table with session detection.
 
         Args:
             source: The source name to associate with records
             records: List of record dictionaries
-            session_gap_threshold: Time gap in seconds to trigger a new session (default: 600 = 10 minutes)
+            session_gap_threshold: Time gap in seconds to trigger a new session (default: 600)
 
         Returns:
             Tuple of (inserted_count, errors, most_recent_timestamp)
@@ -667,20 +672,6 @@ class WebDatabase:
 
         # Track session state per UAS for this batch
         uas_sessions = {}
-
-        # Valid fields that can be set (excluding id and source)
-        valid_fields = {
-            "timestamp",
-            "mac_address",
-            "uas_id",
-            "session_id",
-            "latitude",
-            "longitude",
-            "altitude",
-            "operator_id",
-            "operator_latitude",
-            "operator_longitude",
-        }
 
         with sqlite3.connect(
             self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
@@ -775,7 +766,7 @@ class WebDatabase:
                     if most_recent is None or timestamp > most_recent:
                         most_recent = timestamp
 
-                except Exception as e:
+                except (sqlite3.Error, ValueError, TypeError) as e:
                     errors.append({"index": idx, "reason": str(e)})
 
             conn.commit()

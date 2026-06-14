@@ -142,9 +142,8 @@ def get_track(uas_id):
         if group_by_session:
             sessions = DATABASE.get_track_sessions(uas_id, start, end)
             return jsonify({"uas_id": uas_id, "sessions": sessions})
-        else:
-            track = DATABASE.get_track(uas_id, start, end)
-            return jsonify({"uas_id": uas_id, "track": track})
+        track = DATABASE.get_track(uas_id, start, end)
+        return jsonify({"uas_id": uas_id, "track": track})
     except (ValueError, TypeError, sqlite3.Error):
         logger.exception("Error getting track")
         return jsonify({"error": "Internal server error"}), 500
@@ -224,7 +223,7 @@ def submit_data():
         data = request.get_json()
         if not isinstance(data, list):
             return jsonify({"success": False, "error": "Expected JSON array"}), 400
-    except Exception:
+    except ValueError:
         return jsonify({"success": False, "error": "Invalid JSON"}), 400
 
     if not data:
@@ -234,7 +233,7 @@ def submit_data():
 
     try:
         # Insert records
-        inserted, errors, most_recent = DATABASE.insert_remoteid_records(source, data)
+        inserted, errors, _ = DATABASE.insert_remoteid_records(source, data)
 
         # Get the most recent timestamp for this source after insert
         last_timestamp = DATABASE.get_most_recent_timestamp(source)
@@ -250,7 +249,7 @@ def submit_data():
                 "last_timestamp": last_ts_str,
             }
         )
-    except Exception as e:
+    except (sqlite3.Error, ValueError, TypeError) as e:
         logger.exception("Error submitting data from %s", source)
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -272,7 +271,7 @@ def get_last_timestamp():
         last_ts_str = last_timestamp.isoformat() if hasattr(last_timestamp, 'isoformat') else last_timestamp
 
         return jsonify({"last_timestamp": last_ts_str})
-    except Exception as e:
+    except (sqlite3.Error, AttributeError, TypeError) as e:
         logger.exception("Error getting last timestamp")
         return jsonify({"success": False, "error": str(e)}), 500
 
