@@ -15,6 +15,7 @@ const MapController = {
     },
     config: null,
     bounds: null,
+    droneAliases: {},
 
     /**
      * Initialize the map
@@ -24,9 +25,11 @@ const MapController = {
         try {
             const response = await API.getConfig();
             this.config = response.map;
+            this.droneAliases = response.drone_aliases || {};
         } catch (e) {
             console.error('Failed to load config:', e);
             this.config = {};
+            this.droneAliases = {};
         }
 
         // Create map
@@ -95,6 +98,13 @@ const MapController = {
         }
         const hue = Math.abs(hash % 360);
         return `hsl(${hue}, 70%, 50%)`;
+    },
+
+    /**
+     * Get display name for drone (alias or uas_id)
+     */
+    getDroneName(uasId) {
+        return this.droneAliases[uasId] || uasId;
     },
 
     /**
@@ -653,9 +663,13 @@ const MapController = {
 
         return `
             <div class="popup-title" style="color: ${color};">
-                <i class="fas fa-plane"></i> ${drone.uas_id}
+                <i class="fas fa-plane"></i> ${this.getDroneName(drone.uas_id)}
             </div>
             ${sessionInfo}
+            <div class="popup-row">
+                <span class="popup-label">UAS ID:</span>
+                <span class="popup-value">${drone.uas_id}</span>
+            </div>
             <div class="popup-row">
                 <span class="popup-label">Altitude:</span>
                 <span class="popup-value">${altitude}</span>
@@ -675,9 +689,14 @@ const MapController = {
      * Create popup content for operator
      */
     _createOperatorPopup(op, color) {
+        const displayName = this.getDroneName(op.uas_id);
         return `
             <div class="popup-title" style="color: ${color};">
-                <i class="fas fa-user"></i> ${op.uas_id}
+                <i class="fas fa-user"></i> ${displayName}
+            </div>
+            <div class="popup-row">
+                <span class="popup-label">UAS ID:</span>
+                <span class="popup-value">${op.uas_id}</span>
             </div>
             <div class="popup-row">
                 <span class="popup-label">Operator ID:</span>

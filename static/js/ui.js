@@ -176,6 +176,7 @@ const UIController = {
         try {
             const config = await API.getConfig();
             this.defaultHours = config.default_hours || 24;
+            this.droneAliases = config.drone_aliases || {};
 
             // Re-initialize time picker with correct default
             this._setTimeRange(this.defaultHours);
@@ -190,6 +191,13 @@ const UIController = {
         } catch (e) {
             console.error('Failed to load config:', e);
         }
+    },
+
+    /**
+     * Get display name for drone (alias or uas_id)
+     */
+    getDroneName(uasId) {
+        return this.droneAliases[uasId] || uasId;
     },
 
     /**
@@ -362,7 +370,7 @@ const UIController = {
                                 <div class="drone-item ${isSelected ? 'active' : ''}" data-uas-id="${drone.uas_id}" data-session-key="${sessionKey}" data-session-id="${drone.computed_session_id || ''}">
                                     <div class="drone-color" style="background-color: ${color};"></div>
                                     <div class="drone-info">
-                                        <div class="drone-id">${drone.uas_id}</div>
+                                        <div class="drone-id">${this.getDroneName(drone.uas_id)}</div>
                                         <div class="session-id">${sessionId}</div>
                                         <div class="drone-meta">Alt: ${altitude} | ${timeStr}</div>
                                     </div>
@@ -524,13 +532,14 @@ const UIController = {
     async _openDetailPanel(uasId, sessionId = null) {
         this.selectedDrone = uasId;
         this.selectedSession = sessionId;
+        const displayName = this.getDroneName(uasId);
         
         if (sessionId) {
             // Show shortened session ID in title
             const shortSessionId = sessionId.replace('session_', '');
-            this.elements.detailUasId.innerHTML = `${uasId}<br><small>${shortSessionId}</small>`;
+            this.elements.detailUasId.innerHTML = `${displayName}<br><small>${shortSessionId}</small>`;
         } else {
-            this.elements.detailUasId.textContent = uasId;
+            this.elements.detailUasId.textContent = displayName;
         }
         
         this.elements.droneDetail.classList.add('open');
