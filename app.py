@@ -47,6 +47,7 @@ def get_config():
             },
             "default_hours": CONFIG.default_hours,
             "sync_enabled": SYNC_MANAGER is not None,
+            "drone_aliases": CONFIG.drone_aliases,
         }
     )
 
