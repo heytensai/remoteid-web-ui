@@ -1,0 +1,56 @@
+# Web Interface Configuration - Default Template
+# Copy this file to 'web_config.yaml' and customize for your setup
+
+web_interface:
+  # Web server settings
+  host: "0.0.0.0"
+  port: 5000
+
+  # Path to web interface database (SQLite)
+  # For Docker: use "/app/data/web.db" to persist in the data volume
+  # For local dev: use "./data/web.db" or "./web.db"
+  database_path: "./data/web.db"
+
+  # Sync settings - how often to sync data from collectors (in seconds)
+  sync_interval: 30
+
+  # Collector sources (RPis running decoder)
+  # Add one entry per collector. For local development, omit 'host' to use local file.
+  collectors:
+    # Local collector - reads from a file path
+    - name: "Local-Collector"
+      remote_db_path: "./data/collector.db"
+
+    # Remote collector via SSH/rsync (uncomment and configure as needed)
+    # - name: "Pi-Field-1"
+    #   host: "rpi.local"  # or IP address like "192.168.1.100"
+    #   remote_db_path: "/opt/remoteid/remoteid.db"
+
+  # Map configuration
+  # If center_lat/center_lon are not specified, map will auto-fit to show all drones
+  map:
+    center_lat: 37.7749
+    center_lon: -122.4194
+    default_zoom: 11
+    # Options: "osm", "carto-light", "carto-dark"
+    tile_provider: "osm"
+
+  # Default time window for queries (in hours)
+  default_hours: 24
+
+  # Maximum positions per query to prevent browser lag
+  max_positions_per_query: 5000
+
+  # API keys for remote node data submission
+  # Format: api_key: source_name
+  # Clients must include "Authorization: Bearer <api_key>" header when submitting data
+  api_keys:
+    # Example keys - replace with secure random strings in production
+    # "your-secure-api-key-here": "Node-A"
+
+  # Drone aliases - map UAS IDs to friendly names
+  # Format: uas_id: "Friendly Name"
+  drone_aliases:
+    # Example:
+    # "12345": "Skydio X10"
+    # "67890": "DJI Mavic 3"
