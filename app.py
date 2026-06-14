@@ -127,11 +127,24 @@ def get_positions():
 
 @app.route("/api/tracks/<uas_id>")
 def get_track(uas_id):
-    """Get track for specific drone"""
+    """Get track for specific drone
+
+    Returns positions grouped by session if session grouping is enabled.
+    Query params:
+        start: start time
+        end: end time
+        sessions: if "true", return tracks grouped by session (default: false)
+    """
     try:
         start, end = _parse_time_range(request.args)
-        track = DATABASE.get_track(uas_id, start, end)
-        return jsonify({"uas_id": uas_id, "track": track})
+        group_by_session = request.args.get("sessions", "false").lower() == "true"
+
+        if group_by_session:
+            sessions = DATABASE.get_track_sessions(uas_id, start, end)
+            return jsonify({"uas_id": uas_id, "sessions": sessions})
+        else:
+            track = DATABASE.get_track(uas_id, start, end)
+            return jsonify({"uas_id": uas_id, "track": track})
     except (ValueError, TypeError, sqlite3.Error):
         logger.exception("Error getting track")
         return jsonify({"error": "Internal server error"}), 500

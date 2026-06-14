@@ -8,6 +8,7 @@ const UIController = {
     currentStartTime: null,
     currentEndTime: null,
     selectedDrones: new Set(),
+    selectedSession: null,
     isLoading: false,
     defaultHours: 24,
     droneMap: {},
@@ -301,7 +302,7 @@ const UIController = {
     },
 
     /**
-     * Update the drone list in sidebar
+     * Update the drone list in sidebar - now shows sessions as independent entries
      */
     _updateDroneList(drones) {
         const list = this.elements.droneList;
@@ -310,13 +311,13 @@ const UIController = {
             list.innerHTML = `
                 <div class="empty-state">
                     <i class="fas fa-satellite-dish"></i>
-                    <p>No drones detected in time window</p>
+                    <p>No flights detected in time window</p>
                 </div>
             `;
             return;
         }
 
-        // Group drones by date
+        // Group flights by date (using session start date)
         const groups = {};
         drones.forEach(drone => {
             const time = new Date(drone.timestamp);
@@ -331,30 +332,38 @@ const UIController = {
 
         let html = '';
         sortedDates.forEach(date => {
-            const droneCount = groups[date].length;
+            const flightCount = groups[date].length;
+            // Sort sessions within this date by timestamp (reverse chronological - newest first)
+            const sortedSessions = groups[date].sort((a, b) => 
+                new Date(b.timestamp) - new Date(a.timestamp)
+            );
             html += `
                 <div class="date-group">
                     <div class="date-header">
                         <span class="date-label">${date}</span>
-                        <span class="date-count">${droneCount} drone${droneCount !== 1 ? 's' : ''}</span>
+                        <span class="date-count">${flightCount} flight${flightCount !== 1 ? 's' : ''}</span>
                         <i class="fas fa-chevron-right date-chevron"></i>
                     </div>
                     <div class="date-items collapsed">
-                        ${groups[date].map(drone => {
+                        ${sortedSessions.map(drone => {
                             const color = MapController.getDroneColor(drone.uas_id);
                             const altitude = drone.altitude !== null && drone.altitude !== undefined
                                 ? `${drone.altitude.toFixed(0)}m`
                                 : 'N/A';
                             const time = new Date(drone.timestamp);
                             const timeStr = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-
-                            const isSelected = this.selectedDrones.has(drone.uas_id);
+                            
+                            // Create unique key for this session
+                            const sessionKey = `${drone.uas_id}:${drone.computed_session_id || 'unknown'}`;
+                            const sessionId = drone.computed_session_id ? drone.computed_session_id.replace('session_', '') : '';
+                            const isSelected = this.selectedDrones.has(sessionKey);
 
                             return `
-                                <div class="drone-item ${isSelected ? 'active' : ''}" data-uas-id="${drone.uas_id}">
+                                <div class="drone-item ${isSelected ? 'active' : ''}" data-uas-id="${drone.uas_id}" data-session-key="${sessionKey}" data-session-id="${drone.computed_session_id || ''}">
                                     <div class="drone-color" style="background-color: ${color};"></div>
                                     <div class="drone-info">
                                         <div class="drone-id">${drone.uas_id}</div>
+                                        <div class="session-id">${sessionId}</div>
                                         <div class="drone-meta">Alt: ${altitude} | ${timeStr}</div>
                                     </div>
                                     <div class="drone-actions">
@@ -384,13 +393,15 @@ const UIController = {
                     chevron.classList.remove('fa-chevron-right');
                     chevron.classList.add('fa-chevron-down');
 
-                    // Load tracks for drones in this group
+                    // Load tracks for all flights in this group
                     const droneItems = items.querySelectorAll('.drone-item');
-                    const uasIds = Array.from(droneItems).map(di => di.dataset.uasId);
-                    for (const uasId of uasIds) {
-                        if (!this.loadedTracks.has(uasId)) {
-                            await MapController.loadTrack(uasId, this.currentStartTime, this.currentEndTime);
-                            this.loadedTracks.add(uasId);
+                    for (const item of droneItems) {
+                        const uasId = item.dataset.uasId;
+                        const sessionKey = item.dataset.sessionKey;
+                        const sessionId = item.dataset.sessionId;
+                        if (sessionId && !this.loadedTracks.has(sessionKey)) {
+                            await MapController.loadTrackSession(uasId, sessionId, this.currentStartTime, this.currentEndTime);
+                            this.loadedTracks.add(sessionKey);
                         }
                     }
                 } else {
@@ -398,29 +409,32 @@ const UIController = {
                     chevron.classList.remove('fa-chevron-down');
                     chevron.classList.add('fa-chevron-right');
 
-                    // Remove tracks for drones in this group
+                    // Remove tracks for all flights in this group
                     const droneItems = items.querySelectorAll('.drone-item');
-                    const uasIds = Array.from(droneItems).map(di => di.dataset.uasId);
-                    for (const uasId of uasIds) {
+                    for (const item of droneItems) {
+                        const uasId = item.dataset.uasId;
+                        const sessionKey = item.dataset.sessionKey;
                         MapController.removeTrack(uasId);
-                        this.loadedTracks.delete(uasId);
+                        this.loadedTracks.delete(sessionKey);
                     }
                 }
             });
         });
 
-        // Add click handlers for drone items
+        // Add click handlers for drone items (now session-based)
         list.querySelectorAll('.drone-item').forEach(item => {
             item.addEventListener('click', (e) => {
                 const uasId = item.dataset.uasId;
+                const sessionKey = item.dataset.sessionKey;
+                const sessionId = item.dataset.sessionId;
 
                 // Toggle selection
-                if (this.selectedDrones.has(uasId)) {
-                    this.selectedDrones.delete(uasId);
+                if (this.selectedDrones.has(sessionKey)) {
+                    this.selectedDrones.delete(sessionKey);
                     item.classList.remove('active');
                 } else {
                     this.selectedDrones.clear();
-                    this.selectedDrones.add(uasId);
+                    this.selectedDrones.add(sessionKey);
                     list.querySelectorAll('.drone-item').forEach(i => i.classList.remove('active'));
                     item.classList.add('active');
                 }
@@ -428,14 +442,14 @@ const UIController = {
                 // Focus on map
                 MapController.highlightDrone(uasId);
 
-                // Load track if not already loaded
-                if (!this.loadedTracks.has(uasId)) {
-                    MapController.loadTrack(uasId, this.currentStartTime, this.currentEndTime);
-                    this.loadedTracks.add(uasId);
+                // Load track for this specific session
+                if (sessionId) {
+                    MapController.loadTrackSession(uasId, sessionId, this.currentStartTime, this.currentEndTime);
+                    this.loadedTracks.add(sessionKey);
                 }
 
-                // Open detail panel
-                this._openDetailPanel(uasId);
+                // Open detail panel for this session
+                this._openDetailPanel(uasId, sessionId);
 
                 // Close sidebar on mobile
                 if (window.innerWidth < 768) {
@@ -448,8 +462,18 @@ const UIController = {
         list.querySelectorAll('.focus-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const uasId = btn.closest('.drone-item').dataset.uasId;
+                const item = btn.closest('.drone-item');
+                const uasId = item.dataset.uasId;
+                const sessionKey = item.dataset.sessionKey;
+                const sessionId = item.dataset.sessionId;
+                
                 MapController.panToDrone(uasId);
+
+                // Also load the track for this session
+                if (sessionId && !this.loadedTracks.has(sessionKey)) {
+                    MapController.loadTrackSession(uasId, sessionId, this.currentStartTime, this.currentEndTime);
+                    this.loadedTracks.add(sessionKey);
+                }
 
                 // Close sidebar on mobile
                 if (window.innerWidth < 768) {
@@ -468,17 +492,38 @@ const UIController = {
     },
 
     /**
-     * Open the drone detail panel
+     * Open the drone detail panel - now session-specific
      */
-    async _openDetailPanel(uasId) {
+    async _openDetailPanel(uasId, sessionId = null) {
         this.selectedDrone = uasId;
-        this.elements.detailUasId.textContent = uasId;
+        this.selectedSession = sessionId;
+        
+        if (sessionId) {
+            // Show shortened session ID in title
+            const shortSessionId = sessionId.replace('session_', '');
+            this.elements.detailUasId.innerHTML = `${uasId}<br><small>${shortSessionId}</small>`;
+        } else {
+            this.elements.detailUasId.textContent = uasId;
+        }
+        
         this.elements.droneDetail.classList.add('open');
 
         // Fetch track data
         try {
-            const response = await API.getTrack(uasId, this.currentStartTime, this.currentEndTime);
-            if (response.track && response.track.length > 0) {
+            const response = await API.getTrack(uasId, this.currentStartTime, this.currentEndTime, true);
+
+            if (sessionId && response.sessions && response.sessions.length > 0) {
+                // Find specific session
+                const session = response.sessions.find(s => s.session_id === sessionId);
+                if (session && session.positions && session.positions.length > 0) {
+                    this.selectedDroneTrack = session.positions;
+                    this._updateDetailStats(session.positions);
+                    this._drawAltitudeChart(session.positions);
+                } else {
+                    this._clearDetailStats();
+                }
+            } else if (response.track && response.track.length > 0) {
+                // Fallback for old format
                 this.selectedDroneTrack = response.track;
                 this._updateDetailStats(response.track);
                 this._drawAltitudeChart(response.track);
@@ -497,11 +542,12 @@ const UIController = {
     _closeDetailPanel() {
         this.elements.droneDetail.classList.remove('open');
         this.selectedDrone = null;
+        this.selectedSession = null;
         this.selectedDroneTrack = null;
     },
 
     /**
-     * Update detail stats from track data
+     * Update detail stats from track data (session-specific)
      */
     _updateDetailStats(track) {
         const numPositions = track.length;

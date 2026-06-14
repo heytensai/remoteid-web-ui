@@ -56,7 +56,9 @@ class WebDatabase:
                     altitude REAL,
                     operator_id TEXT,
                     operator_latitude REAL,
-                    operator_longitude REAL
+                    operator_longitude REAL,
+                    computed_session_id TEXT,
+                    session_detected_at DATETIME
                 )
             """
             )
@@ -73,6 +75,19 @@ class WebDatabase:
             """
             )
 
+            # Create session tracking table for real-time detection
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS session_tracking(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    uas_id TEXT UNIQUE,
+                    last_seen DATETIME,
+                    current_session_id TEXT,
+                    updated_at DATETIME
+                )
+            """
+            )
+
             # Create indexes
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_uas_time ON remoteid(uas_id, timestamp)"
@@ -80,6 +95,9 @@ class WebDatabase:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_source ON remoteid(source)")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_timestamp ON remoteid(timestamp)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_computed_session ON remoteid(computed_session_id)"
             )
 
             conn.commit()
@@ -172,8 +190,16 @@ class WebDatabase:
             op_lon,  # operator_longitude
         )
 
-    def import_from_collector(self, source_db_path: str, source_name: str) -> int:
-        """Import new records from a collector's database"""
+    def import_from_collector(
+        self, source_db_path: str, source_name: str, session_gap_threshold: int = 600
+    ) -> int:
+        """Import new records from a collector's database with session detection
+
+        Args:
+            source_db_path: Path to the source collector database
+            source_name: Name of the source collector
+            session_gap_threshold: Time gap in seconds to trigger a new session (default: 600 = 10 minutes)
+        """
         count = 0
         skipped = 0
         try:
@@ -191,18 +217,21 @@ class WebDatabase:
             ) as src_conn:
                 if last_sync:
                     cursor = src_conn.execute(
-                        f"SELECT {columns} FROM remoteid WHERE timestamp > ? ORDER BY timestamp",
+                        f"SELECT {columns} FROM remoteid WHERE timestamp > ? ORDER BY uas_id, timestamp",
                         (last_sync,),
                     )
                 else:
                     cursor = src_conn.execute(
-                        f"SELECT {columns} FROM remoteid ORDER BY timestamp"
+                        f"SELECT {columns} FROM remoteid ORDER BY uas_id, timestamp"
                     )
 
                 # Import into web database using named parameters
                 with sqlite3.connect(
                     self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
                 ) as dest_conn:
+                    # Track session state per UAS for this import batch
+                    uas_sessions = {}
+
                     for row in cursor:
                         # Skip if already exists (check uas_id + timestamp)
                         existing = dest_conn.execute(
@@ -217,21 +246,35 @@ class WebDatabase:
                                 skipped += 1
                                 continue
 
+                            timestamp = validated[0]
+                            uas_id = validated[2]
+
+                            # Determine computed_session_id based on time gap
+                            computed_session_id = self._detect_session(
+                                dest_conn,
+                                uas_id,
+                                timestamp,
+                                uas_sessions,
+                                session_gap_threshold,
+                            )
+
                             dest_conn.execute(
                                 """
                                 INSERT INTO remoteid
                                 (source, timestamp, mac_address, uas_id, session_id,
                                  latitude, longitude, altitude, operator_id,
-                                 operator_latitude, operator_longitude)
+                                 operator_latitude, operator_longitude,
+                                 computed_session_id, session_detected_at)
                                 VALUES (:source, :timestamp, :mac_address, :uas_id, :session_id,
                                         :latitude, :longitude, :altitude, :operator_id,
-                                        :operator_latitude, :operator_longitude)
+                                        :operator_latitude, :operator_longitude,
+                                        :computed_session_id, :session_detected_at)
                             """,
                                 {
                                     "source": source_name,
-                                    "timestamp": validated[0],
+                                    "timestamp": timestamp,
                                     "mac_address": validated[1],
-                                    "uas_id": validated[2],
+                                    "uas_id": uas_id,
                                     "session_id": validated[3],
                                     "latitude": validated[4],
                                     "longitude": validated[5],
@@ -239,9 +282,14 @@ class WebDatabase:
                                     "operator_id": validated[7],
                                     "operator_latitude": validated[8],
                                     "operator_longitude": validated[9],
+                                    "computed_session_id": computed_session_id,
+                                    "session_detected_at": datetime.now(),
                                 },
                             )
                             count += 1
+
+                            # Update session tracking for this batch
+                            uas_sessions[uas_id] = (timestamp, computed_session_id)
 
                     dest_conn.commit()
 
@@ -261,6 +309,65 @@ class WebDatabase:
         except sqlite3.Error as e:
             logger.error("Database import error from %s: %s", source_name, e)
             return 0
+
+    def _detect_session(
+        self,
+        conn: sqlite3.Connection,
+        uas_id: str,
+        timestamp: datetime,
+        uas_sessions: dict,
+        gap_threshold: int,
+    ) -> str:
+        """Detect session based on time gap from last seen record
+
+        Args:
+            conn: Database connection
+            uas_id: The UAS ID
+            timestamp: Current record timestamp
+            uas_sessions: Dictionary tracking session state for current import batch
+            gap_threshold: Gap threshold in seconds
+
+        Returns:
+            Computed session ID string
+        """
+        # First check if we have this UAS in the current batch
+        if uas_id in uas_sessions:
+            last_seen, current_session = uas_sessions[uas_id]
+            gap = (timestamp - last_seen).total_seconds()
+            if gap <= gap_threshold:
+                return current_session
+            else:
+                # New session due to gap
+                new_session = f"session_{timestamp.strftime('%Y%m%d_%H%M%S')}"
+                logger.debug(
+                    f"New session for {uas_id} at {timestamp} (gap: {gap:.1f}s)"
+                )
+                return new_session
+
+        # Check the database for most recent record of this UAS
+        cursor = conn.execute(
+            "SELECT timestamp, computed_session_id FROM remoteid WHERE uas_id = ? ORDER BY timestamp DESC LIMIT 1",
+            (uas_id,),
+        )
+        row = cursor.fetchone()
+
+        if row:
+            last_seen = row[0]
+            last_session = row[1]
+            gap = (timestamp - last_seen).total_seconds()
+
+            if gap <= gap_threshold and last_session:
+                return last_session
+            else:
+                # New session
+                new_session = f"session_{timestamp.strftime('%Y%m%d_%H%M%S')}"
+                logger.debug(
+                    f"New session for {uas_id} at {timestamp} (gap: {gap:.1f}s)"
+                )
+                return new_session
+        else:
+            # First time seeing this UAS
+            return f"session_{timestamp.strftime('%Y%m%d_%H%M%S')}"
 
     @staticmethod
     def _sanitize_record(record: dict) -> dict:
@@ -334,29 +441,63 @@ class WebDatabase:
             conn.commit()
 
     def get_drones(self, start_time: datetime, end_time: datetime) -> List[Dict]:
-        """Get list of unique drones seen in time window with latest positions"""
+        """Get list of unique drones seen in time window with latest positions
+
+        Returns drones grouped by session if session data is available.
+        """
         with sqlite3.connect(
             self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
         ) as conn:
             conn.row_factory = sqlite3.Row
 
-            # Get latest position for each drone in time window
+            # Check if we have computed_session_id data
             cursor = conn.execute(
-                """
-                SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
-                       r1.timestamp, r1.operator_id, r1.operator_latitude, r1.operator_longitude,
-                       r1.source
-                FROM remoteid r1
-                INNER JOIN (
-                    SELECT uas_id, MAX(timestamp) as max_ts
-                    FROM remoteid
-                    WHERE timestamp BETWEEN ? AND ?
-                    GROUP BY uas_id
-                ) r2 ON r1.uas_id = r2.uas_id AND r1.timestamp = r2.max_ts
-                ORDER BY r1.uas_id
-            """,
+                """SELECT COUNT(*) FROM remoteid
+                   WHERE timestamp BETWEEN ? AND ?
+                   AND computed_session_id IS NOT NULL""",
                 (start_time, end_time),
             )
+            has_session_data = cursor.fetchone()[0] > 0
+
+            if has_session_data:
+                # Return each session as a separate entry
+                cursor = conn.execute(
+                    """
+                    SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
+                           r1.timestamp, r1.operator_id, r1.operator_latitude, r1.operator_longitude,
+                           r1.source, r1.computed_session_id
+                    FROM remoteid r1
+                    INNER JOIN (
+                        SELECT uas_id, computed_session_id, MAX(timestamp) as max_ts
+                        FROM remoteid
+                        WHERE timestamp BETWEEN ? AND ?
+                        AND computed_session_id IS NOT NULL
+                        GROUP BY uas_id, computed_session_id
+                    ) r2 ON r1.uas_id = r2.uas_id
+                        AND r1.computed_session_id = r2.computed_session_id
+                        AND r1.timestamp = r2.max_ts
+                    ORDER BY r1.uas_id, r1.computed_session_id
+                """,
+                    (start_time, end_time),
+                )
+            else:
+                # Fallback to original behavior - one entry per UAS
+                cursor = conn.execute(
+                    """
+                    SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
+                           r1.timestamp, r1.operator_id, r1.operator_latitude, r1.operator_longitude,
+                           r1.source, r1.computed_session_id
+                    FROM remoteid r1
+                    INNER JOIN (
+                        SELECT uas_id, MAX(timestamp) as max_ts
+                        FROM remoteid
+                        WHERE timestamp BETWEEN ? AND ?
+                        GROUP BY uas_id
+                    ) r2 ON r1.uas_id = r2.uas_id AND r1.timestamp = r2.max_ts
+                    ORDER BY r1.uas_id
+                """,
+                    (start_time, end_time),
+                )
 
             return [self._sanitize_record(dict(row)) for row in cursor.fetchall()]
 
@@ -399,7 +540,7 @@ class WebDatabase:
     def get_track(
         self, uas_id: str, start_time: datetime, end_time: datetime
     ) -> List[Dict]:
-        """Get track (ordered positions) for a specific drone"""
+        """Get track (ordered positions) for a specific drone with session info"""
         with sqlite3.connect(
             self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
         ) as conn:
@@ -408,7 +549,8 @@ class WebDatabase:
             cursor = conn.execute(
                 """
                 SELECT latitude, longitude, altitude, timestamp,
-                       operator_id, operator_latitude, operator_longitude
+                       operator_id, operator_latitude, operator_longitude,
+                       computed_session_id
                 FROM remoteid
                 WHERE uas_id = ? AND timestamp BETWEEN ? AND ?
                 ORDER BY timestamp ASC
@@ -417,6 +559,51 @@ class WebDatabase:
             )
 
             return [self._sanitize_record(dict(row)) for row in cursor.fetchall()]
+
+    def get_track_sessions(
+        self, uas_id: str, start_time: datetime, end_time: datetime
+    ) -> List[Dict]:
+        """Get track grouped by session
+
+        Returns a list of session objects, each containing positions for that session.
+        This is useful when a UAS has multiple sessions in the time window.
+        """
+        with sqlite3.connect(
+            self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
+        ) as conn:
+            conn.row_factory = sqlite3.Row
+
+            # Get all positions with session info
+            cursor = conn.execute(
+                """
+                SELECT latitude, longitude, altitude, timestamp,
+                       operator_id, operator_latitude, operator_longitude,
+                       computed_session_id
+                FROM remoteid
+                WHERE uas_id = ? AND timestamp BETWEEN ? AND ?
+                ORDER BY timestamp ASC
+            """,
+                (uas_id, start_time, end_time),
+            )
+
+            positions = [dict(row) for row in cursor.fetchall()]
+
+            # Group by session
+            sessions = {}
+            for pos in positions:
+                session_id = pos.get('computed_session_id') or 'unknown'
+                if session_id not in sessions:
+                    sessions[session_id] = {
+                        'session_id': session_id,
+                        'positions': []
+                    }
+                sessions[session_id]['positions'].append(pos)
+
+            # Sort sessions by start time
+            result = list(sessions.values())
+            result.sort(key=lambda s: s['positions'][0]['timestamp'] if s['positions'] else datetime.min)
+
+            return result
 
     def get_operators(self, start_time: datetime, end_time: datetime) -> List[Dict]:
         """Get latest operator positions for drones in time window"""
@@ -465,13 +652,17 @@ class WebDatabase:
             return None
 
     def insert_remoteid_records(
-        self, source: str, records: List[Dict]
+        self,
+        source: str,
+        records: List[Dict],
+        session_gap_threshold: int = 600,
     ) -> Tuple[int, List[Dict], Optional[datetime]]:
-        """Insert multiple records into remoteid table.
+        """Insert multiple records into remoteid table with session detection.
 
         Args:
             source: The source name to associate with records
             records: List of record dictionaries
+            session_gap_threshold: Time gap in seconds to trigger a new session (default: 600 = 10 minutes)
 
         Returns:
             Tuple of (inserted_count, errors, most_recent_timestamp)
@@ -479,6 +670,9 @@ class WebDatabase:
         inserted = 0
         errors = []
         most_recent = None
+
+        # Track session state per UAS for this batch
+        uas_sessions = {}
 
         # Valid fields that can be set (excluding id and source)
         valid_fields = {
@@ -541,11 +735,17 @@ class WebDatabase:
                         record.get("operator_longitude"), "operator_longitude"
                     )
 
+                    # Detect session
+                    uas_id = record["uas_id"]
+                    computed_session_id = self._detect_session(
+                        conn, uas_id, timestamp, uas_sessions, session_gap_threshold
+                    )
+
                     # Build insert parameters
                     params = {
                         "source": source,
                         "timestamp": timestamp,
-                        "uas_id": record["uas_id"],
+                        "uas_id": uas_id,
                         "mac_address": record.get("mac_address"),
                         "session_id": record.get("session_id"),
                         "latitude": lat,
@@ -554,6 +754,8 @@ class WebDatabase:
                         "operator_id": record.get("operator_id"),
                         "operator_latitude": op_lat,
                         "operator_longitude": op_lon,
+                        "computed_session_id": computed_session_id,
+                        "session_detected_at": datetime.now(),
                     }
 
                     conn.execute(
@@ -561,14 +763,19 @@ class WebDatabase:
                         INSERT INTO remoteid
                         (source, timestamp, mac_address, uas_id, session_id,
                          latitude, longitude, altitude, operator_id,
-                         operator_latitude, operator_longitude)
+                         operator_latitude, operator_longitude,
+                         computed_session_id, session_detected_at)
                         VALUES (:source, :timestamp, :mac_address, :uas_id, :session_id,
                                 :latitude, :longitude, :altitude, :operator_id,
-                                :operator_latitude, :operator_longitude)
+                                :operator_latitude, :operator_longitude,
+                                :computed_session_id, :session_detected_at)
                         """,
                         params,
                     )
                     inserted += 1
+
+                    # Update session tracking for this batch
+                    uas_sessions[uas_id] = (timestamp, computed_session_id)
 
                     # Track most recent timestamp
                     if most_recent is None or timestamp > most_recent:

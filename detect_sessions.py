@@ -1,0 +1,307 @@
+"""Session detection and assignment for UAS tracks.
+
+This script analyzes existing remoteid data and assigns session IDs based on
+time gaps between consecutive messages from the same UAS. A new session is
+started when there's a gap larger than the configured threshold.
+
+Usage:
+    python detect_sessions.py --db data/web.db --gap 600
+
+The default gap threshold is 600 seconds (10 minutes).
+"""
+
+import argparse
+import logging
+import sqlite3
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import List, Tuple, Optional
+
+logger = logging.getLogger(__name__)
+
+# Default gap threshold in seconds (10 minutes)
+DEFAULT_GAP_THRESHOLD = 600
+
+
+def _adapt_datetime(dt: datetime) -> str:
+    """Adapt datetime to ISO format string for SQLite"""
+    return dt.isoformat()
+
+
+def _convert_datetime(s: bytes) -> datetime:
+    """Convert ISO format string from SQLite to datetime"""
+    return datetime.fromisoformat(s.decode())
+
+
+# Register adapters for datetime handling
+sqlite3.register_adapter(datetime, _adapt_datetime)
+sqlite3.register_converter("DATETIME", _convert_datetime)
+
+
+def ensure_session_columns(db_path: str):
+    """Add computed_session_id column if it doesn't exist"""
+    with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES) as conn:
+        # Check if column exists
+        cursor = conn.execute("PRAGMA table_info(remoteid)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if "computed_session_id" not in columns:
+            logger.info("Adding computed_session_id column to remoteid table")
+            conn.execute("ALTER TABLE remoteid ADD COLUMN computed_session_id TEXT")
+
+        if "session_detected_at" not in columns:
+            logger.info("Adding session_detected_at column to remoteid table")
+            conn.execute("ALTER TABLE remoteid ADD COLUMN session_detected_at DATETIME")
+
+        conn.commit()
+
+
+def get_uas_list(db_path: str) -> List[str]:
+    """Get list of all unique UAS IDs in the database"""
+    with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES) as conn:
+        cursor = conn.execute("SELECT DISTINCT uas_id FROM remoteid WHERE uas_id IS NOT NULL")
+        return [row[0] for row in cursor.fetchall()]
+
+
+def get_positions_for_uas(db_path: str, uas_id: str) -> List[Tuple[int, datetime]]:
+    """Get all positions for a UAS ordered by timestamp
+
+    Returns list of (id, timestamp) tuples
+    """
+    with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES) as conn:
+        cursor = conn.execute(
+            "SELECT id, timestamp FROM remoteid WHERE uas_id = ? ORDER BY timestamp",
+            (uas_id,)
+        )
+        return cursor.fetchall()
+
+
+def detect_sessions(positions: List[Tuple[int, datetime]], gap_threshold: int) -> List[Tuple[int, str]]:
+    """Detect sessions based on time gaps
+
+    Args:
+        positions: List of (id, timestamp) tuples
+        gap_threshold: Gap threshold in seconds
+
+    Returns:
+        List of (id, session_id) tuples
+    """
+    if not positions:
+        return []
+
+    sessions = []
+    current_session = 1
+    session_start_time = positions[0][1]
+    session_id = f"session_{session_start_time.strftime('%Y%m%d_%H%M%S')}"
+
+    for i, (pos_id, timestamp) in enumerate(positions):
+        if i == 0:
+            sessions.append((pos_id, session_id))
+            continue
+
+        prev_timestamp = positions[i - 1][1]
+        gap = (timestamp - prev_timestamp).total_seconds()
+
+        if gap > gap_threshold:
+            # Start a new session
+            current_session += 1
+            session_id = f"session_{timestamp.strftime('%Y%m%d_%H%M%S')}"
+            logger.debug(f"New session detected at {timestamp} (gap: {gap:.1f}s)")
+
+        sessions.append((pos_id, session_id))
+
+    return sessions
+
+
+def update_session_ids(db_path: str, updates: List[Tuple[str, datetime, int]]):
+    """Update computed_session_id for a batch of records
+
+    Args:
+        updates: List of (session_id, detected_at, id) tuples
+    """
+    with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES) as conn:
+        conn.executemany(
+            """UPDATE remoteid
+               SET computed_session_id = ?,
+                   session_detected_at = ?
+               WHERE id = ?""",
+            updates
+        )
+        conn.commit()
+
+
+def analyze_sessions(db_path: str, uas_id: Optional[str] = None) -> dict:
+    """Analyze sessions for a UAS or all UAS
+
+    Returns dictionary with session statistics
+    """
+    with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES) as conn:
+        conn.row_factory = sqlite3.Row
+
+        if uas_id:
+            cursor = conn.execute(
+                """SELECT computed_session_id,
+                          COUNT(*) as count,
+                          MIN(timestamp) as start_time,
+                          MAX(timestamp) as end_time
+                   FROM remoteid
+                   WHERE uas_id = ? AND computed_session_id IS NOT NULL
+                   GROUP BY computed_session_id
+                   ORDER BY start_time""",
+                (uas_id,)
+            )
+        else:
+            cursor = conn.execute(
+                """SELECT uas_id,
+                          computed_session_id,
+                          COUNT(*) as count,
+                          MIN(timestamp) as start_time,
+                          MAX(timestamp) as end_time
+                   FROM remoteid
+                   WHERE computed_session_id IS NOT NULL
+                   GROUP BY uas_id, computed_session_id
+                   ORDER BY uas_id, start_time"""
+            )
+
+        results = []
+        for row in cursor.fetchall():
+            row_dict = dict(row)
+            # Parse datetime strings if needed
+            start_time = row_dict.get('start_time')
+            end_time = row_dict.get('end_time')
+
+            if isinstance(start_time, str):
+                start_time = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+            if isinstance(end_time, str):
+                end_time = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+
+            if start_time and end_time:
+                duration = (end_time - start_time).total_seconds()
+                row_dict['duration_seconds'] = duration
+                row_dict['start_time'] = start_time
+                row_dict['end_time'] = end_time
+            results.append(row_dict)
+
+        return {"sessions": results, "total_count": len(results)}
+
+
+def process_database(db_path: str, gap_threshold: int, dry_run: bool = False):
+    """Process the entire database and assign session IDs"""
+    db_path = Path(db_path)
+
+    if not db_path.exists():
+        logger.error(f"Database not found: {db_path}")
+        return
+
+    logger.info(f"Processing database: {db_path}")
+    logger.info(f"Gap threshold: {gap_threshold} seconds ({gap_threshold/60:.1f} minutes)")
+
+    # Ensure schema is up to date
+    if not dry_run:
+        ensure_session_columns(str(db_path))
+
+    # Get all UAS IDs
+    uas_list = get_uas_list(str(db_path))
+    logger.info(f"Found {len(uas_list)} unique UAS IDs")
+
+    total_sessions = 0
+    total_records = 0
+
+    for uas_id in uas_list:
+        positions = get_positions_for_uas(str(db_path), uas_id)
+
+        if len(positions) < 2:
+            # Single record - assign session based on timestamp
+            if positions and not dry_run:
+                timestamp = positions[0][1]
+                session_id = f"session_{timestamp.strftime('%Y%m%d_%H%M%S')}"
+                update_session_ids(str(db_path), [(session_id, datetime.now(), positions[0][0])])
+            continue
+
+        # Detect sessions
+        sessions = detect_sessions(positions, gap_threshold)
+
+        if sessions:
+            session_count = len(set(s[1] for s in sessions))
+            total_sessions += session_count
+            total_records += len(sessions)
+
+            logger.info(f"UAS {uas_id}: {len(positions)} records, {session_count} sessions detected")
+
+            if not dry_run:
+                # Batch update
+                updates = [
+                    (session_id, datetime.now(), pos_id)
+                    for pos_id, session_id in sessions
+                ]
+                update_session_ids(str(db_path), updates)
+
+    logger.info(f"\nSummary:")
+    logger.info(f"  Total UAS: {len(uas_list)}")
+    logger.info(f"  Total records processed: {total_records}")
+    logger.info(f"  Total sessions detected: {total_sessions}")
+
+    if dry_run:
+        logger.info("\n(Dry run - no changes made)")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Detect and assign session IDs to UAS tracks based on time gaps"
+    )
+    parser.add_argument(
+        "--db",
+        default="./data/web.db",
+        help="Path to SQLite database (default: ./data/web.db)"
+    )
+    parser.add_argument(
+        "--gap",
+        type=int,
+        default=DEFAULT_GAP_THRESHOLD,
+        help=f"Gap threshold in seconds (default: {DEFAULT_GAP_THRESHOLD} = 10 minutes)"
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be done without making changes"
+    )
+    parser.add_argument(
+        "--analyze",
+        metavar="UAS_ID",
+        help="Analyze sessions for a specific UAS ID"
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose logging"
+    )
+
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+
+    if args.analyze:
+        # Just analyze and show sessions
+        ensure_session_columns(args.db)
+        stats = analyze_sessions(args.db, args.analyze)
+        print(f"\nSession analysis for UAS: {args.analyze}")
+        print(f"Total sessions: {stats['total_count']}")
+        print("-" * 80)
+        for session in stats["sessions"]:
+            duration = session.get('duration_seconds', 0)
+            print(f"Session: {session['computed_session_id']}")
+            print(f"  Records: {session['count']}")
+            print(f"  Start: {session['start_time']}")
+            print(f"  End: {session['end_time']}")
+            print(f"  Duration: {duration/60:.1f} minutes")
+            print()
+    else:
+        # Process the database
+        process_database(args.db, args.gap, args.dry_run)
+
+
+if __name__ == "__main__":
+    main()

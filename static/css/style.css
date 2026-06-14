@@ -197,6 +197,13 @@ html, body {
     margin-top: 2px;
 }
 
+.session-id {
+    font-size: 0.7rem;
+    color: #007bff;
+    font-weight: 500;
+    font-family: 'Courier New', monospace;
+}
+
 .drone-actions {
     display: flex;
     gap: 8px;
@@ -619,6 +626,57 @@ html, body {
     border-radius: 50%;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
     font-size: 12px;
+}
+
+/* Session Start Icon */
+.session-start-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    background: white;
+    border: 2px solid;
+    border-radius: 50%;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    font-size: 10px;
+}
+
+.session-start-icon i {
+    margin-left: 2px;
+}
+
+/* Session End Icon */
+.session-end-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    background: white;
+    border: 2px solid;
+    border-radius: 50%;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    font-size: 10px;
+}
+
+/* Session Operator Icon (smaller, per-session) */
+.session-operator-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    background: white;
+    border: 2px solid;
+    border-radius: 50%;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.25);
+    font-size: 9px;
+}
+
+.session-operator-icon.same-location {
+    background: rgba(40, 167, 69, 0.1);
+    border-style: dashed;
 }
 
 /* Loading State */
