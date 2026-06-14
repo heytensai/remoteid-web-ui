@@ -13,7 +13,7 @@ The default gap threshold is 600 seconds (10 minutes).
 import argparse
 import logging
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple, Optional
 
@@ -106,7 +106,7 @@ def detect_sessions(positions: List[Tuple[int, datetime]], gap_threshold: int) -
             # Start a new session
             current_session += 1
             session_id = f"session_{timestamp.strftime('%Y%m%d_%H%M%S')}"
-            logger.debug(f"New session detected at {timestamp} (gap: {gap:.1f}s)")
+            logger.debug("New session detected at {timestamp} (gap: {gap:.1f}s)")
 
         sessions.append((pos_id, session_id))
 
@@ -190,11 +190,11 @@ def process_database(db_path: str, gap_threshold: int, dry_run: bool = False):
     db_path = Path(db_path)
 
     if not db_path.exists():
-        logger.error(f"Database not found: {db_path}")
+        logger.error("Database not found: %s", db_path)
         return
 
-    logger.info(f"Processing database: {db_path}")
-    logger.info(f"Gap threshold: {gap_threshold} seconds ({gap_threshold/60:.1f} minutes)")
+    logger.info("Processing database: %s", db_path)
+    logger.info("Gap threshold: %i seconds", gap_threshold)
 
     # Ensure schema is up to date
     if not dry_run:
@@ -202,7 +202,7 @@ def process_database(db_path: str, gap_threshold: int, dry_run: bool = False):
 
     # Get all UAS IDs
     uas_list = get_uas_list(str(db_path))
-    logger.info(f"Found {len(uas_list)} unique UAS IDs")
+    logger.info("Found %i unique UAS IDs", len(uas_list))
 
     total_sessions = 0
     total_records = 0
@@ -226,7 +226,12 @@ def process_database(db_path: str, gap_threshold: int, dry_run: bool = False):
             total_sessions += session_count
             total_records += len(sessions)
 
-            logger.info(f"UAS {uas_id}: {len(positions)} records, {session_count} sessions detected")
+            logger.info(
+                "UAS %s: %i records, %i sessions detected",
+                uas_id,
+                len(positions),
+                session_count,
+            )
 
             if not dry_run:
                 # Batch update
@@ -236,16 +241,16 @@ def process_database(db_path: str, gap_threshold: int, dry_run: bool = False):
                 ]
                 update_session_ids(str(db_path), updates)
 
-    logger.info(f"\nSummary:")
-    logger.info(f"  Total UAS: {len(uas_list)}")
-    logger.info(f"  Total records processed: {total_records}")
-    logger.info(f"  Total sessions detected: {total_sessions}")
+    logger.info("Total UAS: %i", len(uas_list))
+    logger.info("Total records processed: %i", total_records)
+    logger.info("Total sessions detected: %i", total_sessions)
 
     if dry_run:
         logger.info("\n(Dry run - no changes made)")
 
 
 def main():
+    """Main entry point for session detection CLI."""
     parser = argparse.ArgumentParser(
         description="Detect and assign session IDs to UAS tracks based on time gaps"
     )
@@ -258,7 +263,7 @@ def main():
         "--gap",
         type=int,
         default=DEFAULT_GAP_THRESHOLD,
-        help=f"Gap threshold in seconds (default: {DEFAULT_GAP_THRESHOLD} = 10 minutes)"
+        help=f"Gap threshold in seconds (default: {DEFAULT_GAP_THRESHOLD})",
     )
     parser.add_argument(
         "--dry-run",
