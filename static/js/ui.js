@@ -338,7 +338,7 @@ const UIController = {
                 new Date(b.timestamp) - new Date(a.timestamp)
             );
             html += `
-                <div class="date-group">
+                <div class="date-group" data-date="${date}">
                     <div class="date-header">
                         <span class="date-label">${date}</span>
                         <span class="date-count">${flightCount} flight${flightCount !== 1 ? 's' : ''}</span>
@@ -387,11 +387,16 @@ const UIController = {
                 const group = header.closest('.date-group');
                 const items = group.querySelector('.date-items');
                 const chevron = header.querySelector('.date-chevron');
+                const dateStr = group.dataset.date;
 
                 if (items.classList.contains('collapsed')) {
                     items.classList.remove('collapsed');
                     chevron.classList.remove('fa-chevron-right');
                     chevron.classList.add('fa-chevron-down');
+
+                    // Calculate time range for this date
+                    const dateStart = new Date(dateStr + 'T00:00:00');
+                    const dateEnd = new Date(dateStr + 'T23:59:59.999');
 
                     // Load tracks for all flights in this group
                     const droneItems = items.querySelectorAll('.drone-item');
@@ -400,7 +405,7 @@ const UIController = {
                         const sessionKey = item.dataset.sessionKey;
                         const sessionId = item.dataset.sessionId;
                         if (sessionId && !this.loadedTracks.has(sessionKey)) {
-                            await MapController.loadTrackSession(uasId, sessionId, this.currentStartTime, this.currentEndTime);
+                            await MapController.loadTrackSession(uasId, sessionId, dateStart, dateEnd);
                             this.loadedTracks.add(sessionKey);
                         }
                     }
@@ -427,6 +432,8 @@ const UIController = {
                 const uasId = item.dataset.uasId;
                 const sessionKey = item.dataset.sessionKey;
                 const sessionId = item.dataset.sessionId;
+                const group = item.closest('.date-group');
+                const dateStr = group ? group.dataset.date : null;
 
                 // Toggle selection
                 if (this.selectedDrones.has(sessionKey)) {
@@ -444,7 +451,16 @@ const UIController = {
 
                 // Load track for this specific session
                 if (sessionId) {
-                    MapController.loadTrackSession(uasId, sessionId, this.currentStartTime, this.currentEndTime);
+                    // Use date-specific range if available, otherwise fall back to current time window
+                    let trackStart, trackEnd;
+                    if (dateStr) {
+                        trackStart = new Date(dateStr + 'T00:00:00');
+                        trackEnd = new Date(dateStr + 'T23:59:59.999');
+                    } else {
+                        trackStart = this.currentStartTime;
+                        trackEnd = this.currentEndTime;
+                    }
+                    MapController.loadTrackSession(uasId, sessionId, trackStart, trackEnd);
                     this.loadedTracks.add(sessionKey);
                 }
 
@@ -466,12 +482,23 @@ const UIController = {
                 const uasId = item.dataset.uasId;
                 const sessionKey = item.dataset.sessionKey;
                 const sessionId = item.dataset.sessionId;
+                const group = item.closest('.date-group');
+                const dateStr = group ? group.dataset.date : null;
                 
                 MapController.panToDrone(uasId);
 
                 // Also load the track for this session
                 if (sessionId && !this.loadedTracks.has(sessionKey)) {
-                    MapController.loadTrackSession(uasId, sessionId, this.currentStartTime, this.currentEndTime);
+                    // Use date-specific range if available, otherwise fall back to current time window
+                    let trackStart, trackEnd;
+                    if (dateStr) {
+                        trackStart = new Date(dateStr + 'T00:00:00');
+                        trackEnd = new Date(dateStr + 'T23:59:59.999');
+                    } else {
+                        trackStart = this.currentStartTime;
+                        trackEnd = this.currentEndTime;
+                    }
+                    MapController.loadTrackSession(uasId, sessionId, trackStart, trackEnd);
                     this.loadedTracks.add(sessionKey);
                 }
 
