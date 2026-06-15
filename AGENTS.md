@@ -58,3 +58,23 @@ Units.formatSpeed(metersPerSec)   // Returns "50.0 km/h" or "31.1 mph"
 ```
 
 The underlying data always stays in meters - only display values are converted.
+
+## XSS Protection
+
+User-controlled data (UAS IDs, session IDs, operator IDs) must ALWAYS be HTML-escaped before inserting into the DOM. Both `MapController` and `UIController` have an `escapeHtml()` method that uses the `textContent` → `innerHTML` round-trip for reliable escaping.
+
+### When to escape
+
+| Scenario | Method |
+|----------|--------|
+| Template literals building HTML | `esc(userValue)` where `const esc = (v) => this.escapeHtml(v)` |
+| Direct `innerHTML` assignment | Convert to DOM methods (`textContent`, `createElement`, `appendChild`) |
+| Leaflet popup content | Escape values in the returned template string via `esc()` |
+
+### Rules
+
+1. **Never** interpolate user-controlled data directly into HTML strings or `innerHTML` — always use `escapeHtml()` or DOM manipulation.
+2. **Data attributes are safe** when set via `esc()` — the browser auto-decodes them on read via `.dataset.*`.
+3. `color` values from `getDroneColor()` are safe (constrained HSL output).
+4. Formatted values from `Units.*` are safe (numbers with unit labels).
+5. If adding a new object/controller, add an `escapeHtml` method following the same pattern.

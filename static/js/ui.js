@@ -20,6 +20,13 @@ const UIController = {
     // DOM Elements
     elements: {},
 
+    escapeHtml(str) {
+        if (str === null || str === undefined) return '';
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    },
+
     /**
      * Initialize UI
      */
@@ -419,28 +426,26 @@ const UIController = {
             });
         }
 
+        const esc = (v) => this.escapeHtml(v);
         let html = '';
         sortedDates.forEach(date => {
             const flightCount = groups[date].length;
-            // Sort sessions within this date by timestamp (reverse chronological - newest first)
             const sortedSessions = groups[date].sort((a, b) =>
                 new Date(b.timestamp) - new Date(a.timestamp)
             );
 
-            // Check if all sessions for this date are visible
             const dateSessionKeys = sortedSessions.map(d => `${d.uas_id}:${d.computed_session_id || 'unknown'}`);
             const allVisible = dateSessionKeys.every(key => this.visibleSessions.has(key));
             const someVisible = dateSessionKeys.some(key => this.visibleSessions.has(key));
             const isIndeterminate = someVisible && !allVisible;
 
-            // On initial load, expand the most recent date
             const isExpanded = isInitialLoad && date === mostRecentDate;
 
             html += `
-                <div class="date-group" data-date="${date}">
+                <div class="date-group" data-date="${esc(date)}">
                     <div class="date-header">
-                        <input type="checkbox" class="date-checkbox" data-date="${date}" ${allVisible ? 'checked' : ''} ${isIndeterminate ? 'data-indeterminate="true"' : ''}>
-                        <span class="date-label">${date}</span>
+                        <input type="checkbox" class="date-checkbox" data-date="${esc(date)}" ${allVisible ? 'checked' : ''} ${isIndeterminate ? 'data-indeterminate="true"' : ''}>
+                        <span class="date-label">${esc(date)}</span>
                         <span class="date-count">${flightCount} flight${flightCount !== 1 ? 's' : ''}</span>
                         <i class="fas fa-chevron-${isExpanded ? 'down' : 'right'} date-chevron"></i>
                     </div>
@@ -453,19 +458,18 @@ const UIController = {
                             const time = new Date(drone.timestamp);
                             const timeStr = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 
-                            // Create unique key for this session
-                            const sessionKey = `${drone.uas_id}:${drone.computed_session_id || 'unknown'}`;
+                            const rawSessionKey = `${drone.uas_id}:${drone.computed_session_id || 'unknown'}`;
                             const sessionId = drone.computed_session_id ? drone.computed_session_id.replace('session_', '') : '';
-                            const isSelected = this.selectedDrones.has(sessionKey);
-                            const isVisible = this.visibleSessions.has(sessionKey);
+                            const isSelected = this.selectedDrones.has(rawSessionKey);
+                            const isVisible = this.visibleSessions.has(rawSessionKey);
 
                             return `
-                                <div class="drone-item ${isSelected ? 'active' : ''} ${isVisible ? '' : 'dimmed'}" data-uas-id="${drone.uas_id}" data-session-key="${sessionKey}" data-session-id="${drone.computed_session_id || ''}">
-                                    <input type="checkbox" class="drone-checkbox" data-session-key="${sessionKey}" ${isVisible ? 'checked' : ''}>
+                                <div class="drone-item ${isSelected ? 'active' : ''} ${isVisible ? '' : 'dimmed'}" data-uas-id="${esc(drone.uas_id)}" data-session-key="${esc(rawSessionKey)}" data-session-id="${esc(drone.computed_session_id || '')}">
+                                    <input type="checkbox" class="drone-checkbox" data-session-key="${esc(rawSessionKey)}" ${isVisible ? 'checked' : ''}>
                                     <div class="drone-color" style="background-color: ${color};"></div>
                                     <div class="drone-info">
-                                        <div class="drone-id">${this.getDroneName(drone.uas_id)}</div>
-                                        <div class="session-id">${sessionId}</div>
+                                        <div class="drone-id">${esc(this.getDroneName(drone.uas_id))}</div>
+                                        <div class="session-id">${esc(sessionId)}</div>
                                         <div class="drone-meta">Alt: ${altitude} | ${timeStr}</div>
                                     </div>
                                     <div class="drone-actions">
@@ -737,9 +741,15 @@ const UIController = {
         const displayName = this.getDroneName(uasId);
 
         if (sessionId) {
-            // Show shortened session ID in title
             const shortSessionId = sessionId.replace('session_', '');
-            this.elements.detailUasId.innerHTML = `${displayName}<br><small>${shortSessionId}</small>`;
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = displayName;
+            const small = document.createElement('small');
+            small.textContent = shortSessionId;
+            this.elements.detailUasId.innerHTML = '';
+            this.elements.detailUasId.appendChild(nameSpan);
+            this.elements.detailUasId.appendChild(document.createElement('br'));
+            this.elements.detailUasId.appendChild(small);
         } else {
             this.elements.detailUasId.textContent = displayName;
         }
