@@ -648,8 +648,13 @@ const UIController = {
                 // Focus on map
                 MapController.highlightDrone(uasId);
 
-                // Open detail panel for this session
-                this._openDetailPanel(uasId, sessionId);
+                // Toggle detail panel - close if same session clicked, open otherwise
+                const isSameSession = this.selectedDrone === uasId && this.selectedSession === sessionId;
+                if (isSameSession) {
+                    this._closeDetailPanel();
+                } else {
+                    this._openDetailPanel(uasId, sessionId);
+}
 
                 // Close sidebar on mobile
                 if (window.innerWidth < 768) {

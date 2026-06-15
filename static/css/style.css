@@ -738,19 +738,28 @@ html, body {
     font-size: 1rem;
 }
 
-/* Drone Detail Panel */
+/* Drone Detail Panel - Floating right panel */
 .drone-detail {
-    border-top: 1px solid #dee2e6;
-    background: #fff;
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    width: 280px;
     max-height: 0;
     overflow: hidden;
-    transition: max-height 0.3s ease;
-    flex-shrink: 0;
+    opacity: 0;
+    transform: translateY(10px);
+    transition: all 0.3s ease;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    z-index: 1000;
 }
 
 .drone-detail.open {
-    max-height: 400px;
+    max-height: 80vh;
     overflow-y: auto;
+    opacity: 1;
+    transform: translateY(0);
 }
 
 .drone-detail-header {
@@ -808,6 +817,7 @@ html, body {
     border-radius: 6px;
     overflow: hidden;
     background: #fafafa;
+    max-height: 150px;
 }
 
 .detail-chart-container canvas {
