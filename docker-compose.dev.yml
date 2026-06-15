@@ -9,8 +9,6 @@
 #   - Mock collector with sample data
 #   - Volume mounts for live development
 
-version: '3.8'
-
 services:
   web:
     build: .
