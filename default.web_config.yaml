@@ -41,6 +41,9 @@ web_interface:
   # Maximum positions per query to prevent browser lag
   max_positions_per_query: 5000
 
+  # Display units: true for metric (meters), false for imperial (feet)
+  use_metric: true
+
   # API keys for remote node data submission
   # Format: api_key: source_name
   # Clients must include "Authorization: Bearer <api_key>" header when submitting data

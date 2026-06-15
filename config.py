@@ -46,6 +46,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
     api_keys: dict = field(default_factory=dict)
     url_prefix: str = ""
     drone_aliases: dict = field(default_factory=dict)
+    use_metric: bool = True
 
     def __init__(self, yaml_file: str):
         with open(yaml_file, encoding="utf-8") as fh:
@@ -82,6 +83,9 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         # Drone aliases: uas_id -> friendly name
         self.drone_aliases = web_data.get("drone_aliases") or {}
 
+        # Units preference: true for metric, false for imperial
+        self.use_metric = web_data.get("use_metric", True)
+
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization"""
         return {
@@ -101,4 +105,5 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 {"name": c.name, "host": c.host, "remote_db_path": c.remote_db_path}
                 for c in self.collectors
             ],
+            "use_metric": self.use_metric,
         }

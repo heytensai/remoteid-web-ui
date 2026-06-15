@@ -301,9 +301,7 @@ const MapController = {
      */
     _createSessionOperatorPopup(uasId, sessionId, op, color, distance) {
         const shortSession = sessionId ? sessionId.replace('session_', '') : 'Unknown';
-        const distanceText = distance < 1000
-            ? `${distance.toFixed(0)}m`
-            : `${(distance / 1000).toFixed(2)}km`;
+        const distanceText = Units.formatDistance(distance);
         const locationNote = distance < 50
             ? '<span style="color: #28a745;">Same location as UAS</span>'
             : `<span style="color: #6c757d;">${distanceText} from UAS</span>`;
@@ -662,7 +660,7 @@ const MapController = {
     _createSessionPointPopup(uasId, sessionId, pos, pointType, color) {
         const shortSession = sessionId ? sessionId.replace('session_', '') : 'Unknown';
         const altitude = pos.altitude !== null && pos.altitude !== undefined
-            ? `${pos.altitude.toFixed(1)}m`
+            ? Units.formatAltitude(pos.altitude, true, 1)
             : 'N/A';
         const time = new Date(pos.timestamp);
         const dateStr = time.toLocaleDateString('en-CA');

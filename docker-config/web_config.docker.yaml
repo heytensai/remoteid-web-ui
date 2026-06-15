@@ -28,5 +28,7 @@ web_interface:
     tile_provider: "osm"
 
   default_hours: 24
+  # Display units: true for metric (meters), false for imperial (feet)
+  use_metric: true
   # Limit to prevent browser lag
   max_positions_per_query: 5000

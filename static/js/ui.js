@@ -212,7 +212,8 @@ const UIController = {
                 await this._loadSyncStatus();
             }
 
-            // Update tooltip content
+            // Initialize units from config
+            Units.init(config);
 
         } catch (e) {
             console.error('Failed to load config:', e);
@@ -447,7 +448,7 @@ const UIController = {
                         ${sortedSessions.map(drone => {
                             const color = MapController.getDroneColor(drone.uas_id);
                             const altitude = drone.altitude !== null && drone.altitude !== undefined
-                                ? `${drone.altitude.toFixed(0)}m`
+                                ? Units.formatAltitude(drone.altitude, true, 0)
                                 : 'N/A';
                             const time = new Date(drone.timestamp);
                             const timeStr = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -792,7 +793,7 @@ const UIController = {
 
         // Max altitude
         const maxAlt = Math.max(...track.map(p => p.altitude || 0));
-        this.elements.detailMaxAlt.textContent = maxAlt > 0 ? `${maxAlt.toFixed(0)}m` : 'N/A';
+        this.elements.detailMaxAlt.textContent = maxAlt > 0 ? Units.formatAltitude(maxAlt, true, 0) : 'N/A';
 
         // Total distance and max speed
         let totalDistance = 0;
@@ -814,12 +815,10 @@ const UIController = {
             }
         }
 
-        this.elements.detailDistance.textContent = totalDistance > 1000
-            ? `${(totalDistance / 1000).toFixed(2)} km`
-            : `${totalDistance.toFixed(0)} m`;
+        this.elements.detailDistance.textContent = Units.formatDistance(totalDistance);
 
         this.elements.detailMaxSpeed.textContent = maxSpeed > 0
-            ? `${(maxSpeed * 3.6).toFixed(1)} km/h`
+            ? Units.formatSpeed(maxSpeed)
             : 'N/A';
 
         // Time span
@@ -930,7 +929,9 @@ const UIController = {
             ctx.moveTo(padding.left, y);
             ctx.lineTo(width - padding.right, y);
             ctx.stroke();
-            ctx.fillText(`${a.toFixed(0)}`, padding.left - 4, y + 3);
+            // Convert altitude for display
+            const displayAlt = Units.useMetric ? a : a * 3.28084;
+            ctx.fillText(`${displayAlt.toFixed(0)}`, padding.left - 4, y + 3);
         }
 
         // Altitude label
@@ -940,7 +941,8 @@ const UIController = {
         ctx.textAlign = 'center';
         ctx.fillStyle = '#495057';
         ctx.font = '11px sans-serif';
-        ctx.fillText('Altitude (m)', 0, 0);
+        const altUnit = Units.getAltitudeUnit();
+        ctx.fillText(`Altitude (${altUnit})`, 0, 0);
         ctx.restore();
 
         // Draw line
