@@ -18,6 +18,13 @@ const MapController = {
     droneAliases: {},
     ready: false,
 
+    escapeHtml(str) {
+        if (str === null || str === undefined) return '';
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    },
+
     /**
      * Initialize the map
      */
@@ -301,6 +308,7 @@ const MapController = {
      */
     _createSessionOperatorPopup(uasId, sessionId, op, color, distance) {
         const shortSession = sessionId ? sessionId.replace('session_', '') : 'Unknown';
+        const esc = (v) => this.escapeHtml(v);
         const distanceText = Units.formatDistance(distance);
         const locationNote = distance < 50
             ? '<span style="color: #28a745;">Same location as UAS</span>'
@@ -312,15 +320,15 @@ const MapController = {
             </div>
             <div class="popup-row">
                 <span class="popup-label">UAS ID:</span>
-                <span class="popup-value">${uasId}</span>
+                <span class="popup-value">${esc(uasId)}</span>
             </div>
             <div class="popup-row">
                 <span class="popup-label">Session:</span>
-                <span class="popup-value">${shortSession}</span>
+                <span class="popup-value">${esc(shortSession)}</span>
             </div>
             <div class="popup-row">
                 <span class="popup-label">Operator ID:</span>
-                <span class="popup-value">${op.operator_id || 'N/A'}</span>
+                <span class="popup-value">${esc(op.operator_id || 'N/A')}</span>
             </div>
             <div class="popup-row">
                 <span class="popup-label">Position:</span>
@@ -666,17 +674,18 @@ const MapController = {
         const dateStr = time.toLocaleDateString('en-CA');
         const timeStr = time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
+        const esc = (v) => this.escapeHtml(v);
         return `
             <div class="popup-title" style="color: ${color};">
                 <i class="fas fa-${pointType === 'Start' ? 'play' : 'stop'}"></i> ${pointType}
             </div>
             <div class="popup-row">
                 <span class="popup-label">UAS ID:</span>
-                <span class="popup-value">${uasId}</span>
+                <span class="popup-value">${esc(uasId)}</span>
             </div>
             <div class="popup-row">
                 <span class="popup-label">Session:</span>
-                <span class="popup-value">${shortSession}</span>
+                <span class="popup-value">${esc(shortSession)}</span>
             </div>
             <div class="popup-row">
                 <span class="popup-label">Time:</span>
@@ -714,18 +723,19 @@ const MapController = {
      * Create popup content for operator
      */
     _createOperatorPopup(op, color) {
+        const esc = (v) => this.escapeHtml(v);
         const displayName = this.getDroneName(op.uas_id);
         return `
             <div class="popup-title" style="color: ${color};">
-                <i class="fas fa-user"></i> ${displayName}
+                <i class="fas fa-user"></i> ${esc(displayName)}
             </div>
             <div class="popup-row">
                 <span class="popup-label">UAS ID:</span>
-                <span class="popup-value">${op.uas_id}</span>
+                <span class="popup-value">${esc(op.uas_id)}</span>
             </div>
             <div class="popup-row">
                 <span class="popup-label">Operator ID:</span>
-                <span class="popup-value">${op.operator_id || 'N/A'}</span>
+                <span class="popup-value">${esc(op.operator_id || 'N/A')}</span>
             </div>
             <div class="popup-row">
                 <span class="popup-label">Position:</span>
