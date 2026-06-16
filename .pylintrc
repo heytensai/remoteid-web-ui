@@ -1,0 +1,72 @@
+[MAIN]
+ignore=CVS,env,.git,node_modules,docker-config
+ignore-paths=tests/
+py-version=3.12
+jobs=0
+persistent=no
+
+[BASIC]
+good-names=i,j,k,x,y,z,ex,Run,_,db,lat,lon,id,dt,ip,ts
+bad-names=foo,bar,baz,toto,tutu,tata
+variable-rgx=^[a-z][a-z0-9_]*$|^_[a-z][a-z0-9_]*$|^[A-Z]$|^_[A-Z]$|^[a-z][a-z0-9_]*_[0-9]+$
+argument-rgx=^[a-z][a-z0-9_]*$|^_[a-z][a-z0-9_]*$|^[A-Z]$|^[A-Z]_$
+
+[DESIGN]
+max-args=8
+max-attributes=12
+max-branches=16
+max-locals=25
+max-returns=10
+max-statements=80
+max-parents=7
+max-public-methods=25
+min-public-methods=1
+
+[FORMAT]
+max-line-length=120
+max-module-lines=1200
+indent-string='    '
+
+[MESSAGES CONTROL]
+disable=raw-checker-failed,
+        bad-inline-option,
+        locally-disabled,
+        file-ignored,
+        suppressed-message,
+        useless-suppression,
+        deprecated-pragma,
+        use-symbolic-message-instead,
+        use-implicit-booleaness-not-comparison-to-string,
+        use-implicit-booleaness-not-comparison-to-zero,
+        missing-module-docstring,
+        missing-function-docstring,
+        missing-class-docstring,
+        too-many-arguments,
+        too-many-positional-arguments,
+        too-many-locals,
+        too-many-return-statements,
+        too-many-branches,
+        too-many-instance-attributes,
+        consider-using-f-string,
+        invalid-name,
+        global-statement,
+        line-too-long
+
+[TYPECHECK]
+ignored-classes=optparse.Values,thread._local,_thread._local,argparse.Namespace
+
+[REPORTS]
+reports=no
+score=yes
+output-format=colorized
+
+[SIMILARITIES]
+ignore-comments=yes
+ignore-docstrings=yes
+ignore-imports=yes
+ignore-signatures=yes
+min-similarity-lines=4
+
+[VARIABLES]
+dummy-variables-rgx=_+$|(_[a-zA-Z0-9_]*[a-zA-Z0-9]+?$)|dummy|^ignored_|^unused_
+ignored-argument-names=_.*|^ignored_|^unused_

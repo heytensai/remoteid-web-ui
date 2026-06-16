@@ -7,6 +7,9 @@ make test          # Run all tests
 make test-py       # Python tests only
 make test-js       # JavaScript tests only
 make test-py-cov   # Python tests with coverage report
+make lint          # Run all linters
+make lint-py       # Pylint on Python source files
+make lint-js       # ESLint on JavaScript source files
 ```
 
 ## Prerequisites
@@ -129,6 +132,36 @@ npx jest --coverage         # JS coverage
 ```
 
 Python coverage runs via `pytest-cov`. JS coverage runs via Jest's built-in Istanbul integration.
+
+## Linting
+
+### Python (Pylint)
+
+Configured via `.pylintrc` at project root. Covers all `*.py` files.
+
+```bash
+make lint-py           # pylint *.py
+env/bin/pylint app.py  # Single file
+```
+
+Inline disables are used sparingly for specific methods (e.g., `# pylint: disable=too-many-locals`).
+
+### JavaScript (ESLint)
+
+Configured via `eslint.config.js` (flat config format). Covers `static/js/` source files. Test files are excluded.
+
+```bash
+make lint-js                       # eslint static/js/
+npx eslint static/js/map.js        # Single file
+```
+
+Key config: single quotes, semicolons required, browser & ES2021 env, custom globals (`L`, `flatpickr`, `Units`, `API`, `MapController`, `UIController`).
+
+### Running both
+
+```bash
+make lint
+```
 
 ## CI Integration
 

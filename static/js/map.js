@@ -388,33 +388,6 @@ const MapController = {
     },
 
     /**
-     * Update operator markers
-     */
-    updateOperators(operators) {
-        // Clear existing operator markers
-        this.layers.operators.clearLayers();
-        this.operatorMarkers = {};
-
-        for (const op of operators) {
-            if (!op.operator_latitude || !op.operator_longitude) continue;
-
-            const color = this.getDroneColor(op.uas_id);
-            const lat = op.operator_latitude;
-            const lon = op.operator_longitude;
-
-            const marker = L.marker([lat, lon], {
-                icon: this.createOperatorIcon(color),
-                opacity: 0.8
-            }).addTo(this.layers.operators);
-
-            // Add popup
-            marker.bindPopup(this._createOperatorPopup(op, color));
-
-            this.operatorMarkers[op.uas_id] = marker;
-        }
-    },
-
-    /**
      * Filter operators to only show specific UAS IDs
      * Removes operators for UAS IDs not in the visible set
      */
@@ -522,14 +495,6 @@ const MapController = {
         } catch (e) {
             console.error(`Failed to get track for ${uasId}:${sessionId}:`, e);
         }
-    },
-
-    /**
-     * Clear all tracks
-     */
-    clearAllTracks() {
-        this.layers.tracks.clearLayers();
-        this.tracks = {};
     },
 
     /**

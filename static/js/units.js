@@ -3,6 +3,7 @@
  * Underlying data remains in meters, display is converted based on config
  */
 
+/* exported Units */
 const Units = {
     // Configuration
     useMetric: true,
