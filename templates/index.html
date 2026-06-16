@@ -26,19 +26,6 @@
 <body data-base-url="{{ url_prefix }}">
     <!-- App Container wraps sidebar and main content -->
     <div class="app-container">
-        <!-- Sidebar -->
-        <div id="sidebar" class="sidebar">
-            <div class="sidebar-header">
-                <h2><img src="{{ url_prefix }}{{ url_for('static', filename='favicon.svg') }}" alt="" style="width: 28px; height: 28px; vertical-align: middle; margin-right: 8px;"> Drone Tracker</h2>
-                <button id="closeSidebar" class="close-btn">
-                    <i class="fas fa-times"></i>
-                </button>
-            </div>
-            <div id="droneList" class="drone-list">
-                <!-- Populated by JavaScript -->
-            </div>
-        </div>
-
         <!-- Main Content -->
         <div id="main" class="main">
             <!-- Header -->
@@ -46,6 +33,10 @@
                 <button id="openSidebar" class="menu-btn">
                     <i class="fas fa-bars"></i>
                 </button>
+
+                <div class="header-brand">
+                    <img src="{{ url_prefix }}{{ url_for('static', filename='favicon.svg') }}" alt=""> Drone Tracker
+                </div>
 
                 <button id="refreshBtn" class="refresh-btn" title="Refresh">
                     <i class="fas fa-sync-alt"></i>
@@ -76,8 +67,23 @@
                 </button>
             </div>
 
-            <!-- Map Container -->
-            <div id="map" class="map-container"></div>
+            <div class="main-body">
+                <!-- Sidebar -->
+                <div id="sidebar" class="sidebar">
+                    <div class="sidebar-header">
+                        <span class="sidebar-header-label">Recorded Flights</span>
+                        <button id="closeSidebar" class="close-btn">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div id="droneList" class="drone-list">
+                        <!-- Populated by JavaScript -->
+                    </div>
+                </div>
+
+                <!-- Map Container -->
+                <div id="map" class="map-container"></div>
+            </div>
 
             <!-- Settings Panel -->
             <div id="settingsPanel" class="settings-panel">
