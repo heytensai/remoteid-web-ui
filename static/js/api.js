@@ -10,7 +10,7 @@ const API = {
      * Initialize API client
      */
     init() {
-        this.baseUrl = window.APP_BASE_URL || '';
+        this.baseUrl = document.body.dataset.baseUrl || '';
     },
 
     /**
