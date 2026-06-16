@@ -2,12 +2,12 @@
 
 ## Configuration File Policy
 
-**IMPORTANT**: The `web_config.yaml` file is in `.gitignore` and should NEVER be modified directly. It contains user-specific settings and sensitive data like API keys.
+**IMPORTANT**: The `config/web_config.yaml` file is in `.gitignore` and should NEVER be modified directly. It contains user-specific settings and sensitive data like API keys.
 
 ### Correct Workflow for Config Changes
 
 1. **Always edit `default.web_config.yaml`** - This is the template file that IS tracked in git
-2. **Never edit `web_config.yaml`** - This is the user's local config (not tracked)
+2. **Never edit `config/web_config.yaml`** - This is the user's local config (not tracked)
 3. **Also update `docker-config/web_config.docker.yaml`** - Docker-specific config
 
 ### Config Files Overview
@@ -15,7 +15,7 @@
 | File | Purpose | Tracked in Git? |
 |------|---------|-----------------|
 | `default.web_config.yaml` | Template with defaults and documentation | Yes |
-| `web_config.yaml` | User's actual configuration | No (in .gitignore) |
+| `config/web_config.yaml` | User's actual configuration | No (in .gitignore) |
 | `docker-config/web_config.docker.yaml` | Docker development config | Yes |
 
 ### When Adding New Config Options

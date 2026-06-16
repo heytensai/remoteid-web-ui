@@ -1,8 +1,12 @@
 """Configuration loader for web interface"""
 
+import logging
+
 from dataclasses import dataclass, field
 from typing import List, Optional
 import yaml
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -49,6 +53,8 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
     use_metric: bool = True
 
     def __init__(self, yaml_file: str):
+        self.config_path = yaml_file
+
         with open(yaml_file, encoding="utf-8") as fh:
             data = yaml.safe_load(fh)
 
@@ -107,3 +113,16 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
             ],
             "use_metric": self.use_metric,
         }
+
+    def reload_drone_aliases(self):
+        """Re-read config file and update drone_aliases from disk"""
+        try:
+            with open(self.config_path, encoding="utf-8") as fh:
+                data = yaml.safe_load(fh)
+            web_data = data.get("web_interface", {})
+            new_aliases = web_data.get("drone_aliases") or {}
+            if new_aliases != self.drone_aliases:
+                self.drone_aliases = new_aliases
+                logger.info("Reloaded drone_aliases from %s", self.config_path)
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.exception("Failed to reload drone_aliases from %s", self.config_path)

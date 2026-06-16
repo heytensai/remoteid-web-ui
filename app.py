@@ -4,6 +4,8 @@ import argparse
 import logging
 import os
 import sqlite3
+import threading
+import time
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -308,6 +310,20 @@ def _parse_time_range(args):
     return start_time, end_time
 
 
+def _watch_config():
+    """Background thread: periodically reload drone_aliases from the YAML config."""
+    logger.info(
+        "Config file watcher started for %s",
+        os.path.abspath(CONFIG.config_path),
+    )
+    while True:
+        time.sleep(10)
+        try:
+            CONFIG.reload_drone_aliases()
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.exception("Error reloading drone_aliases")
+
+
 def _init_app(config_path: str):
     """Initialize application components. Returns Flask app ready to serve."""
     # pylint: disable=global-statement
@@ -325,6 +341,12 @@ def _init_app(config_path: str):
 
     if SYNC_MANAGER:
         SYNC_MANAGER.start()
+
+    # Start background config file watcher
+    watcher = threading.Thread(
+        target=_watch_config, daemon=True
+    )
+    watcher.start()
 
     return app
 

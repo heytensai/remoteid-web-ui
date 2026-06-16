@@ -16,8 +16,8 @@ services:
     ports:
       - "127.0.0.1:5000:5000"
     volumes:
-      # Configuration file (required)
-      - ./web_config.yaml:/app/config/web_config.yaml:ro
+      # Configuration directory (required)
+      - ./config:/app/config:ro
       # Database persistence (bind mount to host directory)
       - ./data:/app/data
       # SSH keys for remote collector access (optional)
