@@ -1,6 +1,7 @@
 # Web Interface Requirements
 flask>=2.0.0
 flask-cors>=4.0.0
+flask-wtf>=1.2.0
 pyyaml>=6.0
 gunicorn>=20.0
 pylint==4.0.5

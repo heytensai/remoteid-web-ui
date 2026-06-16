@@ -78,3 +78,25 @@ User-controlled data (UAS IDs, session IDs, operator IDs) must ALWAYS be HTML-es
 3. `color` values from `getDroneColor()` are safe (constrained HSL output).
 4. Formatted values from `Units.*` are safe (numbers with unit labels).
 5. If adding a new object/controller, add an `escapeHtml` method following the same pattern.
+
+## CSRF Protection
+
+All POST endpoints in `app.py` are protected by `flask_wtf.csrf.CSRFProtect` (except `/api/submit` which uses Bearer token auth). A CSRF token is generated on the server and sent to the frontend via the `/api/config` response's `csrf_token` field.
+
+### How it works
+
+1. `app.secret_key` is set at startup (from `FLASK_SECRET_KEY` env var or auto-generated)
+2. `CSRFProtect` middleware validates all POST/PUT/DELETE/PATCH requests
+3. The frontend (`api.js`) reads the token from the config response and stores it as `API.csrfToken`
+4. All POST requests from the frontend include the token as the `X-CSRFToken` header
+5. The `/api/submit` endpoint is `@csrf.exempt` since it authenticates via API key Bearer token
+
+### When Adding New POST Endpoints
+
+1. Add the route to `app.py` — CSRF protection is automatic
+2. If the endpoint is consumed by external services (not the frontend), add `@csrf.exempt` and use an alternative auth mechanism (API key, etc.)
+3. Frontend POST calls automatically include the CSRF token via `API._post()`
+
+### Config Options
+
+- `FLASK_SECRET_KEY` — env var for a persistent secret key (optional; a random key is generated at startup if not set)

@@ -4,6 +4,7 @@
 
 const API = {
     baseUrl: '',
+    csrfToken: null,
 
     /**
      * Initialize API client
@@ -16,7 +17,9 @@ const API = {
      * Get configuration
      */
     async getConfig() {
-        return this._get('/api/config');
+        const config = await this._get('/api/config');
+        this.csrfToken = config.csrf_token || null;
+        return config;
     },
 
     /**
@@ -132,11 +135,15 @@ const API = {
         let lastError;
         for (let attempt = 0; attempt <= retries; attempt++) {
             try {
+                const headers = {
+                    'Content-Type': 'application/json'
+                };
+                if (this.csrfToken) {
+                    headers['X-CSRFToken'] = this.csrfToken;
+                }
                 const response = await fetch(this.baseUrl + url, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
+                    headers,
                     body: JSON.stringify(data)
                 });
                 if (!response.ok) {
