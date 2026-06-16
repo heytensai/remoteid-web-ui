@@ -2,12 +2,14 @@
 
 import argparse
 import logging
+import os
 import sqlite3
 from datetime import datetime, timedelta
 from typing import Optional
 
 from flask import Flask, jsonify, request, render_template
 from flask_cors import CORS
+from flask_wtf.csrf import CSRFProtect, generate_csrf
 
 from config import WebConfig
 from database import WebDatabase
@@ -25,6 +27,8 @@ DATABASE: WebDatabase = None
 SYNC_MANAGER = None  # type: Optional[SyncManager]
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24).hex())
+csrf = CSRFProtect(app)
 CORS(app)  # Enable CORS for all routes
 
 
@@ -49,6 +53,7 @@ def get_config():
             "sync_enabled": SYNC_MANAGER is not None,
             "drone_aliases": CONFIG.drone_aliases,
             "use_metric": CONFIG.use_metric,
+            "csrf_token": generate_csrf(),
         }
     )
 
@@ -209,6 +214,7 @@ def _get_api_key_source():
 
 
 @app.route("/api/submit", methods=["POST"])
+@csrf.exempt
 def submit_data():
     """Submit remote ID data from remote nodes.
 
