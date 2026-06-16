@@ -8,6 +8,9 @@
     <meta http-equiv="Content-Security-Policy"
           content="default-src 'self'; script-src 'self' https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; font-src 'self' https://cdnjs.cloudflare.com; img-src 'self' https://*.tile.openstreetmap.org https://*.basemaps.cartocdn.com data:; connect-src 'self';">
 
+    <link rel="icon" type="image/svg+xml" href="{{ url_prefix }}{{ url_for('static', filename='favicon.svg') }}">
+    <link rel="apple-touch-icon" href="{{ url_prefix }}{{ url_for('static', filename='favicon.svg') }}">
+
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
@@ -26,7 +29,7 @@
         <!-- Sidebar -->
         <div id="sidebar" class="sidebar">
             <div class="sidebar-header">
-                <h2><i class="fas fa-helicopter"></i> Drones</h2>
+                <h2><img src="{{ url_prefix }}{{ url_for('static', filename='favicon.svg') }}" alt="" style="width: 28px; height: 28px; vertical-align: middle; margin-right: 8px;"> Drones</h2>
                 <button id="closeSidebar" class="close-btn">
                     <i class="fas fa-times"></i>
                 </button>
