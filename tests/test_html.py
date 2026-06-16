@@ -91,15 +91,19 @@ class TestIndexTemplate:
         assert "24" in preset_hours
         assert "168" in preset_hours
 
-    def test_sidebar_footer(self, client):
+    def test_settings_panel(self, client):
         resp = client.get("/")
         soup = BeautifulSoup(resp.data, "html.parser")
 
-        footer = soup.find("div", class_="sidebar-footer")
-        assert footer is not None
-        assert footer.find(id="showOperators") is not None
-        assert footer.find(id="showTracks") is not None
-        assert footer.find(id="trackOpacity") is not None
+        panel = soup.find("div", class_="settings-panel")
+        assert panel is not None
+        assert panel.find(id="showOperators") is not None
+        assert panel.find(id="showTracks") is not None
+        assert panel.find(id="trackOpacity") is not None
+        assert panel.find(class_="settings-backdrop") is None
+        assert soup.find(id="settingsBackdrop") is not None
+        assert soup.find(id="openSettings") is not None
+        assert soup.find(id="closeSettings") is not None
 
     def test_data_base_url(self, client):
         resp = client.get("/")

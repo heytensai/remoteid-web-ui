@@ -37,20 +37,6 @@
             <div id="droneList" class="drone-list">
                 <!-- Populated by JavaScript -->
             </div>
-            <div class="sidebar-footer">
-                <label>
-                    <input type="checkbox" id="showOperators" checked>
-                    Show Operators
-                </label>
-                <label>
-                    <input type="checkbox" id="showTracks" checked>
-                    Show Tracks
-                </label>
-                <div class="opacity-control">
-                    <span>Track Opacity</span>
-                    <input type="range" id="trackOpacity" min="0" max="100" value="60">
-                </div>
-            </div>
         </div>
 
         <!-- Main Content -->
@@ -85,10 +71,39 @@
                         <button data-hours="168">7d</button>
                     </div>
                 </div>
+                <button id="openSettings" class="settings-btn" title="Settings">
+                    <i class="fas fa-bars"></i>
+                </button>
             </div>
 
             <!-- Map Container -->
             <div id="map" class="map-container"></div>
+
+            <!-- Settings Panel -->
+            <div id="settingsBackdrop" class="settings-backdrop"></div>
+            <div id="settingsPanel" class="settings-panel">
+                <div class="settings-panel-header">
+                    <h3><i class="fas fa-cog"></i> Settings</h3>
+                    <button id="closeSettings" class="close-btn">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="settings-panel-body">
+                    <label class="settings-item">
+                        <input type="checkbox" id="showOperators" checked>
+                        Show Operators
+                    </label>
+                    <label class="settings-item">
+                        <input type="checkbox" id="showTracks" checked>
+                        Show Tracks
+                    </label>
+                    <div class="opacity-control settings-item">
+                        <span>Track Opacity</span>
+                        <span id="opacityValue">60%</span>
+                        <input type="range" id="trackOpacity" min="0" max="100" value="60">
+                    </div>
+                </div>
+            </div>
 
             <!-- Drone Detail Panel -->
             <div id="droneDetail" class="drone-detail">
