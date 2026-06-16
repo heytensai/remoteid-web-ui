@@ -113,11 +113,21 @@ const UIController = {
     _initEventListeners() {
         // Sidebar toggle
         this.elements.openSidebarBtn.addEventListener('click', () => {
-            this.elements.sidebar.classList.add('open');
+            if (window.innerWidth < 768) {
+                this.elements.sidebar.classList.add('open');
+            } else {
+                this.elements.sidebar.classList.toggle('collapsed');
+                setTimeout(() => MapController.map.invalidateSize(), 350);
+            }
         });
 
         this.elements.closeSidebarBtn.addEventListener('click', () => {
-            this.elements.sidebar.classList.remove('open');
+            if (window.innerWidth < 768) {
+                this.elements.sidebar.classList.remove('open');
+            } else {
+                this.elements.sidebar.classList.add('collapsed');
+                setTimeout(() => MapController.map.invalidateSize(), 350);
+            }
         });
 
         // Refresh button
