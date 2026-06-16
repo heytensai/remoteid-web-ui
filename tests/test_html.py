@@ -15,7 +15,7 @@ class TestIndexTemplate:
 
         # Title
         assert soup.title is not None
-        assert "Remote ID Tracker" in soup.title.string
+        assert "Drone Tracker" in soup.title.string
 
         # Meta viewport
         meta_viewport = soup.find("meta", attrs={"name": "viewport"})

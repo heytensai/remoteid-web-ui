@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Remote ID Tracker</title>
+    <title>Drone Tracker</title>
 
     <meta http-equiv="Content-Security-Policy"
           content="default-src 'self'; script-src 'self' https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; font-src 'self' https://cdnjs.cloudflare.com; img-src 'self' https://*.tile.openstreetmap.org https://*.basemaps.cartocdn.com data:; connect-src 'self';">
@@ -29,7 +29,7 @@
         <!-- Sidebar -->
         <div id="sidebar" class="sidebar">
             <div class="sidebar-header">
-                <h2><img src="{{ url_prefix }}{{ url_for('static', filename='favicon.svg') }}" alt="" style="width: 28px; height: 28px; vertical-align: middle; margin-right: 8px;"> Drones</h2>
+                <h2><img src="{{ url_prefix }}{{ url_for('static', filename='favicon.svg') }}" alt="" style="width: 28px; height: 28px; vertical-align: middle; margin-right: 8px;"> Drone Tracker</h2>
                 <button id="closeSidebar" class="close-btn">
                     <i class="fas fa-times"></i>
                 </button>
@@ -60,7 +60,7 @@
                 <button id="openSidebar" class="menu-btn">
                     <i class="fas fa-bars"></i>
                 </button>
-                <h1>Remote ID Tracker</h1>
+
                 <button id="refreshBtn" class="refresh-btn" title="Refresh">
                     <i class="fas fa-sync-alt"></i>
                 </button>
