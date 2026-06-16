@@ -46,3 +46,11 @@ Thumbs.db
 web_interface/web.db
 web_interface/__pycache__/
 *.key
+
+# JavaScript testing
+node_modules/
+
+# Python testing
+.pytest_cache/
+.coverage
+htmlcov/

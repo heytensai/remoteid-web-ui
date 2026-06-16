@@ -100,3 +100,31 @@ All POST endpoints in `app.py` are protected by `flask_wtf.csrf.CSRFProtect` (ex
 ### Config Options
 
 - `FLASK_SECRET_KEY` — env var for a persistent secret key (optional; a random key is generated at startup if not set)
+
+## Testing Strategy
+
+Tests live in `tests/` with Python (`pytest`) and JavaScript (`Jest` + `jsdom`) suites.
+
+### When Adding/Changing Code
+
+- **Python backend** — add or update tests in `tests/`. Key areas: config loading (`test_config.py`), database operations (`test_database.py`), API endpoints (`test_app.py`), and HTML template rendering via BeautifulSoup (`test_html.py`).
+- **JavaScript frontend** — add or update tests in `tests/js/`. External dependencies (Leaflet, fetch, flatpickr) are mocked. Only pure functions are tested for `MapController` and `UIController` (map rendering requires a real browser).
+- **HTML template** — structural tests in `test_html.py` verify required DOM elements, CDN links, CSP headers, and asset loading.
+
+### Testing Conventions
+
+1. **Isolated test DB** — fixtures in `conftest.py` create temp SQLite databases and tear them down after each test.
+2. **API tests** use Flask's test client with `TESTING=True` and `WTF_CSRF_ENABLED=False` (except when explicitly testing CSRF).
+3. **JS tests** load source files via `eval` (with `const` stripped) into the `jsdom` global scope. Mock `global.fetch`, `global.L`, and `global.flatpickr` as needed.
+4. **HTML escaping** — test that `escapeHtml()` handles `<`, `>`, `&`, `"` via the `textContent` → `innerHTML` round-trip. jsdom escapes `"` as `\"` not `&quot;`, so tests check for `not.toContain('<')` rather than exact equality.
+5. **Coverage** — run `make test-py-cov` for Python, `npx jest --coverage` for JS.
+
+### Running
+
+```bash
+make test        # All tests (146 total)
+make test-py     # Python only
+make test-js     # JS only
+```
+
+See `TESTING.md` for details.
