@@ -62,6 +62,7 @@ const MapController = {
 
         // Reset marker tracking objects
         this.markers = {};
+        this.dronePositions = {};
         this.tracks = {};
         this.operatorMarkers = {};
         this.sessionOperatorMarkers = {};
@@ -346,9 +347,9 @@ const MapController = {
      */
     clearAllDroneMarkers() {
         if (!this.ready || !this.layers.drones) return;
-        // Clear the entire drones layer group
         this.layers.drones.clearLayers();
         this.markers = {};
+        this.dronePositions = {};
     },
 
     /**
@@ -361,30 +362,32 @@ const MapController = {
     },
 
     /**
-     * Update drone markers (handles both UAS and session entries)
+     * Track drone positions for pan-to functionality
      */
     updateDrones(drones) {
-        if (!this.ready || !this.layers.drones) return;
+        if (!this.ready) return;
 
-        // Get unique UAS IDs (since we may have multiple sessions per UAS)
         const uasIds = [...new Set(drones.map(d => d.uas_id))];
         const currentIds = new Set(uasIds);
 
-        // Remove markers for drones no longer present
-        for (const [id, marker] of Object.entries(this.markers)) {
+        // Remove stale position entries
+        for (const id of Object.keys(this.dronePositions)) {
             if (!currentIds.has(id)) {
-                this.layers.drones.removeLayer(marker);
-                delete this.markers[id];
+                delete this.dronePositions[id];
             }
         }
 
-        // If no drones to show, clear everything
-        if (uasIds.length === 0) {
-            this.clearAllDroneMarkers();
-            return;
-        }
+        if (uasIds.length === 0) return;
 
-
+        // Store latest position for each drone
+        uasIds.forEach(uasId => {
+            const entries = drones.filter(d => d.uas_id === uasId);
+            if (entries.length === 0) return;
+            const last = entries[entries.length - 1];
+            if (last.latitude != null && last.longitude != null) {
+                this.dronePositions[uasId] = [last.latitude, last.longitude];
+            }
+        });
     },
 
     /**
@@ -726,11 +729,9 @@ const MapController = {
      * Pan to a specific drone
      */
     panToDrone(uasId) {
-        const marker = this.markers[uasId];
-        if (marker) {
-            const latLng = marker.getLatLng();
-            this.map.setView(latLng, 16);
-            marker.openPopup();
+        const pos = this.dronePositions[uasId];
+        if (pos) {
+            this.map.setView(pos, 16);
         }
     },
 
@@ -775,16 +776,6 @@ const MapController = {
      * Highlight a specific drone
      */
     highlightDrone(uasId) {
-        // Reset all markers
-        for (const [id, marker] of Object.entries(this.markers)) {
-            if (id === uasId) {
-                marker.setZIndexOffset(1000);
-            } else {
-                marker.setZIndexOffset(0);
-            }
-        }
-
-        // Pan to the drone
         this.panToDrone(uasId);
     }
 };
