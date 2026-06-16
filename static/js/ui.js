@@ -92,7 +92,12 @@ const UIController = {
             showOperatorsCheckbox: document.getElementById('showOperators'),
             showTracksCheckbox: document.getElementById('showTracks'),
             trackOpacitySlider: document.getElementById('trackOpacity'),
-            timePresets: document.querySelectorAll('.header-time-presets button')
+            timePresets: document.querySelectorAll('.header-time-presets button'),
+            settingsPanel: document.getElementById('settingsPanel'),
+            settingsBackdrop: document.getElementById('settingsBackdrop'),
+            openSettingsBtn: document.getElementById('openSettings'),
+            closeSettingsBtn: document.getElementById('closeSettings'),
+            opacityValue: document.getElementById('opacityValue')
         };
 
     },
@@ -154,6 +159,27 @@ const UIController = {
             opacityTimeout = setTimeout(() => {
                 MapController.setTrackOpacity(e.target.value);
             }, 50);
+        });
+
+        // Settings panel toggle
+        this.elements.openSettingsBtn.addEventListener('click', () => {
+            this.elements.settingsPanel.classList.add('open');
+            this.elements.settingsBackdrop.classList.add('open');
+        });
+
+        this.elements.closeSettingsBtn.addEventListener('click', () => {
+            this._closeSettingsPanel();
+        });
+
+        this.elements.settingsBackdrop.addEventListener('click', () => {
+            this._closeSettingsPanel();
+        });
+
+        // Update opacity value display
+        this.elements.trackOpacitySlider.addEventListener('input', (e) => {
+            if (this.elements.opacityValue) {
+                this.elements.opacityValue.textContent = e.target.value + '%';
+            }
         });
 
         // Close sidebar when clicking on map (mobile)
@@ -782,6 +808,14 @@ const UIController = {
             console.error('Failed to load drone detail:', e);
             this._clearDetailStats();
         }
+    },
+
+    /**
+     * Close the settings panel
+     */
+    _closeSettingsPanel() {
+        this.elements.settingsPanel.classList.remove('open');
+        this.elements.settingsBackdrop.classList.remove('open');
     },
 
     /**
