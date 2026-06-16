@@ -80,7 +80,6 @@
             <div id="map" class="map-container"></div>
 
             <!-- Settings Panel -->
-            <div id="settingsBackdrop" class="settings-backdrop"></div>
             <div id="settingsPanel" class="settings-panel">
                 <div class="settings-panel-header">
                     <h3><i class="fas fa-cog"></i> Settings</h3>
@@ -89,18 +88,32 @@
                     </button>
                 </div>
                 <div class="settings-panel-body">
-                    <label class="settings-item">
-                        <input type="checkbox" id="showOperators" checked>
-                        Show Operators
-                    </label>
-                    <label class="settings-item">
-                        <input type="checkbox" id="showTracks" checked>
-                        Show Tracks
-                    </label>
-                    <div class="opacity-control settings-item">
-                        <span>Track Opacity</span>
-                        <span id="opacityValue">60%</span>
-                        <input type="range" id="trackOpacity" min="0" max="100" value="60">
+                    <div class="settings-section">
+                        <h4 class="settings-section-title">Map Display</h4>
+                        <label class="settings-item">
+                            <input type="checkbox" id="showOperators" checked>
+                            Show Operators
+                        </label>
+                        <label class="settings-item">
+                            <input type="checkbox" id="showTracks" checked>
+                            Show Tracks
+                        </label>
+                        <div class="opacity-control settings-item">
+                            <span>Track Opacity</span>
+                            <span id="opacityValue">60%</span>
+                            <input type="range" id="trackOpacity" min="0" max="100" value="60">
+                        </div>
+                    </div>
+                    <div class="settings-section">
+                        <h4 class="settings-section-title">Drone Visibility</h4>
+                        <label class="settings-item">
+                            <input type="checkbox" id="showKnownDrones" checked>
+                            Show Known Drones
+                        </label>
+                        <label class="settings-item">
+                            <input type="checkbox" id="showUnknownDrones" checked>
+                            Show Unknown Drones
+                        </label>
                     </div>
                 </div>
             </div>
