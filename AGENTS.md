@@ -119,12 +119,35 @@ Tests live in `tests/` with Python (`pytest`) and JavaScript (`Jest` + `jsdom`) 
 4. **HTML escaping** — test that `escapeHtml()` handles `<`, `>`, `&`, `"` via the `textContent` → `innerHTML` round-trip. jsdom escapes `"` as `\"` not `&quot;`, so tests check for `not.toContain('<')` rather than exact equality.
 5. **Coverage** — run `make test-py-cov` for Python, `npx jest --coverage` for JS.
 
+## Linting
+
+### Python (Pylint)
+
+- Config: `.pylintrc` at project root (disables docstring, too-many-*, invalid-name, global-statement, etc.)
+- Run: `make lint-py` or `env/bin/pylint *.py`
+- Inline disables (`# pylint: disable=...`) are acceptable for specific methods
+
+### JavaScript (ESLint)
+
+- Config: `eslint.config.js` (flat config, ESLint v9+)
+- Run: `make lint-js` or `npx eslint static/js/`
+- Key rules: single quotes, semicolons, `prefer-const`
+- Globals: `L`, `flatpickr` (readonly), `Units`, `API`, `MapController`, `UIController` (defined in source files)
+- The `no-redeclare` rule is disabled — the project uses global singletons across script-tag-loaded files
+
+### When Adding/Changing Code
+
+Run `make lint` and fix all errors before committing.
+
 ### Running
 
 ```bash
 make test        # All tests (146 total)
 make test-py     # Python only
 make test-js     # JS only
+make lint        # All linters
+make lint-py     # Pylint only
+make lint-js     # ESLint only
 ```
 
 See `TESTING.md` for details.

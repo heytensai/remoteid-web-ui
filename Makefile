@@ -1,4 +1,4 @@
-.PHONY: test test-py test-js test-py-cov
+.PHONY: test test-py test-js test-py-cov lint lint-py lint-js install
 
 PYTHON = env/bin/python
 NPM = npm
@@ -14,9 +14,17 @@ test-py-cov:
 test-js:
 	$(NPM) test
 
+lint: lint-py lint-js
+
+lint-py:
+	$(PYTHON) -m pylint *.py
+
+lint-js:
+	$(NPM) exec eslint -- static/js/
+
 install:
 	$(PYTHON) -m pip install -r requirements.txt
 	$(PYTHON) -m pip install -r dev-requirements.txt
 	$(NPM) install
 
-.PHONY: test test-py test-js test-py-cov install
+.PHONY: test test-py test-js test-py-cov lint lint-py lint-js install
