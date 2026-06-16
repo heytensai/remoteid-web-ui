@@ -63,7 +63,7 @@
                     </div>
                 </div>
                 <button id="openSettings" class="settings-btn" title="Settings">
-                    <i class="fas fa-bars"></i>
+                    <i class="fas fa-cog"></i>
                 </button>
             </div>
 
@@ -94,6 +94,21 @@
                     </button>
                 </div>
                 <div class="settings-panel-body">
+                    <div class="settings-section mobile-only">
+                        <h4 class="settings-section-title">Time Range</h4>
+                        <div class="settings-time-controls">
+                            <div class="settings-time-inputs">
+                                <input type="text" id="startTimeM" class="flatpickr" placeholder="Start time">
+                                <input type="text" id="endTimeM" class="flatpickr" placeholder="End time">
+                            </div>
+                            <div class="settings-time-presets">
+                                <button data-hours="1">1h</button>
+                                <button data-hours="6">6h</button>
+                                <button data-hours="24">24h</button>
+                                <button data-hours="168">7d</button>
+                            </div>
+                        </div>
+                    </div>
                     <div class="settings-section">
                         <h4 class="settings-section-title">Map Display</h4>
                         <label class="settings-item">

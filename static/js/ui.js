@@ -119,7 +119,10 @@ const UIController = {
             closeSettingsBtn: document.getElementById('closeSettings'),
             opacityValue: document.getElementById('opacityValue'),
             showKnownDrones: document.getElementById('showKnownDrones'),
-            showUnknownDrones: document.getElementById('showUnknownDrones')
+            showUnknownDrones: document.getElementById('showUnknownDrones'),
+            startTimeMInput: document.getElementById('startTimeM'),
+            endTimeMInput: document.getElementById('endTimeM'),
+            settingsTimePresets: document.querySelectorAll('.settings-time-presets button')
         };
 
     },
@@ -162,7 +165,7 @@ const UIController = {
             this._closeDetailPanel();
         });
 
-        // Time preset buttons
+        // Time preset buttons (header)
         this.elements.timePresets.forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const hours = parseInt(e.currentTarget.dataset.hours);
@@ -171,6 +174,18 @@ const UIController = {
                 this.refreshData();
             });
         });
+
+        // Time preset buttons (settings panel / mobile)
+        if (this.elements.settingsTimePresets) {
+            this.elements.settingsTimePresets.forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const hours = parseInt(e.currentTarget.dataset.hours);
+                    this._setStoredPreset(hours);
+                    this._setTimeRange(hours);
+                    this.refreshData();
+                });
+            });
+        }
 
         // Show/hide operators
         this.elements.showOperatorsCheckbox.addEventListener('change', (e) => {
@@ -255,7 +270,7 @@ const UIController = {
                 if (this._suppressTimeChange) return;
                 this._clearActivePreset();
                 this._clearStoredPreset();
-                if (instance.element.id === 'startTime') {
+                if (instance.element.id === 'startTime' || instance.element.id === 'startTimeM') {
                     this.currentStartTime = selectedDates[0];
                 } else {
                     this.currentEndTime = selectedDates[0];
@@ -273,6 +288,20 @@ const UIController = {
             ...config,
             defaultDate: endTime
         });
+
+        // Also init mobile (settings panel) time inputs if they exist
+        if (this.elements.startTimeMInput) {
+            flatpickr(this.elements.startTimeMInput, {
+                ...config,
+                defaultDate: startTime
+            });
+        }
+        if (this.elements.endTimeMInput) {
+            flatpickr(this.elements.endTimeMInput, {
+                ...config,
+                defaultDate: endTime
+            });
+        }
     },
 
     /**
@@ -414,6 +443,12 @@ const UIController = {
         if (this.elements.endTimeInput._flatpickr) {
             this.elements.endTimeInput._flatpickr.setDate(endTime);
         }
+        if (this.elements.startTimeMInput && this.elements.startTimeMInput._flatpickr) {
+            this.elements.startTimeMInput._flatpickr.setDate(startTime);
+        }
+        if (this.elements.endTimeMInput && this.elements.endTimeMInput._flatpickr) {
+            this.elements.endTimeMInput._flatpickr.setDate(endTime);
+        }
         this._suppressTimeChange = false;
     },
 
@@ -448,6 +483,11 @@ const UIController = {
         this.elements.timePresets.forEach(btn => {
             btn.classList.toggle('active', parseInt(btn.dataset.hours) === hours);
         });
+        if (this.elements.settingsTimePresets) {
+            this.elements.settingsTimePresets.forEach(btn => {
+                btn.classList.toggle('active', parseInt(btn.dataset.hours) === hours);
+            });
+        }
     },
 
     /**
@@ -455,6 +495,9 @@ const UIController = {
      */
     _clearActivePreset() {
         this.elements.timePresets.forEach(btn => btn.classList.remove('active'));
+        if (this.elements.settingsTimePresets) {
+            this.elements.settingsTimePresets.forEach(btn => btn.classList.remove('active'));
+        }
     },
 
     /**

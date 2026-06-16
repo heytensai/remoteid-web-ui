@@ -34,20 +34,6 @@ html, body {
 }
 
 /* Mobile: Sidebar overlays */
-@media (max-width: 767px) {
-    .sidebar {
-        position: fixed;
-        left: -300px;
-        top: 0;
-        z-index: 1100;
-        transition: left 0.3s ease;
-    }
-
-    .sidebar.open {
-        left: 0;
-    }
-}
-
 .sidebar-header {
     padding: 16px;
     background: #2c3e50;
@@ -862,6 +848,59 @@ html, body {
     cursor: pointer;
 }
 
+.settings-time-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.settings-time-inputs {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.settings-time-inputs input {
+    flex: 1;
+    padding: 8px 10px;
+    border: 1px solid #ced4da;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    min-height: 44px;
+}
+
+.settings-time-inputs input:focus {
+    outline: none;
+    border-color: #007bff;
+}
+
+.settings-time-presets {
+    display: flex;
+    gap: 6px;
+}
+
+.settings-time-presets button {
+    flex: 1;
+    padding: 6px 8px;
+    border: 1px solid #ced4da;
+    background: white;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.settings-time-presets button:hover {
+    background: #f8f9fa;
+}
+
+.settings-time-presets button.active {
+    background: #007bff;
+    color: white;
+    border-color: #007bff;
+}
+
 .settings-item input[type="checkbox"] {
     margin-right: 10px;
     width: 18px;
@@ -1003,4 +1042,32 @@ html, body {
     font-weight: 600;
     color: #2c3e50;
     margin-bottom: 8px;
+}
+
+@media (max-width: 767px) {
+    .sidebar {
+        position: fixed;
+        left: -300px;
+        top: 0;
+        z-index: 1100;
+        transition: left 0.3s ease;
+    }
+
+    .sidebar.open {
+        left: 0;
+    }
+
+    .header-time-controls {
+        display: none;
+    }
+
+    .mobile-only {
+        display: block;
+    }
+}
+
+@media (min-width: 768px) {
+    .mobile-only {
+        display: none;
+    }
 }
