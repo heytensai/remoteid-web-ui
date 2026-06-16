@@ -16,6 +16,9 @@ const UIController = {
     selectedDrone: null,
     selectedDroneTrack: null,
     visibleSessions: new Set(), // Track which sessions are checked/visible
+    showKnownDrones: true,
+    showUnknownDrones: true,
+    expandedDates: new Set(),
 
     // DOM Elements
     elements: {},
@@ -94,10 +97,12 @@ const UIController = {
             trackOpacitySlider: document.getElementById('trackOpacity'),
             timePresets: document.querySelectorAll('.header-time-presets button'),
             settingsPanel: document.getElementById('settingsPanel'),
-            settingsBackdrop: document.getElementById('settingsBackdrop'),
+
             openSettingsBtn: document.getElementById('openSettings'),
             closeSettingsBtn: document.getElementById('closeSettings'),
-            opacityValue: document.getElementById('opacityValue')
+            opacityValue: document.getElementById('opacityValue'),
+            showKnownDrones: document.getElementById('showKnownDrones'),
+            showUnknownDrones: document.getElementById('showUnknownDrones')
         };
 
     },
@@ -163,15 +168,10 @@ const UIController = {
 
         // Settings panel toggle
         this.elements.openSettingsBtn.addEventListener('click', () => {
-            this.elements.settingsPanel.classList.add('open');
-            this.elements.settingsBackdrop.classList.add('open');
+            this.elements.settingsPanel.classList.toggle('open');
         });
 
         this.elements.closeSettingsBtn.addEventListener('click', () => {
-            this._closeSettingsPanel();
-        });
-
-        this.elements.settingsBackdrop.addEventListener('click', () => {
             this._closeSettingsPanel();
         });
 
@@ -180,6 +180,17 @@ const UIController = {
             if (this.elements.opacityValue) {
                 this.elements.opacityValue.textContent = e.target.value + '%';
             }
+        });
+
+        // Show known/unknown drones
+        this.elements.showKnownDrones.addEventListener('change', (e) => {
+            this.showKnownDrones = e.target.checked;
+            this.refreshData();
+        });
+
+        this.elements.showUnknownDrones.addEventListener('change', (e) => {
+            this.showUnknownDrones = e.target.checked;
+            this.refreshData();
         });
 
         // Close sidebar when clicking on map (mobile)
@@ -328,20 +339,27 @@ const UIController = {
         this.elements.refreshBtn.classList.add('spinning');
 
         try {
-            // Close detail panel on refresh and clear all map layers
+            // Close detail panel on refresh and clear drone markers/operators
             this._closeDetailPanel();
             MapController.clearAllDroneMarkers();
-            MapController.clearAllTracks();
             MapController.clearAllOperators();
 
             // Fetch drones
             const dronesResponse = await API.getDrones(this.currentStartTime, this.currentEndTime);
-            const drones = dronesResponse.drones || [];
+            let drones = dronesResponse.drones || [];
 
-            // Get current session keys from new data
+            // Filter by known/unknown drone visibility
+            drones = drones.filter(d => {
+                const isKnown = !!this.droneAliases[d.uas_id];
+                if (isKnown && !this.showKnownDrones) return false;
+                if (!isKnown && !this.showUnknownDrones) return false;
+                return true;
+            });
+
+            // Get current session keys from filtered data
             const currentSessionKeys = new Set(drones.map(d => `${d.uas_id}:${d.computed_session_id || 'unknown'}`));
 
-            // Remove tracks for sessions that no longer exist
+            // Remove tracks for sessions no longer in the data
             for (const sessionKey of this.loadedTracks) {
                 if (!currentSessionKeys.has(sessionKey)) {
                     const [uasId] = sessionKey.split(':');
@@ -351,44 +369,22 @@ const UIController = {
             this.loadedTracks = new Set([...this.loadedTracks].filter(k => currentSessionKeys.has(k)));
             this.visibleSessions = new Set([...this.visibleSessions].filter(k => currentSessionKeys.has(k)));
 
-            // Update drone list (this populates visibleSessions on initial load)
+            // Update drone list (controls checkbox state, tracks loadedTracks)
             this._updateDroneList(drones);
-
-            // Get unique UAS IDs from visible sessions
-            const visibleUasIds = new Set();
-            for (const sessionKey of this.visibleSessions) {
-                const [uasId] = sessionKey.split(':');
-                visibleUasIds.add(uasId);
-            }
-
-            // Filter drones to only show visible UAS IDs
-            // Only include a drone if its UAS ID is in the visible set
-            const visibleDrones = drones.filter(d => visibleUasIds.has(d.uas_id));
 
             // Store drone data for lazy track loading
             this.droneMap = {};
             drones.forEach(d => { this.droneMap[d.uas_id] = d; });
 
-            // If no visible sessions, clear everything from the map
-            if (this.visibleSessions.size === 0) {
+            // Map shows ALL filtered drones directly (not filtered by visibleSessions)
+            if (drones.length > 0) {
+                MapController.updateDrones(drones);
+                const allUasIds = new Set(drones.map(d => d.uas_id));
+                MapController.filterOperatorsByUasIds(allUasIds);
+            } else {
                 MapController.clearAllDroneMarkers();
                 MapController.clearAllTracks();
                 MapController.clearAllOperators();
-            } else {
-                // Update map markers - only show visible drones
-                MapController.updateDrones(visibleDrones);
-
-                // Clear tracks for sessions that are no longer visible
-                for (const sessionKey of this.loadedTracks) {
-                    if (!this.visibleSessions.has(sessionKey)) {
-                        const [uasId] = sessionKey.split(':');
-                        MapController.removeTrack(uasId, sessionKey);
-                    }
-                }
-                this.loadedTracks = new Set([...this.loadedTracks].filter(k => this.visibleSessions.has(k)));
-
-                // Update operator layer to show only visible UAS IDs
-                MapController.filterOperatorsByUasIds(visibleUasIds);
             }
 
             // Try to fit bounds if no default center is set
@@ -465,7 +461,10 @@ const UIController = {
             const someVisible = dateSessionKeys.some(key => this.visibleSessions.has(key));
             const isIndeterminate = someVisible && !allVisible;
 
-            const isExpanded = isInitialLoad && date === mostRecentDate;
+            if (isInitialLoad && date === mostRecentDate) {
+                this.expandedDates.add(date);
+            }
+            const isExpanded = this.expandedDates.has(date);
 
             html += `
                 <div class="date-group" data-date="${esc(date)}">
@@ -592,15 +591,18 @@ const UIController = {
                 const group = header.closest('.date-group');
                 const items = group.querySelector('.date-items');
                 const chevron = header.querySelector('.date-chevron');
+                const dateStr = group.dataset.date;
 
                 if (items.classList.contains('collapsed')) {
                     items.classList.remove('collapsed');
                     chevron.classList.remove('fa-chevron-right');
                     chevron.classList.add('fa-chevron-down');
+                    this.expandedDates.add(dateStr);
                 } else {
                     items.classList.add('collapsed');
                     chevron.classList.remove('fa-chevron-down');
                     chevron.classList.add('fa-chevron-right');
+                    this.expandedDates.delete(dateStr);
                 }
             });
         });
@@ -815,7 +817,6 @@ const UIController = {
      */
     _closeSettingsPanel() {
         this.elements.settingsPanel.classList.remove('open');
-        this.elements.settingsBackdrop.classList.remove('open');
     },
 
     /**

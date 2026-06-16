@@ -47,6 +47,8 @@ class TestIndexTemplate:
         assert soup.find(id="openSidebar") is not None
         assert soup.find(id="closeSidebar") is not None
         assert soup.find(id="closeDetail") is not None
+        assert soup.find(id="showKnownDrones") is not None
+        assert soup.find(id="showUnknownDrones") is not None
 
     def test_cdn_links_present(self, client):
         resp = client.get("/")
@@ -100,8 +102,9 @@ class TestIndexTemplate:
         assert panel.find(id="showOperators") is not None
         assert panel.find(id="showTracks") is not None
         assert panel.find(id="trackOpacity") is not None
-        assert panel.find(class_="settings-backdrop") is None
-        assert soup.find(id="settingsBackdrop") is not None
+        assert panel.find(id="showKnownDrones") is not None
+        assert panel.find(id="showUnknownDrones") is not None
+        assert soup.find(id="settingsBackdrop") is None
         assert soup.find(id="openSettings") is not None
         assert soup.find(id="closeSettings") is not None
 

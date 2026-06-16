@@ -306,6 +306,7 @@ html, body {
 
 /* Main Content */
 .main {
+    position: relative;
     flex: 1;
     min-width: 0; /* Prevent flex item from overflowing */
     height: 100%;
@@ -755,21 +756,25 @@ html, body {
 
 /* Settings Panel - Right side overlay */
 .settings-panel {
-    position: fixed;
-    right: -300px;
-    top: 0;
+    position: absolute;
+    top: 10px;
+    right: 10px;
     width: 280px;
-    height: 100%;
+    max-height: calc(100% - 80px);
     background: #fff;
-    box-shadow: -2px 0 10px rgba(0, 0, 0, 0.1);
+    border-radius: 8px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
     z-index: 1100;
     display: flex;
     flex-direction: column;
-    transition: right 0.3s ease;
+    overflow: hidden;
+    transform: translateX(calc(100% + 20px));
+    transition: transform 0.3s ease;
+    pointer-events: auto;
 }
 
 .settings-panel.open {
-    right: 0;
+    transform: translateX(0);
 }
 
 .settings-panel-header {
@@ -800,10 +805,25 @@ html, body {
     flex: 1;
 }
 
+.settings-section {
+    margin-bottom: 20px;
+}
+
+.settings-section-title {
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #6c757d;
+    margin-bottom: 12px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #e9ecef;
+}
+
 .settings-item {
     display: flex;
     align-items: center;
-    margin-bottom: 16px;
+    margin-bottom: 12px;
     font-size: 0.9rem;
     cursor: pointer;
 }
@@ -843,22 +863,6 @@ html, body {
     background: #007bff;
     border-radius: 50%;
     cursor: pointer;
-}
-
-/* Overlay backdrop when settings panel is open */
-.settings-backdrop {
-    display: none;
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.3);
-    z-index: 1050;
-}
-
-.settings-backdrop.open {
-    display: block;
 }
 
 @media (min-width: 768px) {
