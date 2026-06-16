@@ -19,6 +19,7 @@ const UIController = {
     showKnownDrones: true,
     showUnknownDrones: true,
     expandedDates: new Set(),
+    _suppressTimeChange: false,
 
     // DOM Elements
     elements: {},
@@ -36,11 +37,26 @@ const UIController = {
     async init() {
         this._cacheElements();
         this._initEventListeners();
-        await this._initTimePicker();
         await this._loadConfig();
+        this._restoreSettings();
+        await this._initTimePicker();
 
         // Wait for MapController to be ready
         await this._waitForMapController();
+
+        // Apply settings that depend on MapController
+        if (this._pendingSettings) {
+            if (this._pendingSettings.showOperators !== undefined) {
+                MapController.toggleOperators(this._pendingSettings.showOperators);
+            }
+            if (this._pendingSettings.showTracks !== undefined) {
+                MapController.toggleTracks(this._pendingSettings.showTracks);
+            }
+            if (this._pendingSettings.trackOpacity !== undefined) {
+                MapController.setTrackOpacity(this._pendingSettings.trackOpacity);
+            }
+            this._pendingSettings = null;
+        }
 
         // Clear any existing markers before loading data
         MapController.clearAllDroneMarkers();
@@ -148,9 +164,9 @@ const UIController = {
         // Time preset buttons
         this.elements.timePresets.forEach(btn => {
             btn.addEventListener('click', (e) => {
-                const hours = parseInt(e.target.dataset.hours);
+                const hours = parseInt(e.currentTarget.dataset.hours);
+                this._setStoredPreset(hours);
                 this._setTimeRange(hours);
-                this._updateActivePreset(e.target);
                 this.refreshData();
             });
         });
@@ -158,11 +174,13 @@ const UIController = {
         // Show/hide operators
         this.elements.showOperatorsCheckbox.addEventListener('change', (e) => {
             MapController.toggleOperators(e.target.checked);
+            this._saveSettings();
         });
 
         // Show/hide tracks
         this.elements.showTracksCheckbox.addEventListener('change', (e) => {
             MapController.toggleTracks(e.target.checked);
+            this._saveSettings();
         });
 
         // Track opacity
@@ -173,6 +191,7 @@ const UIController = {
             }
             opacityTimeout = setTimeout(() => {
                 MapController.setTrackOpacity(e.target.value);
+                this._saveSettings();
             }, 50);
         });
 
@@ -196,11 +215,13 @@ const UIController = {
         this.elements.showKnownDrones.addEventListener('change', (e) => {
             this.showKnownDrones = e.target.checked;
             this.refreshData();
+            this._saveSettings();
         });
 
         this.elements.showUnknownDrones.addEventListener('change', (e) => {
             this.showUnknownDrones = e.target.checked;
             this.refreshData();
+            this._saveSettings();
         });
 
         // Close sidebar when clicking on map (mobile)
@@ -223,18 +244,22 @@ const UIController = {
         this.currentStartTime = startTime;
         this.currentEndTime = endTime;
 
+        this._updateActivePresetForHours(this.defaultHours);
+
         const config = {
             enableTime: true,
             dateFormat: 'Y-m-d H:i',
             time_24hr: true,
             onChange: (selectedDates, dateStr, instance) => {
-                // Clear active preset when manual time is selected
+                if (this._suppressTimeChange) return;
                 this._clearActivePreset();
+                this._clearStoredPreset();
                 if (instance.element.id === 'startTime') {
                     this.currentStartTime = selectedDates[0];
                 } else {
                     this.currentEndTime = selectedDates[0];
                 }
+                this.refreshData();
             }
         };
 
@@ -258,8 +283,11 @@ const UIController = {
             this.defaultHours = config.default_hours || 24;
             this.droneAliases = config.drone_aliases || {};
 
-            // Re-initialize time picker with correct default
-            this._setTimeRange(this.defaultHours);
+            // Override default with stored preset if available
+            const stored = this._getStoredPreset();
+            if (stored !== null) {
+                this.defaultHours = stored;
+            }
 
             // Load sync status
             if (config.sync_enabled) {
@@ -271,6 +299,89 @@ const UIController = {
 
         } catch (e) {
             console.error('Failed to load config:', e);
+        }
+    },
+
+    _getStoredPreset() {
+        try {
+            const val = localStorage.getItem('remoteid_time_preset');
+            return val !== null ? parseInt(val, 10) : null;
+        } catch {
+            return null;
+        }
+    },
+
+    _setStoredPreset(hours) {
+        try {
+            localStorage.setItem('remoteid_time_preset', String(hours));
+        } catch {
+            // localStorage unavailable
+        }
+    },
+
+    _clearStoredPreset() {
+        try {
+            localStorage.removeItem('remoteid_time_preset');
+        } catch {
+            // localStorage unavailable
+        }
+    },
+
+    _saveSettings() {
+        try {
+            const settings = {
+                showOperators: this.elements.showOperatorsCheckbox.checked,
+                showTracks: this.elements.showTracksCheckbox.checked,
+                trackOpacity: parseInt(this.elements.trackOpacitySlider.value, 10),
+                showKnownDrones: this.elements.showKnownDrones.checked,
+                showUnknownDrones: this.elements.showUnknownDrones.checked,
+            };
+            localStorage.setItem('remoteid_settings', JSON.stringify(settings));
+        } catch {
+            // localStorage unavailable
+        }
+    },
+
+    _restoreSettings() {
+        try {
+            const raw = localStorage.getItem('remoteid_settings');
+            if (!raw) return;
+            const saved = JSON.parse(raw);
+
+            if (saved.showOperators !== undefined) {
+                this.elements.showOperatorsCheckbox.checked = saved.showOperators;
+            }
+            if (saved.showTracks !== undefined) {
+                this.elements.showTracksCheckbox.checked = saved.showTracks;
+            }
+            if (saved.trackOpacity !== undefined) {
+                this.elements.trackOpacitySlider.value = saved.trackOpacity;
+                if (this.elements.opacityValue) {
+                    this.elements.opacityValue.textContent = saved.trackOpacity + '%';
+                }
+            }
+            if (saved.showKnownDrones !== undefined) {
+                this.elements.showKnownDrones.checked = saved.showKnownDrones;
+                this.showKnownDrones = saved.showKnownDrones;
+            }
+            if (saved.showUnknownDrones !== undefined) {
+                this.elements.showUnknownDrones.checked = saved.showUnknownDrones;
+                this.showUnknownDrones = saved.showUnknownDrones;
+            }
+
+            // Defer MapController-applied settings until after map is ready
+            this._pendingSettings = {};
+            if (saved.showOperators !== undefined) {
+                this._pendingSettings.showOperators = saved.showOperators;
+            }
+            if (saved.showTracks !== undefined) {
+                this._pendingSettings.showTracks = saved.showTracks;
+            }
+            if (saved.trackOpacity !== undefined) {
+                this._pendingSettings.trackOpacity = saved.trackOpacity;
+            }
+        } catch {
+            // ignore
         }
     },
 
@@ -291,13 +402,16 @@ const UIController = {
         this.currentStartTime = startTime;
         this.currentEndTime = endTime;
 
-        // Update Flatpickr instances
+        this._updateActivePresetForHours(hours);
+
+        this._suppressTimeChange = true;
         if (this.elements.startTimeInput._flatpickr) {
             this.elements.startTimeInput._flatpickr.setDate(startTime);
         }
         if (this.elements.endTimeInput._flatpickr) {
             this.elements.endTimeInput._flatpickr.setDate(endTime);
         }
+        this._suppressTimeChange = false;
     },
 
     /**
@@ -325,11 +439,12 @@ const UIController = {
     },
 
     /**
-     * Update active preset button
+     * Activate the preset matching the given hours, clear others
      */
-    _updateActivePreset(activeBtn) {
-        this.elements.timePresets.forEach(btn => btn.classList.remove('active'));
-        activeBtn.classList.add('active');
+    _updateActivePresetForHours(hours) {
+        this.elements.timePresets.forEach(btn => {
+            btn.classList.toggle('active', parseInt(btn.dataset.hours) === hours);
+        });
     },
 
     /**
