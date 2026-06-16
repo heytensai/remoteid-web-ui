@@ -105,6 +105,7 @@ const UIController = {
             detailOperatorPos: document.getElementById('detailOperatorPos'),
             refreshBtn: document.getElementById('refreshBtn'),
             syncToggle: document.getElementById('syncToggle'),
+            syncToggleContainer: document.querySelector('.sync-toggle'),
             startTimeInput: document.getElementById('startTime'),
             endTimeInput: document.getElementById('endTime'),
             lastUpdateSpan: document.getElementById('lastUpdate'),
@@ -292,6 +293,8 @@ const UIController = {
             // Load sync status
             if (config.sync_enabled) {
                 await this._loadSyncStatus();
+            } else if (this.elements.syncToggleContainer) {
+                this.elements.syncToggleContainer.style.display = 'none';
             }
 
             // Initialize units from config
