@@ -796,4 +796,9 @@ class WebDatabase:
                 cursor = conn.execute("SELECT MAX(timestamp) FROM remoteid")
 
             row = cursor.fetchone()
-            return row[0] if row and row[0] else None
+            if row and row[0]:
+                val = row[0]
+                if isinstance(val, str):
+                    return datetime.fromisoformat(val)
+                return val
+            return None
