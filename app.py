@@ -6,7 +6,7 @@ import os
 import sqlite3
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from flask import Flask, jsonify, request, render_template
@@ -286,22 +286,32 @@ def get_last_timestamp():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+def _to_naive_utc(dt: datetime) -> datetime:
+    """Convert an aware datetime to naive UTC, pass through naive unchanged."""
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
 def _parse_time_range(args):
-    """Parse start/end time from request args"""
-    end_time = datetime.now()
+    """Parse start/end time from request args.
+
+    Returns naive UTC datetimes for consistency with the database.
+    """
+    end_time = datetime.now(timezone.utc).replace(tzinfo=None)
 
     # Parse end time
     end_str = args.get("end")
     if end_str:
-        end_time = datetime.fromisoformat(
-            end_str.replace("Z", "+00:00")
+        end_time = _to_naive_utc(
+            datetime.fromisoformat(end_str.replace("Z", "+00:00"))
         )
 
     # Parse start time
     start_str = args.get("start")
     if start_str:
-        start_time = datetime.fromisoformat(
-            start_str.replace("Z", "+00:00")
+        start_time = _to_naive_utc(
+            datetime.fromisoformat(start_str.replace("Z", "+00:00"))
         )
     else:
         # Default to default_hours before end

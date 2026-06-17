@@ -249,7 +249,7 @@ class TestParseTimeRange:
     """Regression tests for _parse_time_range timezone handling"""
 
     def test_naive_datetime(self):
-        """Naive input without timezone should produce naive datetimes"""
+        """Naive input → naive output"""
         start, end = _parse_time_range({
             "start": "2024-06-01T10:00:00",
             "end": "2024-06-01T12:00:00",
@@ -259,62 +259,82 @@ class TestParseTimeRange:
         assert end - start == timedelta(hours=2)
 
     def test_z_suffix(self):
-        """Z suffix should produce UTC-aware datetime"""
+        """Z → converted to naive UTC"""
         start, end = _parse_time_range({
             "start": "2024-06-01T10:00:00Z",
             "end": "2024-06-01T12:00:00Z",
         })
-        assert start.utcoffset() == timedelta(0)
-        assert end.utcoffset() == timedelta(0)
+        assert start.tzinfo is None
+        assert end.tzinfo is None
+        assert start.hour == 10
+        assert end.hour == 12
 
     def test_positive_offset(self):
-        """+05:00 offset should be preserved, not corrupted to +05"""
+        """+05:00 → normalized to naive UTC (hour shifts back by 5)"""
         start, end = _parse_time_range({
             "start": "2024-06-01T10:00:00+05:00",
             "end": "2024-06-01T12:00:00+05:00",
         })
-        assert start.utcoffset() == timedelta(hours=5)
-        assert end.utcoffset() == timedelta(hours=5)
+        assert start.tzinfo is None
+        assert end.tzinfo is None
+        assert start.hour == 5   # 10:00 +05:00 = 05:00 UTC
+        assert end.hour == 7     # 12:00 +05:00 = 07:00 UTC
 
     def test_utc_offset(self):
-        """Explicit +00:00 offset should be preserved"""
+        """+00:00 → naive UTC, same wall clock"""
         start, end = _parse_time_range({
             "start": "2024-06-01T10:00:00+00:00",
             "end": "2024-06-01T12:00:00+00:00",
         })
-        assert start.utcoffset() == timedelta(0)
-        assert end.utcoffset() == timedelta(0)
+        assert start.tzinfo is None
+        assert end.tzinfo is None
+        assert start.hour == 10
+        assert end.hour == 12
 
     def test_negative_offset(self):
-        """-05:00 offset should be preserved"""
+        """-05:00 → normalized to naive UTC (hour shifts forward by 5)"""
         start, end = _parse_time_range({
             "start": "2024-06-01T10:00:00-05:00",
             "end": "2024-06-01T12:00:00-05:00",
         })
-        assert start.utcoffset() == timedelta(hours=-5)
-        assert end.utcoffset() == timedelta(hours=-5)
+        assert start.tzinfo is None
+        assert end.tzinfo is None
+        assert start.hour == 15  # 10:00 -05:00 = 15:00 UTC
+        assert end.hour == 17    # 12:00 -05:00 = 17:00 UTC
 
     def test_mixed_offsets(self):
-        """Different offsets for start and end"""
+        """Different offsets → both normalized to naive UTC"""
         start, end = _parse_time_range({
             "start": "2024-06-01T10:00:00+05:30",
             "end": "2024-06-01T12:00:00Z",
         })
-        assert start.utcoffset() == timedelta(hours=5, minutes=30)
-        assert end.utcoffset() == timedelta(0)
+        assert start.tzinfo is None
+        assert end.tzinfo is None
+        assert start.hour == 4   # 10:00 +05:30 = 04:30 UTC
+        assert end.hour == 12    # 12:00 Z = 12:00 UTC
 
-    def test_default_start(self):
-        """When start is omitted, should be default_hours before end"""
-        end, start = _parse_time_range({
-            "end": "2024-06-01T12:00:00",
-        })[::-1]
-        # swap because test expects (start, end) but we want to test default
-        # Actually let's just test directly:
+    def test_default_start_naive(self):
+        """Start defaults to end - 24h when omitted (naive input)"""
         start, end = _parse_time_range({
             "end": "2024-06-01T12:00:00",
         })
         assert end.tzinfo is None
-        assert end - start == timedelta(hours=24)  # default_hours in test config
+        assert end - start == timedelta(hours=24)
+
+    def test_default_start_aware(self):
+        """Start defaults from aware end without TypeError (regression test)"""
+        start, end = _parse_time_range({
+            "end": "2024-06-01T12:00:00Z",
+        })
+        assert end.tzinfo is None
+        assert end - start == timedelta(hours=24)
+
+    def test_default_end_and_start(self):
+        """No args at all: both naive, end - start == 24h"""
+        start, end = _parse_time_range({})
+        assert start.tzinfo is None
+        assert end.tzinfo is None
+        assert end - start == timedelta(hours=24)
 
 
 class TestCSRF:
