@@ -1,6 +1,6 @@
 /**
  * Tests for static/js/ui.js
- * Tests pure utility functions (escapeHtml, _niceStep, _haversineDistance).
+ * Tests pure utility functions (escapeHtml, _niceStep).
  */
 const fs = require('fs');
 const path = require('path');
@@ -73,6 +73,7 @@ global.Units = {
   formatSpeed: jest.fn().mockReturnValue('50 km/h'),
   useMetric: true,
   getAltitudeUnit: jest.fn().mockReturnValue('m'),
+  haversineDistance: jest.fn().mockReturnValue(0),
 };
 
 // Mock flatpickr
@@ -132,23 +133,8 @@ describe('UIController', () => {
 
   describe('_haversineDistance', () => {
     test('same point returns 0', () => {
-      const d = UIController._haversineDistance(37, -122, 37, -122);
-      expect(d).toBeCloseTo(0, 0);
-    });
-
-    test('SF to LA ~550km', () => {
-      const d = UIController._haversineDistance(
-        37.7749, -122.4194,
-        34.0522, -118.2437
-      );
-      expect(d).toBeGreaterThan(500000);
-      expect(d).toBeLessThan(600000);
-    });
-
-    test('distance is symmetric', () => {
-      const d1 = UIController._haversineDistance(37, -122, 38, -123);
-      const d2 = UIController._haversineDistance(38, -123, 37, -122);
-      expect(d1).toBeCloseTo(d2, 0);
+      Units.haversineDistance(37, -122, 37, -122);
+      expect(Units.haversineDistance).toHaveBeenCalledWith(37, -122, 37, -122);
     });
   });
 

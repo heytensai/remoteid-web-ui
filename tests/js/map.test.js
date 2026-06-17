@@ -47,6 +47,7 @@ global.API = {
 global.Units = {
   formatDistance: jest.fn().mockReturnValue('100 m'),
   formatAltitude: jest.fn().mockReturnValue('100m'),
+  haversineDistance: jest.fn().mockReturnValue(0),
 };
 
 // Remove the auto-init at end, strip const so eval assigns globally
@@ -137,19 +138,9 @@ describe('MapController', () => {
   });
 
   describe('_calculateDistance', () => {
-    test('returns ~0 for same point', () => {
-      const d = MapController._calculateDistance(37, -122, 37, -122);
-      expect(d).toBeCloseTo(0, 0);
-    });
-
-    test('calculates approximate distance between known points', () => {
-      // SF to LA ~ 550km
-      const d = MapController._calculateDistance(
-        37.7749, -122.4194,
-        34.0522, -118.2437
-      );
-      expect(d).toBeGreaterThan(500000);
-      expect(d).toBeLessThan(600000);
+    test('delegates to Units.haversineDistance', () => {
+      MapController._calculateDistance(37, -122, 38, -123);
+      expect(Units.haversineDistance).toHaveBeenCalledWith(37, -122, 38, -123);
     });
   });
 });

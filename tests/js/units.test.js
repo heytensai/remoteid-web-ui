@@ -189,4 +189,40 @@ describe('Units', () => {
       expect(Units.getDistanceUnitLong()).toBe('feet');
     });
   });
+
+  describe('haversineDistance', () => {
+    test('same point returns 0', () => {
+      expect(Units.haversineDistance(0, 0, 0, 0)).toBe(0);
+    });
+
+    test('1 degree latitude at equator ~111km', () => {
+      const dist = Units.haversineDistance(0, 0, 1, 0);
+      expect(dist).toBeGreaterThan(110000);
+      expect(dist).toBeLessThan(112000);
+    });
+
+    test('1 degree longitude at equator ~111km', () => {
+      const dist = Units.haversineDistance(0, 0, 0, 1);
+      expect(dist).toBeGreaterThan(110000);
+      expect(dist).toBeLessThan(112000);
+    });
+
+    test('SF to LA ~550km', () => {
+      const dist = Units.haversineDistance(37.7749, -122.4194, 34.0522, -118.2437);
+      expect(dist).toBeGreaterThan(500000);
+      expect(dist).toBeLessThan(600000);
+    });
+
+    test('same lat different lon at higher latitude is shorter', () => {
+      const atEquator = Units.haversineDistance(0, 0, 0, 1);
+      const at45deg = Units.haversineDistance(45, 0, 45, 1);
+      expect(at45deg).toBeLessThan(atEquator);
+    });
+
+    test('antipodal points roughly half earth circumference', () => {
+      const dist = Units.haversineDistance(0, 0, 0, 180);
+      expect(dist).toBeGreaterThan(20000000);
+      expect(dist).toBeLessThan(21000000);
+    });
+  });
 });
