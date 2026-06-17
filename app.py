@@ -198,8 +198,10 @@ def get_bounds():
 def trigger_sync():
     """Manually trigger sync from collectors"""
     if SYNC_MANAGER:
-        SYNC_MANAGER.force_sync()
-        return jsonify({"status": "sync triggered"})
+        failures = SYNC_MANAGER.force_sync()
+        if failures:
+            return jsonify({"status": "sync completed with errors", "failed": failures}), 500
+        return jsonify({"status": "sync completed", "failed": 0})
     return jsonify({"status": "sync disabled - no collectors configured"}), 400
 
 

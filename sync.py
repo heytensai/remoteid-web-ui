@@ -62,14 +62,17 @@ class SyncManager:
             if not self._stop_event.is_set():
                 self._sync_all()
 
-    def _sync_all(self):
-        """Sync from all collectors"""
+    def _sync_all(self) -> int:
+        """Sync from all collectors. Returns number of failures."""
+        failures = 0
         for collector in self.collectors:
             try:
                 self._sync_collector(collector)
                 self._last_sync[collector.name] = datetime.now()
             except (OSError, subprocess.SubprocessError, sqlite3.Error):
                 logger.exception("Sync failed for %s", collector.name)
+                failures += 1
+        return failures
 
     def _sync_collector(self, collector: CollectorConfig):
         """Sync from a single collector (rsync for remote, direct copy for local)"""
@@ -137,9 +140,9 @@ class SyncManager:
                 except OSError:
                     pass
 
-    def force_sync(self):
-        """Force an immediate sync (useful for manual refresh)"""
-        self._sync_all()
+    def force_sync(self) -> int:
+        """Force an immediate sync (useful for manual refresh). Returns number of failures."""
+        return self._sync_all()
 
     def get_last_sync(self, collector_name: str) -> Optional[datetime]:
         """Get the last sync time for a specific collector"""
