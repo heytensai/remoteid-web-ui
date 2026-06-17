@@ -4,6 +4,8 @@ import json
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
+from app import _parse_time_range
+
 
 class TestIndex:
     def test_get_index(self, client):
@@ -241,6 +243,78 @@ class TestApiLastTimestamp:
         assert resp.status_code == 200
         data = resp.get_json()
         assert "last_timestamp" in data
+
+
+class TestParseTimeRange:
+    """Regression tests for _parse_time_range timezone handling"""
+
+    def test_naive_datetime(self):
+        """Naive input without timezone should produce naive datetimes"""
+        start, end = _parse_time_range({
+            "start": "2024-06-01T10:00:00",
+            "end": "2024-06-01T12:00:00",
+        })
+        assert start.tzinfo is None
+        assert end.tzinfo is None
+        assert end - start == timedelta(hours=2)
+
+    def test_z_suffix(self):
+        """Z suffix should produce UTC-aware datetime"""
+        start, end = _parse_time_range({
+            "start": "2024-06-01T10:00:00Z",
+            "end": "2024-06-01T12:00:00Z",
+        })
+        assert start.utcoffset() == timedelta(0)
+        assert end.utcoffset() == timedelta(0)
+
+    def test_positive_offset(self):
+        """+05:00 offset should be preserved, not corrupted to +05"""
+        start, end = _parse_time_range({
+            "start": "2024-06-01T10:00:00+05:00",
+            "end": "2024-06-01T12:00:00+05:00",
+        })
+        assert start.utcoffset() == timedelta(hours=5)
+        assert end.utcoffset() == timedelta(hours=5)
+
+    def test_utc_offset(self):
+        """Explicit +00:00 offset should be preserved"""
+        start, end = _parse_time_range({
+            "start": "2024-06-01T10:00:00+00:00",
+            "end": "2024-06-01T12:00:00+00:00",
+        })
+        assert start.utcoffset() == timedelta(0)
+        assert end.utcoffset() == timedelta(0)
+
+    def test_negative_offset(self):
+        """-05:00 offset should be preserved"""
+        start, end = _parse_time_range({
+            "start": "2024-06-01T10:00:00-05:00",
+            "end": "2024-06-01T12:00:00-05:00",
+        })
+        assert start.utcoffset() == timedelta(hours=-5)
+        assert end.utcoffset() == timedelta(hours=-5)
+
+    def test_mixed_offsets(self):
+        """Different offsets for start and end"""
+        start, end = _parse_time_range({
+            "start": "2024-06-01T10:00:00+05:30",
+            "end": "2024-06-01T12:00:00Z",
+        })
+        assert start.utcoffset() == timedelta(hours=5, minutes=30)
+        assert end.utcoffset() == timedelta(0)
+
+    def test_default_start(self):
+        """When start is omitted, should be default_hours before end"""
+        end, start = _parse_time_range({
+            "end": "2024-06-01T12:00:00",
+        })[::-1]
+        # swap because test expects (start, end) but we want to test default
+        # Actually let's just test directly:
+        start, end = _parse_time_range({
+            "end": "2024-06-01T12:00:00",
+        })
+        assert end.tzinfo is None
+        assert end - start == timedelta(hours=24)  # default_hours in test config
 
 
 class TestCSRF:

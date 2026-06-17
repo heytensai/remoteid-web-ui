@@ -294,14 +294,14 @@ def _parse_time_range(args):
     end_str = args.get("end")
     if end_str:
         end_time = datetime.fromisoformat(
-            end_str.replace("Z", "+00:00").replace("+00:00", "")
+            end_str.replace("Z", "+00:00")
         )
 
     # Parse start time
     start_str = args.get("start")
     if start_str:
         start_time = datetime.fromisoformat(
-            start_str.replace("Z", "+00:00").replace("+00:00", "")
+            start_str.replace("Z", "+00:00")
         )
     else:
         # Default to default_hours before end
