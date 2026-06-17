@@ -1,6 +1,7 @@
 """Configuration loader for web interface"""
 
 import logging
+import os
 
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -55,8 +56,19 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
     def __init__(self, yaml_file: str):
         self.config_path = yaml_file
 
-        with open(yaml_file, encoding="utf-8") as fh:
-            data = yaml.safe_load(fh)
+        try:
+            with open(yaml_file, encoding="utf-8") as fh:
+                data = yaml.safe_load(fh)
+        except yaml.YAMLError as e:
+            raise ValueError(
+                f"Failed to parse config file {yaml_file}: {e}"
+            ) from e
+
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"Config file {yaml_file} must contain a top-level mapping, "
+                f"got {type(data).__name__}"
+            )
 
         web_data = data.get("web_interface", {})
 
@@ -91,6 +103,62 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
 
         # Units preference: true for metric, false for imperial
         self.use_metric = web_data.get("use_metric", True)
+
+        self._validate()
+
+    def _validate(self):
+        """Validate configuration values, raising ValueError on invalid input."""
+        errors = []
+
+        if not isinstance(self.port, int) or not 1 <= self.port <= 65535:
+            errors.append(f"port must be an integer between 1 and 65535, got {self.port!r}")
+
+        if self.sync_interval is not None and self.sync_interval <= 0:
+            errors.append(f"sync_interval must be positive, got {self.sync_interval}")
+
+        if self.default_hours is not None and self.default_hours <= 0:
+            errors.append(f"default_hours must be positive, got {self.default_hours}")
+
+        if self.max_positions_per_query is not None and self.max_positions_per_query <= 0:
+            errors.append(f"max_positions_per_query must be positive, got {self.max_positions_per_query}")
+
+        if self.map.center_lat is not None:
+            if not isinstance(self.map.center_lat, (int, float)):
+                errors.append(f"map.center_lat must be a number, got {self.map.center_lat!r}")
+            elif not -90 <= self.map.center_lat <= 90:
+                errors.append(f"map.center_lat must be between -90 and 90, got {self.map.center_lat}")
+
+        if self.map.center_lon is not None:
+            if not isinstance(self.map.center_lon, (int, float)):
+                errors.append(f"map.center_lon must be a number, got {self.map.center_lon!r}")
+            elif not -180 <= self.map.center_lon <= 180:
+                errors.append(f"map.center_lon must be between -180 and 180, got {self.map.center_lon}")
+
+        if self.map.default_zoom is not None:
+            if not isinstance(self.map.default_zoom, int):
+                errors.append(f"map.default_zoom must be an integer, got {self.map.default_zoom!r}")
+            elif not 1 <= self.map.default_zoom <= 20:
+                errors.append(f"map.default_zoom must be between 1 and 20, got {self.map.default_zoom}")
+
+        for collector in self.collectors:
+            if collector.host is None:
+                db_dir = os.path.dirname(collector.remote_db_path)
+                if db_dir and not os.path.isdir(db_dir):
+                    errors.append(
+                        f"collector '{collector.name}': remote_db_path parent directory "
+                        f"does not exist: {db_dir}"
+                    )
+
+        db_dir = os.path.dirname(self.database_path)
+        if db_dir and not os.path.isdir(db_dir):
+            errors.append(
+                f"database_path parent directory does not exist: {db_dir}"
+            )
+
+        if errors:
+            raise ValueError(
+                "Configuration validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
+            )
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization"""
