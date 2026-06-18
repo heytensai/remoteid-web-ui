@@ -321,20 +321,6 @@ const MapController = {
         setTimeout(flashOff, 1200);
     },
 
-    /**
-     * Show/hide waypoints layer
-     */
-    toggleWaypoints(show) {
-        if (show) {
-            this.map.addLayer(this.layers.waypoints);
-        } else {
-            this.map.removeLayer(this.layers.waypoints);
-        }
-    },
-
-    /**
-     * Create operator icon
-     */
     createSessionOperatorIcon(color, isSameLocationAsUas) {
         return L.divIcon({
             className: 'custom-div-icon',
@@ -345,33 +331,6 @@ const MapController = {
             iconAnchor: [10, 10],
             popupAnchor: [0, -10]
         });
-    },
-
-    /**
-     * Update operator markers
-     */
-    updateOperators(operators) {
-        // Clear existing operator markers
-        this.layers.operators.clearLayers();
-        this.operatorMarkers = {};
-
-        for (const op of operators) {
-            if (!op.operator_latitude || !op.operator_longitude) continue;
-
-            const color = this.getDroneColor(op.uas_id);
-            const lat = op.operator_latitude;
-            const lon = op.operator_longitude;
-
-            const marker = L.marker([lat, lon], {
-                icon: this.createOperatorIcon(color),
-                opacity: 0.8
-            }).addTo(this.layers.operators);
-
-            // Add popup
-            marker.bindPopup(this._createOperatorPopup(op, color));
-
-            this.operatorMarkers[op.uas_id] = marker;
-        }
     },
 
     /**
@@ -645,36 +604,6 @@ const MapController = {
     },
 
     /**
-     * Load and draw a single drone track (with session support)
-     */
-    async loadTrack(uasId, start, end) {
-        // Clear cached sessions for this UAS before re-loading
-        for (const key of this.loadedTrackSessions) {
-            if (key.startsWith(`${uasId}:`)) {
-                this.loadedTrackSessions.delete(key);
-            }
-        }
-        try {
-            const response = await API.getTrack(uasId, start, end, true);
-            if (response.sessions && response.sessions.length > 0) {
-                const color = this.getDroneColor(uasId);
-                for (const session of response.sessions) {
-                    if (session.positions && session.positions.length > 1) {
-                        this._drawTrackSegment(uasId, session.session_id, session.positions, color);
-                        this.loadedTrackSessions.add(`${uasId}:${session.session_id}`);
-                    }
-                }
-            } else if (response.track && response.track.length > 1) {
-                // Fallback for old format
-                const color = this.getDroneColor(uasId);
-                this._drawTrack(uasId, response.track, color);
-            }
-        } catch (e) {
-            console.error(`Failed to get track for ${uasId}:`, e);
-        }
-    },
-
-    /**
      * Load and draw a specific session track, with client-side cache
      */
     async loadTrackSession(uasId, sessionId, start, end) {
@@ -696,42 +625,6 @@ const MapController = {
         } catch (e) {
             console.error(`Failed to get track for ${uasId}:${sessionId}:`, e);
         }
-    },
-
-    /**
-     * Update tracks (handles multiple drones)
-     */
-    async updateTracks(uasIds, start, end) {
-        // Clear existing tracks
-        this.layers.tracks.clearLayers();
-        this.tracks = {};
-
-        // Clear all session operators and track cache
-        this._clearAllSessionOperators();
-        this.loadedTrackSessions.clear();
-
-        // Fetch and draw tracks for each drone in parallel
-        await Promise.all(uasIds.map(async uasId => {
-            try {
-                const response = await API.getTrack(uasId, start, end, true);
-                if (response.sessions && response.sessions.length > 0) {
-                    const color = this.getDroneColor(uasId);
-                    // Draw each session separately
-                    for (const session of response.sessions) {
-                        if (session.positions && session.positions.length > 1) {
-                            this._drawTrackSegment(uasId, session.session_id, session.positions, color);
-                            this.loadedTrackSessions.add(`${uasId}:${session.session_id}`);
-                        }
-                    }
-                } else if (response.track && response.track.length > 1) {
-                    // Fallback for old format
-                    const color = this.getDroneColor(uasId);
-                    this._drawTrack(uasId, response.track, color);
-                }
-            } catch (e) {
-                console.error(`Failed to get track for ${uasId}:`, e);
-            }
-        }));
     },
 
     /**
