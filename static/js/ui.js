@@ -821,11 +821,13 @@ const UIController = {
                                 <div class="drone-item ${isSelected ? 'active' : ''} ${isVisible ? '' : 'dimmed'} ${hasAlert ? 'has-geozone-alert' : ''}" data-uas-id="${esc(drone.uas_id)}" data-session-key="${esc(rawSessionKey)}" data-session-id="${esc(drone.computed_session_id || '')}">
                                     <input type="checkbox" class="drone-checkbox" data-session-key="${esc(rawSessionKey)}" ${isVisible ? 'checked' : ''}>
                                     <div class="drone-color" style="background-color: ${color};"></div>
-                                    ${this._getManufacturerBadgeHtml(drone.uas_id)}
                                     <div class="drone-info">
                                         <div class="drone-id">${hasAlert ? '<i class="fas fa-exclamation-triangle alert-icon"></i> ' : ''}${esc(this.getDroneName(drone.uas_id))}</div>
-                                        <div class="session-id">${esc(sessionId)}</div>
-                                        <div class="drone-meta">Alt: ${altitude} | ${timeStr}</div>
+                                        <div class="drone-meta-row">
+                                            ${this._getManufacturerBadgeHtml(drone.uas_id)}
+                                            <div class="session-id">${esc(sessionId)}</div>
+                                            <div class="drone-meta">Alt: ${altitude} | ${timeStr}</div>
+                                        </div>
                                     </div>
                                     <div class="drone-actions">
                                         <button class="focus-btn" title="Focus on map">

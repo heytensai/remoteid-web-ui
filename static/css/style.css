@@ -210,7 +210,14 @@ html, body {
 .drone-meta {
     font-size: 0.75rem;
     color: #6c757d;
+}
+
+.drone-meta-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
     margin-top: 2px;
+    flex-wrap: wrap;
 }
 
 .session-id {
@@ -1531,13 +1538,13 @@ body.dark-mode .drone-position-icon {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 26px;
-    height: 26px;
+    width: 20px;
+    height: 20px;
     border-radius: 50%;
-    font-size: 9px;
+    font-size: 7px;
     font-weight: 700;
     flex-shrink: 0;
-    margin: 2px 6px 2px 0;
+    margin-right: 2px;
     letter-spacing: 0.5px;
 }
 
