@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from flask import Flask, jsonify, request, render_template
-from flask_cors import CORS
+from flask_cors import cross_origin
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 
 from config import WebConfig
@@ -31,7 +31,8 @@ SYNC_MANAGER = None  # type: Optional[SyncManager]
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24).hex())
 csrf = CSRFProtect(app)
-CORS(app)  # Enable CORS for all routes
+# CORS intentionally not set globally — API is same-origin via the Flask server.
+# Only /api/submit allows cross-origin (uses Bearer token auth).
 
 
 @app.route("/")
@@ -224,6 +225,7 @@ def _get_api_key_source():
 
 @app.route("/api/submit", methods=["POST"])
 @csrf.exempt
+@cross_origin()
 def submit_data():
     """Submit remote ID data from remote nodes.
 
