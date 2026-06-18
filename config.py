@@ -27,6 +27,9 @@ class MapConfig:
             self.tile_provider = data.get("tile_provider", "osm")
 
 
+FEET_PER_METER = 3.28084
+
+
 @dataclass
 class WaypointConfig:
     """Custom waypoint displayed on the map"""
@@ -34,11 +37,16 @@ class WaypointConfig:
     name: str
     lat: float
     lon: float
+    type: str = "point"
     icon: str = "fa-map-pin"
     color: str = "#007bff"
     description: str = ""
     enabled: bool = True
     category: str = ""
+    radius: float = 0.0  # meters, for type "circle"
+    width: float = 0.0   # meters, for type "rectangle"
+    height: float = 0.0  # meters, for type "rectangle"
+    fill_opacity: float = 0.1
 
 
 @dataclass
@@ -110,19 +118,44 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 )
             )
 
-        # Waypoint configuration
+        # Units preference: true for metric (meters), false for imperial (feet)
+        self.use_metric = web_data.get("use_metric", True)
+
+        # Waypoint & geozone configuration
         self.waypoints = []
         for wp_data in web_data.get("waypoints") or []:
+            wp_type = wp_data.get("type", "point")
+            fill_opacity = wp_data.get("fill_opacity", 0.1)
+            if wp_type == "circle":
+                radius = wp_data.get("radius", 0)
+                if not self.use_metric:
+                    radius /= FEET_PER_METER
+            else:
+                radius = 0.0
+            if wp_type == "rectangle":
+                width = wp_data.get("width", 0)
+                height = wp_data.get("height", 0)
+                if not self.use_metric:
+                    width /= FEET_PER_METER
+                    height /= FEET_PER_METER
+            else:
+                width = 0.0
+                height = 0.0
             self.waypoints.append(
                 WaypointConfig(
                     name=wp_data["name"],
                     lat=wp_data["lat"],
                     lon=wp_data["lon"],
+                    type=wp_type,
                     icon=wp_data.get("icon", "fa-map-pin"),
                     color=wp_data.get("color", "#007bff"),
                     description=wp_data.get("description", ""),
                     enabled=wp_data.get("enabled", True),
                     category=wp_data.get("category", ""),
+                    radius=radius,
+                    width=width,
+                    height=height,
+                    fill_opacity=fill_opacity,
                 )
             )
 
@@ -131,9 +164,6 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
 
         # Drone aliases: uas_id -> friendly name
         self.drone_aliases = web_data.get("drone_aliases") or {}
-
-        # Units preference: true for metric, false for imperial
-        self.use_metric = web_data.get("use_metric", True)
 
         self._validate()
 
@@ -183,6 +213,15 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 errors.append(f"{prefix}.lon must be a number, got {wp.lon!r}")
             elif not -180 <= wp.lon <= 180:
                 errors.append(f"{prefix}.lon must be between -180 and 180, got {wp.lon}")
+            if wp.type not in ("point", "circle", "rectangle"):
+                errors.append(f"{prefix}.type must be 'point', 'circle', or 'rectangle', got {wp.type!r}")
+            if wp.type == "circle" and wp.radius <= 0:
+                errors.append(f"{prefix}.radius must be > 0 for type 'circle', got {wp.radius}")
+            if wp.type == "rectangle":
+                if wp.width <= 0:
+                    errors.append(f"{prefix}.width must be > 0 for type 'rectangle', got {wp.width}")
+                if wp.height <= 0:
+                    errors.append(f"{prefix}.height must be > 0 for type 'rectangle', got {wp.height}")
 
         for collector in self.collectors:
             if collector.host is None:
@@ -228,11 +267,16 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                     "name": w.name,
                     "lat": w.lat,
                     "lon": w.lon,
+                    "type": w.type,
                     "icon": w.icon,
                     "color": w.color,
                     "description": w.description,
                     "enabled": w.enabled,
                     "category": w.category,
+                    "radius": w.radius,
+                    "width": w.width,
+                    "height": w.height,
+                    "fill_opacity": w.fill_opacity,
                 }
                 for w in self.waypoints
             ],
@@ -253,18 +297,41 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 logger.info("Reloaded drone_aliases from %s", self.config_path)
 
             # Reload waypoints
+            use_metric = web_data.get("use_metric", self.use_metric)
             new_waypoints = []
             for wp_data in web_data.get("waypoints") or []:
+                wp_type = wp_data.get("type", "point")
+                fill_opacity = wp_data.get("fill_opacity", 0.1)
+                if wp_type == "circle":
+                    radius = wp_data.get("radius", 0)
+                    if not use_metric:
+                        radius /= FEET_PER_METER
+                else:
+                    radius = 0.0
+                if wp_type == "rectangle":
+                    width = wp_data.get("width", 0)
+                    height = wp_data.get("height", 0)
+                    if not use_metric:
+                        width /= FEET_PER_METER
+                        height /= FEET_PER_METER
+                else:
+                    width = 0.0
+                    height = 0.0
                 new_waypoints.append(
                     WaypointConfig(
                         name=wp_data["name"],
                         lat=wp_data["lat"],
                         lon=wp_data["lon"],
+                        type=wp_type,
                         icon=wp_data.get("icon", "fa-map-pin"),
                         color=wp_data.get("color", "#007bff"),
                         description=wp_data.get("description", ""),
                         enabled=wp_data.get("enabled", True),
                         category=wp_data.get("category", ""),
+                        radius=radius,
+                        width=width,
+                        height=height,
+                        fill_opacity=fill_opacity,
                     )
                 )
             old_dict = {w.name: w for w in self.waypoints}

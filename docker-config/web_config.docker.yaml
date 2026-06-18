@@ -33,13 +33,35 @@ web_interface:
   # Limit to prevent browser lag
   max_positions_per_query: 5000
 
-  # Custom waypoints displayed on the map
+  # Custom waypoints & geozones displayed on the map
   waypoints:
     - name: "Demo Waypoint"
       lat: 37.7749
       lon: -122.4194
+      type: "point"
       icon: "fa-map-pin"
       color: "#e74c3c"
       description: "Example waypoint for development"
+      enabled: true
+      category: "demo"
+    - name: "Demo Circle Zone"
+      lat: 37.7800
+      lon: -122.4200
+      type: "circle"
+      radius: 150
+      color: "#e67e22"
+      fill_opacity: 0.12
+      description: "Circle geozone example"
+      enabled: true
+      category: "demo"
+    - name: "Demo Rect Zone"
+      lat: 37.7700
+      lon: -122.4150
+      type: "rectangle"
+      width: 100
+      height: 60
+      color: "#27ae60"
+      fill_opacity: 0.1
+      description: "Rectangle geozone example"
       enabled: true
       category: "demo"

@@ -58,14 +58,41 @@ web_interface:
     # "12345": "Skydio X10"
     # "67890": "DJI Mavic 3"
 
-  # Custom waypoints displayed on the map
-  # These appear as static markers with popup info
+  # Custom waypoints and geozones displayed on the map
+  # type: "point" (default) — marker with icon at lat/lon
+  #       "circle"           — circle with dashed border drawn on map
+  #       "rectangle"        — rectangle with dashed border drawn on map
+  # For circle/rectangle an icon marker is also placed at center
   waypoints:
+    # Point marker example:
     # - name: "Launch Site A"
     #   lat: 37.7749
     #   lon: -122.4194
+    #   type: "point"            # Default if omitted
     #   icon: "fa-rocket"        # Font Awesome icon class (default: fa-map-pin)
-    #   color: "#e74c3c"         # Marker color (default: #007bff)
-    #   description: "Primary launch and recovery zone"  # Popup text
+    #   color: "#e74c3c"         # Marker/geozone color (default: #007bff)
+    #   description: "Primary launch and recovery zone"
     #   enabled: true            # Show on map (default: true)
     #   category: "operations"   # Grouping label (optional)
+    #
+    # Circle geozone example:
+    # - name: "Drone Zone"
+    #   lat: 37.7749
+    #   lon: -122.4194
+    #   type: "circle"
+    #   radius: 200              # In meters (or feet if use_metric: false)
+    #   color: "#e67e22"
+    #   fill_opacity: 0.15       # Translucent fill (default: 0.1)
+    #   description: "Authorized flight area"
+    #   icon: "fa-circle"        # Center marker icon
+    #
+    # Rectangle geozone example:
+    # - name: "Landing Pad"
+    #   lat: 37.7749
+    #   lon: -122.4194
+    #   type: "rectangle"
+    #   width: 80                # In meters (or feet if use_metric: false)
+    #   height: 40               # In meters (or feet if use_metric: false)
+    #   color: "#27ae60"
+    #   fill_opacity: 0.12
+    #   description: "Helipad and landing area"

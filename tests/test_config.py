@@ -130,11 +130,16 @@ def test_waypoint_config_defaults():
     assert wp.name == "Test"
     assert wp.lat == 40.0
     assert wp.lon == -74.0
+    assert wp.type == "point"
     assert wp.icon == "fa-map-pin"
     assert wp.color == "#007bff"
     assert wp.description == ""
     assert wp.enabled is True
     assert wp.category == ""
+    assert wp.radius == 0.0
+    assert wp.width == 0.0
+    assert wp.height == 0.0
+    assert wp.fill_opacity == 0.1
 
 
 def test_waypoint_config_all_fields():
@@ -142,17 +147,23 @@ def test_waypoint_config_all_fields():
         name="Launch",
         lat=37.0,
         lon=-122.0,
+        type="circle",
         icon="fa-rocket",
         color="#e74c3c",
         description="Launch pad",
         enabled=False,
         category="ops",
+        radius=200.0,
+        fill_opacity=0.15,
     )
+    assert wp.type == "circle"
     assert wp.icon == "fa-rocket"
     assert wp.color == "#e74c3c"
     assert wp.description == "Launch pad"
     assert wp.enabled is False
     assert wp.category == "ops"
+    assert wp.radius == 200.0
+    assert wp.fill_opacity == 0.15
 
 
 def test_waypoints_parsing():
@@ -176,6 +187,25 @@ def test_waypoints_parsing():
                         "enabled": False,
                         "category": "test",
                     },
+                    {
+                        "name": "Circle1",
+                        "lat": 39.0,
+                        "lon": -124.0,
+                        "type": "circle",
+                        "radius": 200,
+                        "color": "#e67e22",
+                        "fill_opacity": 0.15,
+                        "description": "Flight zone",
+                    },
+                    {
+                        "name": "Rect1",
+                        "lat": 40.0,
+                        "lon": -125.0,
+                        "type": "rectangle",
+                        "width": 100,
+                        "height": 50,
+                        "color": "#27ae60",
+                    },
                 ],
             }
         }
@@ -184,17 +214,33 @@ def test_waypoints_parsing():
             path = f.name
         try:
             cfg = WebConfig(path)
-            assert len(cfg.waypoints) == 2
+            assert len(cfg.waypoints) == 4
+            # Point WP1
             assert cfg.waypoints[0].name == "WP1"
-            assert cfg.waypoints[0].lat == 37.0
-            assert cfg.waypoints[0].icon == "fa-map-pin"
-            assert cfg.waypoints[0].enabled is True
+            assert cfg.waypoints[0].type == "point"
+            assert cfg.waypoints[0].radius == 0.0
+            assert cfg.waypoints[0].width == 0.0
+            assert cfg.waypoints[0].height == 0.0
+            # Point WP2
             assert cfg.waypoints[1].name == "WP2"
             assert cfg.waypoints[1].icon == "fa-flag"
             assert cfg.waypoints[1].color == "#00ff00"
-            assert cfg.waypoints[1].description == "A waypoint"
             assert cfg.waypoints[1].enabled is False
             assert cfg.waypoints[1].category == "test"
+            # Circle1
+            assert cfg.waypoints[2].name == "Circle1"
+            assert cfg.waypoints[2].type == "circle"
+            assert cfg.waypoints[2].radius == 200.0
+            assert cfg.waypoints[2].fill_opacity == 0.15
+            assert cfg.waypoints[2].color == "#e67e22"
+            assert cfg.waypoints[2].description == "Flight zone"
+            # Rect1
+            assert cfg.waypoints[3].name == "Rect1"
+            assert cfg.waypoints[3].type == "rectangle"
+            assert cfg.waypoints[3].width == 100.0
+            assert cfg.waypoints[3].height == 50.0
+            assert cfg.waypoints[3].fill_opacity == 0.1
+            assert cfg.waypoints[3].color == "#27ae60"
         finally:
             os.unlink(path)
 
@@ -226,7 +272,16 @@ def test_to_dict_with_waypoints():
                         "description": "Test",
                         "enabled": True,
                         "category": "cat",
-                    }
+                    },
+                    {
+                        "name": "Circle1",
+                        "lat": 38.0,
+                        "lon": -123.0,
+                        "type": "circle",
+                        "radius": 150,
+                        "color": "#e67e22",
+                        "fill_opacity": 0.2,
+                    },
                 ],
             }
         }
@@ -236,16 +291,30 @@ def test_to_dict_with_waypoints():
         try:
             cfg = WebConfig(path)
             d = cfg.to_dict()
-            assert len(d["waypoints"]) == 1
+            assert len(d["waypoints"]) == 2
+            # Point WP1
             wp = d["waypoints"][0]
             assert wp["name"] == "WP1"
             assert wp["lat"] == 37.0
             assert wp["lon"] == -122.0
+            assert wp["type"] == "point"
             assert wp["icon"] == "fa-flag"
             assert wp["color"] == "#ff0000"
             assert wp["description"] == "Test"
             assert wp["enabled"] is True
             assert wp["category"] == "cat"
+            assert wp["radius"] == 0.0
+            assert wp["width"] == 0.0
+            assert wp["height"] == 0.0
+            assert wp["fill_opacity"] == 0.1
+            # Circle1
+            wp2 = d["waypoints"][1]
+            assert wp2["name"] == "Circle1"
+            assert wp2["type"] == "circle"
+            assert wp2["radius"] == 150.0
+            assert wp2["fill_opacity"] == 0.2
+            assert wp2["width"] == 0.0
+            assert wp2["height"] == 0.0
         finally:
             os.unlink(path)
 
@@ -374,6 +443,73 @@ class TestValidation:
         })
         with pytest.raises(ValueError, match="waypoints.*name.*must be a non-empty string"):
             WebConfig(path)
+
+    def test_circle_missing_radius(self):
+        path = _write_config({
+            "database_path": "/tmp",
+            "waypoints": [{"name": "C", "lat": 37, "lon": -122, "type": "circle", "radius": 0}],
+        })
+        with pytest.raises(ValueError, match="radius.*> 0"):
+            WebConfig(path)
+
+    def test_rectangle_missing_width(self):
+        path = _write_config({
+            "database_path": "/tmp",
+            "waypoints": [{"name": "R", "lat": 37, "lon": -122, "type": "rectangle", "width": 0, "height": 50}],
+        })
+        with pytest.raises(ValueError, match="width.*> 0"):
+            WebConfig(path)
+
+    def test_rectangle_missing_height(self):
+        path = _write_config({
+            "database_path": "/tmp",
+            "waypoints": [{"name": "R", "lat": 37, "lon": -122, "type": "rectangle", "width": 50, "height": 0}],
+        })
+        with pytest.raises(ValueError, match="height.*> 0"):
+            WebConfig(path)
+
+    def test_invalid_waypoint_type(self):
+        path = _write_config({
+            "database_path": "/tmp",
+            "waypoints": [{"name": "W", "lat": 37, "lon": -122, "type": "polygon"}],
+        })
+        with pytest.raises(ValueError, match="type.*must be.*point.*circle.*rectangle"):
+            WebConfig(path)
+
+    def test_geozone_imperial_conversion(self):
+        """Circle radius in feet should be converted to meters when use_metric=False"""
+        path = _write_config({
+            "use_metric": False,
+            "database_path": "/tmp/test_geozone_imperial.db",
+            "waypoints": [
+                {
+                    "name": "Zone",
+                    "lat": 37.0,
+                    "lon": -122.0,
+                    "type": "circle",
+                    "radius": 328,  # ~100 meters
+                },
+                {
+                    "name": "Rect",
+                    "lat": 38.0,
+                    "lon": -123.0,
+                    "type": "rectangle",
+                    "width": 164,   # ~50 meters
+                    "height": 82,   # ~25 meters
+                },
+            ],
+        })
+        try:
+            cfg = WebConfig(path)
+            assert cfg.use_metric is False
+            # 328 feet ≈ 100 meters
+            assert abs(cfg.waypoints[0].radius - 100.0) < 1.0
+            # 164 feet ≈ 50 meters
+            assert abs(cfg.waypoints[1].width - 50.0) < 0.5
+            # 82 feet ≈ 25 meters
+            assert abs(cfg.waypoints[1].height - 25.0) < 0.5
+        finally:
+            os.unlink(path)
 
     def test_no_errors_for_valid_config(self):
         """Sanity check: a reasonable config passes validation"""

@@ -151,7 +151,7 @@ const MapController = {
     },
 
     /**
-     * Create popup content for a waypoint
+     * Create popup content for a waypoint or geozone
      */
     _createWaypointPopup(wp) {
         const esc = (v) => this.escapeHtml(v);
@@ -168,6 +168,13 @@ const MapController = {
                </div>`
             : '';
 
+        let typeInfo = '';
+        if (wp.type === 'circle') {
+            typeInfo = `<div class="popup-row"><span class="popup-label">Radius:</span><span class="popup-value">${Units.formatDistance(wp.radius)}</span></div>`;
+        } else if (wp.type === 'rectangle') {
+            typeInfo = `<div class="popup-row"><span class="popup-label">Dimensions:</span><span class="popup-value">${Units.formatDistance(wp.width)} × ${Units.formatDistance(wp.height)}</span></div>`;
+        }
+
         return `
             <div class="popup-title" style="color: ${color};">
                 <i class="fas ${esc(wp.icon || 'fa-map-pin')}"></i> ${esc(wp.name)}
@@ -181,12 +188,13 @@ const MapController = {
                 <span class="popup-label">Longitude:</span>
                 <span class="popup-value">${wp.lon.toFixed(6)}</span>
             </div>
+            ${typeInfo}
             ${description}
         `;
     },
 
     /**
-     * Add custom waypoints from config to the map
+     * Add custom waypoints & geozones from config to the map
      */
     _addWaypoints() {
         if (!this.waypoints || this.waypoints.length === 0) return;
@@ -196,46 +204,106 @@ const MapController = {
             if (wp.enabled === false) continue;
             if (wp.lat == null || wp.lon == null) continue;
 
-            const marker = L.marker([wp.lat, wp.lon], {
+            const popupContent = this._createWaypointPopup(wp);
+            const center = [wp.lat, wp.lon];
+            const color = wp.color || '#007bff';
+            let shape = null;
+
+            if (wp.type === 'circle' && wp.radius > 0) {
+                shape = L.circle(center, {
+                    radius: wp.radius,
+                    color: color,
+                    fillColor: color,
+                    fillOpacity: wp.fill_opacity != null ? wp.fill_opacity : 0.1,
+                    weight: 2,
+                    dashArray: '8, 8',
+                    opacity: 0.8
+                }).addTo(this.layers.waypoints);
+                shape.bindPopup(popupContent);
+            } else if (wp.type === 'rectangle' && wp.width > 0 && wp.height > 0) {
+                const lat = wp.lat;
+                const lon = wp.lon;
+                const latRad = lat * Math.PI / 180;
+                const mPerDegLat = 111320;
+                const mPerDegLon = 111320 * Math.cos(latRad);
+                const halfH = wp.height / 2 / mPerDegLat;
+                const halfW = wp.width / 2 / mPerDegLon;
+                const bounds = [[lat - halfH, lon - halfW], [lat + halfH, lon + halfW]];
+                shape = L.rectangle(bounds, {
+                    color: color,
+                    fillColor: color,
+                    fillOpacity: wp.fill_opacity != null ? wp.fill_opacity : 0.1,
+                    weight: 2,
+                    dashArray: '8, 8',
+                    opacity: 0.8
+                }).addTo(this.layers.waypoints);
+                shape.bindPopup(popupContent);
+            }
+
+            // Always place a clickable marker at center
+            const marker = L.marker(center, {
                 icon: this.createWaypointIcon(wp),
                 opacity: 0.85
             }).addTo(this.layers.waypoints);
+            marker.bindPopup(popupContent);
 
-            marker.bindPopup(this._createWaypointPopup(wp));
-            this.waypointMarkers[wp.name] = marker;
+            this.waypointMarkers[wp.name] = { marker, shape };
         }
     },
 
     /**
-     * Pan to a waypoint and flash its marker
+     * Pan to a waypoint/geozone and flash its marker
      */
     panToWaypoint(name) {
-        const marker = this.waypointMarkers[name];
-        if (!marker) return;
+        const entry = this.waypointMarkers[name];
+        if (!entry) return;
 
+        const marker = entry.marker;
         const latlng = marker.getLatLng();
         const isVisible = this.map.getBounds().contains(latlng);
 
         if (isVisible) {
-            // Flash marker (already on screen)
-            this._flashMarker(marker);
+            this._flashMarker(name);
         } else {
-            // Pan to it then flash
             this.map.setView(latlng, 16, { animate: true });
-            setTimeout(() => this._flashMarker(marker), 500);
+            setTimeout(() => this._flashMarker(name), 500);
         }
     },
 
-    _flashMarker(marker) {
-        const el = marker.getElement();
-        if (!el) return;
-        const wpIcon = el.querySelector('.waypoint-icon');
-        if (!wpIcon) return;
-        wpIcon.classList.remove('flash');
-        // Force reflow so the animation restarts
-        void wpIcon.offsetWidth;
-        wpIcon.classList.add('flash');
-        setTimeout(() => wpIcon.classList.remove('flash'), 1800);
+    _flashMarker(name) {
+        const entry = this.waypointMarkers[name];
+        if (!entry) return;
+
+        // Flash the center marker icon
+        const el = entry.marker.getElement();
+        if (el) {
+            const wpIcon = el.querySelector('.waypoint-icon');
+            if (wpIcon) {
+                wpIcon.classList.remove('flash');
+                void wpIcon.offsetWidth;
+                wpIcon.classList.add('flash');
+                setTimeout(() => wpIcon.classList.remove('flash'), 1800);
+            }
+        }
+
+        // Flash the geozone shape if present
+        if (entry.shape) {
+            this._flashShape(entry.shape);
+        }
+    },
+
+    _flashShape(shape) {
+        const origOpts = Object.assign({}, shape.options);
+        const flashOn = () => shape.setStyle({ opacity: 1, weight: 4, fillOpacity: 0.3 });
+        const flashOff = () => shape.setStyle({
+            opacity: origOpts.opacity,
+            weight: origOpts.weight,
+            fillOpacity: origOpts.fillOpacity
+        });
+        flashOn();
+        setTimeout(flashOff, 400);
+        setTimeout(flashOn, 800);
+        setTimeout(flashOff, 1200);
     },
 
     /**
