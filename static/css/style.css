@@ -123,7 +123,6 @@ html, body {
 }
 
 .date-items {
-    overflow: hidden;
     transition: max-height 0.3s ease;
 }
 
@@ -132,10 +131,12 @@ html, body {
     padding-top: 0;
     padding-bottom: 0;
     visibility: hidden;
+    overflow: hidden;
 }
 
 .date-items:not(.collapsed) {
     max-height: 2000px;
+    overflow: visible;
 }
 
 .drone-item {
@@ -242,6 +243,41 @@ html, body {
 .drone-actions button:hover {
     background: #dee2e6;
     color: #495057;
+}
+
+/* Export format menu — floating, appended to body */
+.export-menu {
+    display: block;
+    position: fixed;
+    background: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    z-index: 1000;
+    white-space: nowrap;
+    min-width: 60px;
+}
+
+.export-option {
+    display: block;
+    padding: 8px 14px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    color: #333;
+    text-decoration: none;
+    transition: background 0.15s;
+}
+
+.export-option:hover {
+    background: #f0f0f0;
+}
+
+.export-option:first-child {
+    border-radius: 4px 4px 0 0;
+}
+
+.export-option:last-child {
+    border-radius: 0 0 4px 4px;
 }
 
 .sidebar-footer {
@@ -1268,6 +1304,19 @@ body.dark-mode .drone-actions button {
 body.dark-mode .drone-actions button:hover {
     background: #2a2a4a;
     color: #e0e0e0;
+}
+
+body.dark-mode .export-menu {
+    background: #1a1a2e;
+    border-color: #2a2a4a;
+}
+
+body.dark-mode .export-option {
+    color: #e0e0e0;
+}
+
+body.dark-mode .export-option:hover {
+    background: #16213e;
 }
 
 body.dark-mode .sidebar-footer {

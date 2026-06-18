@@ -767,6 +767,9 @@ const UIController = {
                                         <button class="focus-btn" title="Focus on map">
                                             <i class="fas fa-crosshairs"></i>
                                         </button>
+                                        <button class="export-btn" title="Export session" data-uas-id="${esc(drone.uas_id)}" data-session-id="${esc(drone.computed_session_id || '')}" data-session-key="${esc(rawSessionKey)}">
+                                            <i class="fas fa-download"></i>
+                                        </button>
                                     </div>
                                 </div>
                             `;
@@ -993,6 +996,21 @@ const UIController = {
                     this.elements.sidebar.classList.remove('open');
                 }
             });
+        });
+
+        // Export button click — open floating menu
+        list.querySelectorAll('.export-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._openExportMenu(btn);
+            });
+        });
+
+        // Close export menu on outside click
+        document.addEventListener('click', (e) => {
+            if (this._exportMenu && !this._exportMenu.contains(e.target) && !e.target.closest('.export-btn')) {
+                this._closeExportMenu();
+            }
         });
     },
 
@@ -1319,6 +1337,75 @@ const UIController = {
         // Simple alert for now - could be replaced with a toast
         console.error(message);
         // Could implement a toast notification here
+    },
+
+    /**
+     * Open floating export format menu positioned near the given button
+     */
+    _openExportMenu(btn) {
+        // Close any existing menu
+        this._closeExportMenu();
+
+        const uasId = btn.dataset.uasId;
+        const sessionId = btn.dataset.sessionId;
+        const rect = btn.getBoundingClientRect();
+
+        const menu = document.createElement('div');
+        menu.className = 'export-menu';
+        menu.innerHTML = `
+            <a class="export-option" data-format="csv">CSV</a>
+            <a class="export-option" data-format="gpx">GPX</a>
+            <a class="export-option" data-format="kml">KML</a>
+        `;
+
+        // Position menu — prefer below, flip above if not enough room
+        const menuHeight = 120; // approx max height
+        const spaceBelow = window.innerHeight - rect.bottom - 4;
+        const spaceAbove = rect.top - 4;
+
+        if (spaceBelow >= menuHeight || spaceBelow >= spaceAbove) {
+            menu.style.top = (rect.bottom + 4) + 'px';
+        } else {
+            menu.style.top = (rect.top - menuHeight - 4) + 'px';
+        }
+
+        menu.style.left = Math.min(rect.left, window.innerWidth - 120) + 'px';
+
+        document.body.appendChild(menu);
+        this._exportMenu = menu;
+
+        // Handle option clicks
+        menu.querySelectorAll('.export-option').forEach(opt => {
+            opt.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const format = opt.dataset.format;
+                this._closeExportMenu();
+
+                // Build download URL
+                const params = new URLSearchParams();
+                if (this.currentStartTime) params.append('start', this.currentStartTime.toISOString());
+                if (this.currentEndTime) params.append('end', this.currentEndTime.toISOString());
+                if (sessionId) params.append('session_id', sessionId);
+                const url = `${API.baseUrl}/api/export/${encodeURIComponent(format)}/${encodeURIComponent(uasId)}?${params}`;
+
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = '';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            });
+        });
+    },
+
+    /**
+     * Close the floating export menu
+     */
+    _closeExportMenu() {
+        if (this._exportMenu) {
+            this._exportMenu.remove();
+            this._exportMenu = null;
+        }
     }
 };
 

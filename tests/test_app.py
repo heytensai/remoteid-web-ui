@@ -351,6 +351,95 @@ class TestParseTimeRange:
         assert end - start == timedelta(hours=24)
 
 
+class TestExport:
+    def test_export_csv(self, client, db):
+        resp = client.get("/api/export/csv/drone-001")
+        assert resp.status_code == 200
+        assert resp.mimetype == "text/csv"
+        assert resp.headers["Content-Disposition"]
+        assert "drone-001.csv" in resp.headers["Content-Disposition"]
+        body = resp.get_data(as_text=True)
+        assert "timestamp,latitude,longitude" in body
+        assert "drone-001" not in body  # no uas_id column in CSV
+
+    def test_export_csv_with_session(self, client, db):
+        # First get a session id
+        resp = client.get("/api/tracks/drone-001?sessions=true")
+        sessions = resp.get_json()["sessions"]
+        assert len(sessions) >= 1
+        sid = sessions[0]["session_id"]
+
+        resp = client.get(f"/api/export/csv/drone-001?session_id={sid}")
+        assert resp.status_code == 200
+        assert resp.mimetype == "text/csv"
+        body = resp.get_data(as_text=True)
+        lines = body.strip().split("\n")
+        assert len(lines) >= 2  # header + at least 1 data row
+        # All rows should have the same session_id (last column)
+        for line in lines[1:]:
+            cols = line.split(",")
+            # Last column is session_id - may be quoted
+            assert sid.replace("session_", "") in line or sid in line
+
+    def test_export_gpx(self, client, db):
+        resp = client.get("/api/export/gpx/drone-001")
+        assert resp.status_code == 200
+        assert resp.mimetype == "application/gpx+xml"
+        body = resp.get_data(as_text=True)
+        assert "<gpx" in body
+        assert "<trkpt" in body
+        assert "drone-001" in body
+
+    def test_export_kml(self, client, db):
+        resp = client.get("/api/export/kml/drone-001")
+        assert resp.status_code == 200
+        assert resp.mimetype == "application/vnd.google-earth.kml+xml"
+        body = resp.get_data(as_text=True)
+        assert "<kml" in body
+        assert "<coordinates>" in body
+        assert "drone-001" in body
+
+    def test_export_unsupported_format(self, client, db):
+        resp = client.get("/api/export/pdf/drone-001")
+        assert resp.status_code == 400
+        data = resp.get_json()
+        assert "Unsupported format" in data["error"]
+
+    def test_export_nonexistent_drone(self, client):
+        resp = client.get("/api/export/csv/nonexistent")
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        lines = body.strip().split("\n")
+        assert len(lines) == 1  # header only, no data
+
+    def test_export_gpx_structure(self, client, db):
+        """Verify GPX contains correct XML structure with track points"""
+        resp = client.get("/api/export/gpx/drone-001")
+        body = resp.get_data(as_text=True)
+        assert '<?xml version="1.0" encoding="UTF-8"?>' in body
+        assert '<gpx version="1.1"' in body
+        assert "<trk>" in body
+        assert "<trkseg>" in body
+        assert "</trkseg>" in body
+        assert "</trk>" in body
+        assert "</gpx>" in body
+
+    def test_export_kml_structure(self, client, db):
+        """Verify KML contains correct XML structure with coordinates"""
+        resp = client.get("/api/export/kml/drone-001")
+        body = resp.get_data(as_text=True)
+        assert '<?xml version="1.0" encoding="UTF-8"?>' in body
+        assert '<kml xmlns="http://www.opengis.net/kml/2.2"' in body
+        assert "<Document>" in body
+        assert "<Placemark>" in body
+        assert "<LineString>" in body
+        assert "<coordinates>" in body
+        assert "</coordinates>" in body
+        assert "</LineString>" in body
+        assert "</Document>" in body
+        assert "</kml>" in body
+
+
 class TestCSRF:
     def test_csrf_on_post(self, client):
         with client.application.app_context():

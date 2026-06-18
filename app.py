@@ -1,6 +1,8 @@
 """Flask web interface for Remote ID visualization"""
 
 import argparse
+import csv
+import io
 import logging
 import os
 import sqlite3
@@ -8,8 +10,9 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from xml.sax.saxutils import escape
 
-from flask import Flask, jsonify, request, render_template
+from flask import Flask, jsonify, request, render_template, Response
 from flask_cors import cross_origin
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 
@@ -209,6 +212,145 @@ def trigger_sync():
             return jsonify({"status": "sync completed with errors", "failed": failures}), 500
         return jsonify({"status": "sync completed", "failed": 0})
     return jsonify({"status": "sync disabled - no collectors configured"}), 400
+
+
+def _export_csv(positions, filename):
+    """Generate CSV export from position data"""
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "timestamp", "latitude", "longitude",
+        "altitude_m", "altitude_ft",
+        "operator_id", "session_id"
+    ])
+
+    for pos in positions:
+        alt_m = pos.get("altitude")
+        alt_ft = round(alt_m * 3.28084, 1) if alt_m is not None else ""
+        writer.writerow([
+            pos.get("timestamp", ""),
+            pos.get("latitude", ""),
+            pos.get("longitude", ""),
+            alt_m if alt_m is not None else "",
+            alt_ft,
+            pos.get("operator_id", "") or "",
+            pos.get("computed_session_id", "") or "",
+        ])
+
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}.csv"},
+    )
+
+
+def _export_gpx(positions, filename):
+    """Generate GPX export from position data"""
+    gpx = '<?xml version="1.0" encoding="UTF-8"?>\n'
+    gpx += '<gpx version="1.1" creator="RemoteID Web UI" xmlns="http://www.topografix.com/GPX/1/1">\n'
+    gpx += f'  <trk>\n    <name>{escape(filename)}</name>\n    <trkseg>\n'
+
+    for pos in positions:
+        lat = pos.get("latitude")
+        lon = pos.get("longitude")
+        if lat is not None and lon is not None:
+            gpx += f'      <trkpt lat="{lat}" lon="{lon}">\n'
+            ts = pos.get("timestamp")
+            if ts:
+                gpx += f'        <time>{ts}</time>\n'
+            alt = pos.get("altitude")
+            if alt is not None:
+                gpx += f'        <ele>{alt}</ele>\n'
+            gpx += "      </trkpt>\n"
+
+    gpx += "    </trkseg>\n  </trk>\n</gpx>\n"
+
+    return Response(
+        gpx,
+        mimetype="application/gpx+xml",
+        headers={"Content-Disposition": f"attachment; filename={filename}.gpx"},
+    )
+
+
+def _export_kml(positions, filename):
+    """Generate KML export from position data"""
+    kml = '<?xml version="1.0" encoding="UTF-8"?>\n'
+    kml += '<kml xmlns="http://www.opengis.net/kml/2.2">\n'
+    kml += f'  <Document>\n    <name>{escape(filename)}</name>\n'
+
+    # Track as LineString
+    kml += "    <Placemark>\n"
+    kml += f'      <name>{escape(filename)} Track</name>\n'
+    kml += '      <LineString>\n        <altitudeMode>absolute</altitudeMode>\n        <coordinates>\n'
+
+    for pos in positions:
+        lat = pos.get("latitude")
+        lon = pos.get("longitude")
+        if lat is not None and lon is not None:
+            alt = pos.get("altitude") or 0
+            kml += f"          {lon},{lat},{alt}\n"
+
+    kml += "        </coordinates>\n      </LineString>\n    </Placemark>\n"
+
+    # Individual position waypoints
+    for i, pos in enumerate(positions):
+        lat = pos.get("latitude")
+        lon = pos.get("longitude")
+        if lat is not None and lon is not None:
+            ts = pos.get("timestamp", "")
+            alt = pos.get("altitude") or 0
+            kml += "    <Placemark>\n"
+            kml += f'      <name>Point {i + 1}</name>\n'
+            kml += f'      <description>Time: {escape(str(ts))}</description>\n'
+            kml += f'      <Point>\n        <coordinates>{lon},{lat},{alt}</coordinates>\n      </Point>\n'
+            kml += "    </Placemark>\n"
+
+    kml += "  </Document>\n</kml>\n"
+
+    return Response(
+        kml,
+        mimetype="application/vnd.google-earth.kml+xml",
+        headers={"Content-Disposition": f"attachment; filename={filename}.kml"},
+    )
+
+
+@app.route("/api/export/<fmt>/<uas_id>")
+def export_data(fmt, uas_id):
+    """Export track data as CSV, GPX, or KML
+
+    Query params:
+        start: start time
+        end: end time
+        session_id: optional session id to filter to a single session
+    """
+    try:
+        start, end = _parse_time_range(request.args)
+        session_id = request.args.get("session_id")
+
+        if session_id:
+            sessions = DATABASE.get_track_sessions(uas_id, start, end)
+            sessions = [s for s in sessions if s["session_id"] == session_id]
+            positions = sessions[0]["positions"] if sessions else []
+        else:
+            positions = DATABASE.get_track(uas_id, start, end)
+
+        safe_id = uas_id.replace("/", "_").replace("\\", "_")
+        if session_id:
+            short = session_id.replace("session_", "")
+            filename = f"{safe_id}_{short}"
+        else:
+            filename = safe_id
+
+        if fmt == "csv":
+            return _export_csv(positions, filename)
+        if fmt == "gpx":
+            return _export_gpx(positions, filename)
+        if fmt == "kml":
+            return _export_kml(positions, filename)
+        return jsonify({"error": f"Unsupported format: {fmt}"}), 400
+    except (ValueError, TypeError, sqlite3.Error):
+        logger.exception("Error exporting data for %s", uas_id)
+        return jsonify({"error": "Internal server error"}), 500
 
 
 def _get_api_key_source():
