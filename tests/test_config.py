@@ -81,6 +81,9 @@ def test_web_config_full():
                 ],
                 "api_keys": {"key1": "source1"},
                 "drone_aliases": {"abc": "Drone-ABC"},
+                "alerts": {
+                    "stale_timeout": 600,
+                },
             }
         }
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -104,6 +107,7 @@ def test_web_config_full():
             assert cfg.collectors[1].host == "10.0.0.1"
             assert cfg.api_keys == {"key1": "source1"}
             assert cfg.drone_aliases == {"abc": "Drone-ABC"}
+            assert cfg.alerts.stale_timeout == 600
         finally:
             os.unlink(path)
 
@@ -315,6 +319,41 @@ def test_to_dict_with_waypoints():
             assert wp2["fill_opacity"] == 0.2
             assert wp2["width"] == 0.0
             assert wp2["height"] == 0.0
+            # Default alert_enabled should be False
+            assert wp2["alert_enabled"] is False
+        finally:
+            os.unlink(path)
+
+
+def test_to_dict_with_alert_enabled():
+    with tempfile.TemporaryDirectory() as td:
+        config_data = {
+            "web_interface": {
+                "database_path": os.path.join(td, "web.db"),
+                "waypoints": [
+                    {
+                        "name": "AlertCircle",
+                        "lat": 38.0,
+                        "lon": -123.0,
+                        "type": "circle",
+                        "radius": 100,
+                        "alert_enabled": True,
+                    },
+                ],
+                "alerts": {
+                    "stale_timeout": 600,
+                },
+            }
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.dump(config_data, f)
+            path = f.name
+        try:
+            cfg = WebConfig(path)
+            d = cfg.to_dict()
+            assert d["waypoints"][0]["alert_enabled"] is True
+            assert d["alerts"]["stale_timeout"] == 600
+            assert cfg.alerts.stale_timeout == 600
         finally:
             os.unlink(path)
 
@@ -527,6 +566,22 @@ class TestValidation:
             cfg = WebConfig(path)
             assert cfg.port == 8080
             os.unlink(path)
+
+    def test_stale_timeout_negative(self):
+        path = _write_config({
+            "database_path": "/tmp",
+            "alerts": {"stale_timeout": -1},
+        })
+        with pytest.raises(ValueError, match="stale_timeout.*positive"):
+            WebConfig(path)
+
+    def test_stale_timeout_zero(self):
+        path = _write_config({
+            "database_path": "/tmp",
+            "alerts": {"stale_timeout": 0},
+        })
+        with pytest.raises(ValueError, match="stale_timeout.*positive"):
+            WebConfig(path)
 
 
 class TestYamlErrors:

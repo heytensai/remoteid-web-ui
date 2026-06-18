@@ -85,6 +85,7 @@ web_interface:
     #   fill_opacity: 0.15       # Translucent fill (default: 0.1)
     #   description: "Authorized flight area"
     #   icon: "fa-circle"        # Center marker icon
+    #   alert_enabled: true      # Enable geozone alerting (default: false)
     #
     # Rectangle geozone example:
     # - name: "Landing Pad"
@@ -96,6 +97,7 @@ web_interface:
     #   color: "#27ae60"
     #   fill_opacity: 0.12
     #   description: "Helipad and landing area"
+    #   alert_enabled: true      # Enable geozone alerting (default: false)
 
   # Background session detection
   # Periodically recomputes session boundaries based on time gaps between
@@ -111,3 +113,12 @@ web_interface:
     gap_threshold: 600
     # Log verbosity: DEBUG, INFO (default), WARNING, ERROR (hot-reloadable)
     log_level: INFO
+
+  # Geozone alerting configuration (hot-reloadable)
+  # Alerts are generated when a drone enters an alert-enabled geozone
+  # (circle or rectangle waypoint with alert_enabled: true).
+  alerts:
+    # Seconds without a position update before a geozone alert is marked
+    # as "timed out" and the drone marker reverts to a stop icon
+    # (hot-reloadable)
+    stale_timeout: 300

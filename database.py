@@ -2,7 +2,7 @@
 
 import sqlite3
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 
@@ -88,6 +88,22 @@ class WebDatabase:
             """
             )
 
+            # Create geozone events table for alerting
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS geozone_events(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    uas_id TEXT NOT NULL,
+                    geozone_name TEXT NOT NULL,
+                    entered_at DATETIME NOT NULL,
+                    last_seen_at DATETIME NOT NULL,
+                    exited_at DATETIME,
+                    exited_reason TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """
+            )
+
             # Create indexes
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_uas_time ON remoteid(uas_id, timestamp)"
@@ -98,6 +114,14 @@ class WebDatabase:
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_computed_session ON remoteid(computed_session_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_geozone_events_active "
+                "ON geozone_events(uas_id, geozone_name, exited_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_geozone_events_stale "
+                "ON geozone_events(exited_at, last_seen_at)"
             )
 
             conn.commit()
@@ -802,3 +826,139 @@ class WebDatabase:
                     return datetime.fromisoformat(val)
                 return val
             return None
+
+    def get_drones_for_alert_check(
+        self, since: Optional[datetime] = None
+    ) -> List[str]:
+        """Get distinct UAS IDs with positions since *since* (for alert evaluation)."""
+        with sqlite3.connect(
+            self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
+        ) as conn:
+            if since:
+                cursor = conn.execute(
+                    "SELECT DISTINCT uas_id FROM remoteid WHERE timestamp >= ?",
+                    (since,),
+                )
+            else:
+                cursor = conn.execute("SELECT DISTINCT uas_id FROM remoteid")
+            return [row[0] for row in cursor.fetchall()]
+
+    def get_positions_for_alert_check(
+        self, uas_id: str, since: Optional[datetime] = None
+    ) -> List[Dict]:
+        """Get positions for a UAS since *since* (for alert evaluation)."""
+        with sqlite3.connect(
+            self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
+        ) as conn:
+            conn.row_factory = sqlite3.Row
+            if since:
+                cursor = conn.execute(
+                    """SELECT latitude, longitude, timestamp
+                       FROM remoteid
+                       WHERE uas_id = ? AND timestamp >= ?
+                       ORDER BY timestamp ASC""",
+                    (uas_id, since),
+                )
+            else:
+                cursor = conn.execute(
+                    """SELECT latitude, longitude, timestamp
+                       FROM remoteid
+                       WHERE uas_id = ?
+                       ORDER BY timestamp ASC""",
+                    (uas_id,),
+                )
+            return [dict(row) for row in cursor.fetchall()]
+
+    # --- Geozone event methods ---
+
+    def get_active_geozone_events(self) -> List[Dict]:
+        """Get all active (not yet exited) geozone events."""
+        with sqlite3.connect(
+            self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
+        ) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                """
+                SELECT * FROM geozone_events
+                WHERE exited_at IS NULL
+                ORDER BY entered_at DESC
+                """
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_geozone_events_for_uas(self, uas_id: str) -> List[Dict]:
+        """Get all events for a specific UAS, active first."""
+        with sqlite3.connect(
+            self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
+        ) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                """
+                SELECT * FROM geozone_events
+                WHERE uas_id = ?
+                ORDER BY exited_at IS NULL DESC, entered_at DESC
+                """,
+                (uas_id,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def enter_geozone(
+        self, uas_id: str, geozone_name: str, timestamp: datetime
+    ) -> int:
+        """Create a new geozone entry event. Returns event id."""
+        with sqlite3.connect(
+            self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
+        ) as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO geozone_events (uas_id, geozone_name, entered_at, last_seen_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (uas_id, geozone_name, timestamp, timestamp),
+            )
+            conn.commit()
+            return cursor.lastrowid
+
+    def update_geozone_last_seen(self, event_id: int, timestamp: datetime):
+        """Update last_seen_at for an active event."""
+        with sqlite3.connect(
+            self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
+        ) as conn:
+            conn.execute(
+                "UPDATE geozone_events SET last_seen_at = ? WHERE id = ?",
+                (timestamp, event_id),
+            )
+            conn.commit()
+
+    def exit_geozone(self, event_id: int, timestamp: datetime, reason: str = "left"):
+        """Mark a geozone event as exited."""
+        with sqlite3.connect(
+            self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
+        ) as conn:
+            conn.execute(
+                "UPDATE geozone_events SET exited_at = ?, exited_reason = ? WHERE id = ?",
+                (timestamp, reason, event_id),
+            )
+            conn.commit()
+
+    def check_stale_geozone_events(
+        self, stale_timeout: int, reference_time: datetime
+    ) -> int:
+        """Mark events stale (timed out) where last_seen_at is older than timeout.
+
+        Returns the number of events marked as stale.
+        """
+        with sqlite3.connect(
+            self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
+        ) as conn:
+            cursor = conn.execute(
+                """
+                UPDATE geozone_events
+                SET exited_at = last_seen_at, exited_reason = 'timeout'
+                WHERE exited_at IS NULL
+                AND last_seen_at < ?
+                """,
+                (reference_time - timedelta(seconds=stale_timeout),),
+            )
+            conn.commit()
+            return cursor.rowcount

@@ -175,6 +175,27 @@ class TestSessionSchedulerLifecycle:
 
         mock_process_database.assert_not_called()
 
+    def test_alert_engine_called(self, mock_process_database):
+        """Alert engine evaluate_all and check_stale are called each cycle"""
+        from config import SessionDetectionConfig
+        from session_scheduler import SessionScheduler
+        from unittest.mock import MagicMock
+
+        class FakeConfig:
+            session_detection = SessionDetectionConfig({"enabled": False, "interval": 1})
+
+        mock_alert = MagicMock()
+        scheduler = SessionScheduler(FakeConfig(), "/fake/db.sqlite", alert_engine=mock_alert)
+        scheduler.start()
+
+        import time
+        time.sleep(1.5)
+
+        scheduler.stop()
+
+        mock_alert.evaluate_all.assert_called()
+        mock_alert.check_stale.assert_called()
+
     def test_stop_is_responsive(self, mock_process_database):
         """stop() returns quickly even if interval is long"""
         from config import SessionDetectionConfig

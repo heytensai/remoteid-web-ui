@@ -1470,4 +1470,93 @@ body.dark-mode .flatpickr-time input {
 
 body.dark-mode .flatpickr-time .flatpickr-time-separator {
     color: #a0a0c0;
+}
+
+/* Sidebar toolbar */
+.sidebar-toolbar {
+    padding: 0 8px 8px;
+    display: flex;
+    gap: 6px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+body.dark-mode .sidebar-toolbar {
+    border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Geozone alert filter button */
+.alert-filter-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(231, 76, 60, 0.08);
+    border: 1px solid rgba(231, 76, 60, 0.2);
+    color: #c0392b;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.alert-filter-btn:hover {
+    background: rgba(231, 76, 60, 0.15);
+}
+
+.alert-filter-btn.active {
+    background: rgba(231, 76, 60, 0.2);
+    border-color: #e74c3c;
+}
+
+.alert-filter-count {
+    font-weight: 600;
+    min-width: 14px;
+    text-align: center;
+}
+
+/* Alert icon in drone list */
+.alert-icon {
+    color: #e74c3c;
+    font-size: 12px;
+    margin-right: 3px;
+}
+
+/* Highlighted drone item when in a geozone */
+.drone-item.has-geozone-alert {
+    border-left: 3px solid #e74c3c;
+}
+
+body.dark-mode .drone-item.has-geozone-alert {
+    border-left-color: #e74c3c;
+}
+
+/* Live drone position icon on map */
+.drone-position-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    background: white;
+    border: 2px solid;
+    border-radius: 50%;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    font-size: 12px;
+}
+
+.drone-position-icon .fa-drone {
+    font-size: 14px;
+}
+
+/* Geozone alert badge on drone marker */
+.geozone-badge {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    font-size: 10px;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3));
+}
+
+body.dark-mode .drone-position-icon {
+    background: #1a1a2e;
 } 

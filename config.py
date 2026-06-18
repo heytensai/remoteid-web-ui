@@ -47,6 +47,7 @@ class WaypointConfig:
     width: float = 0.0   # meters, for type "rectangle"
     height: float = 0.0  # meters, for type "rectangle"
     fill_opacity: float = 0.1
+    alert_enabled: bool = False
 
 
 @dataclass
@@ -79,6 +80,17 @@ class SessionDetectionConfig:
 
 
 @dataclass
+class AlertsConfig:
+    """Geozone alerting configuration"""
+
+    stale_timeout: int = 300  # seconds without position before marking as left
+
+    def __init__(self, data: dict = None):
+        if data:
+            self.stale_timeout = data.get("stale_timeout", 300)
+
+
+@dataclass
 class WebConfig:  # pylint: disable=too-many-instance-attributes
     """Web interface configuration"""
 
@@ -96,6 +108,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
     drone_aliases: dict = field(default_factory=dict)
     use_metric: bool = True
     session_detection: SessionDetectionConfig = field(default_factory=SessionDetectionConfig)
+    alerts: AlertsConfig = field(default_factory=AlertsConfig)
 
     def __init__(self, yaml_file: str):
         self.config_path = yaml_file
@@ -177,6 +190,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                     width=width,
                     height=height,
                     fill_opacity=fill_opacity,
+                    alert_enabled=wp_data.get("alert_enabled", False),
                 )
             )
 
@@ -189,6 +203,10 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         # Session detection configuration
         sd_data = web_data.get("session_detection") or {}
         self.session_detection = SessionDetectionConfig(sd_data)
+
+        # Alerts configuration
+        alerts_data = web_data.get("alerts") or {}
+        self.alerts = AlertsConfig(alerts_data)
 
         self._validate()
 
@@ -257,6 +275,10 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                         f"does not exist: {db_dir}"
                     )
 
+        # Alerts validation
+        if self.alerts.stale_timeout is not None and self.alerts.stale_timeout <= 0:
+            errors.append(f"alerts.stale_timeout must be positive, got {self.alerts.stale_timeout}")
+
         # Session detection validation
         sd = self.session_detection
         if sd.interval is not None and sd.interval <= 0:
@@ -314,10 +336,14 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                     "width": w.width,
                     "height": w.height,
                     "fill_opacity": w.fill_opacity,
+                    "alert_enabled": w.alert_enabled,
                 }
                 for w in self.waypoints
             ],
             "use_metric": self.use_metric,
+            "alerts": {
+                "stale_timeout": self.alerts.stale_timeout,
+            },
         }
 
     def reload_hot_config(self):
@@ -369,6 +395,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                         width=width,
                         height=height,
                         fill_opacity=fill_opacity,
+                        alert_enabled=wp_data.get("alert_enabled", False),
                     )
                 )
             old_dict = {w.name: w for w in self.waypoints}
@@ -389,6 +416,16 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                     "Reloaded session_detection from %s (enabled=%s, interval=%s, gap=%s, log_level=%s)",
                     self.config_path, new_sd.enabled, new_sd.interval,
                     new_sd.gap_threshold, new_sd.log_level,
+                )
+
+            # Reload alerts config
+            alerts_data = web_data.get("alerts") or {}
+            new_alerts = AlertsConfig(alerts_data)
+            if new_alerts.stale_timeout != self.alerts.stale_timeout:
+                self.alerts = new_alerts
+                logger.info(
+                    "Reloaded alerts from %s (stale_timeout=%s)",
+                    self.config_path, new_alerts.stale_timeout,
                 )
         except Exception:  # pylint: disable=broad-exception-caught
             logger.exception("Failed to reload hot config from %s", self.config_path)

@@ -20,6 +20,7 @@ from config import WebConfig
 from database import WebDatabase
 from session_scheduler import SessionScheduler
 from sync import create_sync_manager
+from alert_engine import AlertEngine
 
 # Configure logging
 logging.basicConfig(
@@ -32,6 +33,7 @@ CONFIG: WebConfig = None
 DATABASE: WebDatabase = None
 SYNC_MANAGER = None  # type: Optional[SyncManager]
 SESSION_SCHEDULER: Optional[SessionScheduler] = None
+ALERT_ENGINE: Optional[AlertEngine] = None
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24).hex())
@@ -62,6 +64,7 @@ def get_config():
             "drone_aliases": CONFIG.drone_aliases,
             "waypoints": CONFIG.to_dict().get("waypoints", []),
             "use_metric": CONFIG.use_metric,
+            "stale_timeout": CONFIG.alerts.stale_timeout,
             "csrf_token": generate_csrf(),
         }
     )
@@ -398,6 +401,16 @@ def submit_data():
         # Insert records
         inserted, errors, _ = DATABASE.insert_remoteid_records(source, data)
 
+        # Check submitted positions against alert-enabled geozones
+        if ALERT_ENGINE:
+            by_uas: dict = {}
+            for record in data:
+                uid = record.get("uas_id")
+                if uid:
+                    by_uas.setdefault(uid, []).append(record)
+            for uid, positions in by_uas.items():
+                ALERT_ENGINE.evaluate(uid, positions)
+
         # Get the most recent timestamp for this source after insert
         last_timestamp = DATABASE.get_most_recent_timestamp(source)
 
@@ -415,6 +428,18 @@ def submit_data():
     except (sqlite3.Error, ValueError, TypeError) as e:
         logger.exception("Error submitting data from %s", source)
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/alerts", methods=["GET"])
+def get_alerts():
+    """Get active geozone alert events."""
+    active = DATABASE.get_active_geozone_events()
+    uas_ids = list(set(e["uas_id"] for e in active))
+    return jsonify({
+        "active": active,
+        "uas_ids": uas_ids,
+        "count": len(active),
+    })
 
 
 @app.route("/api/last-timestamp", methods=["GET"])
@@ -496,7 +521,7 @@ def _init_app(config_path: str):
     (gunicorn master via ``when_ready``, or ``main()`` for dev server).
     """
     # pylint: disable=global-statement
-    global CONFIG, DATABASE, SYNC_MANAGER, SESSION_SCHEDULER
+    global CONFIG, DATABASE, SYNC_MANAGER, SESSION_SCHEDULER, ALERT_ENGINE
 
     logger.info("Loading configuration from %s", config_path)
     CONFIG = WebConfig(config_path)
@@ -508,7 +533,9 @@ def _init_app(config_path: str):
         DATABASE, CONFIG.collectors, CONFIG.sync_interval
     )
 
-    SESSION_SCHEDULER = SessionScheduler(CONFIG, CONFIG.database_path)
+    ALERT_ENGINE = AlertEngine(DATABASE, CONFIG)
+
+    SESSION_SCHEDULER = SessionScheduler(CONFIG, CONFIG.database_path, alert_engine=ALERT_ENGINE)
 
     return app
 

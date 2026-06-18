@@ -18,9 +18,10 @@ class SessionScheduler:
     so toggling ``enabled`` in the YAML file takes effect within one interval.
     """
 
-    def __init__(self, config, db_path: str):
+    def __init__(self, config, db_path: str, alert_engine=None):
         self._config = config
         self._db_path = db_path
+        self._alert_engine = alert_engine
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self.last_run: Optional[datetime] = None
@@ -68,12 +69,21 @@ class SessionScheduler:
                         dry_run=False,
                         since=self.last_run,
                     )
-                    self.last_run = datetime.now(timezone.utc)
                     logger.info("Session detection run complete")
                 except Exception:  # pylint: disable=broad-exception-caught
                     logger.exception("Session detection run failed")
             else:
                 logger.debug("Session detection disabled, skipping")
+
+            # Run alert engine checks regardless of session detection enabled state
+            if self._alert_engine:
+                try:
+                    self._alert_engine.evaluate_all(since=self.last_run)
+                    self._alert_engine.check_stale()
+                except Exception:  # pylint: disable=broad-exception-caught
+                    logger.exception("Alert engine check failed")
+
+            self.last_run = datetime.now(timezone.utc)
 
             # Sleep in small increments so stop() is responsive
             for _ in range(sd.interval):

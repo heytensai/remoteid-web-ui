@@ -109,6 +109,13 @@ const API = {
     },
 
     /**
+     * Get active geozone alerts
+     */
+    async getAlerts() {
+        return this._get('/api/alerts');
+    },
+
+    /**
      * Generic GET request with retry logic
      */
     async _get(url, retries = 2, delay = 500) {

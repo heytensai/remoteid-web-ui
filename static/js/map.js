@@ -22,6 +22,8 @@ const MapController = {
     loadedTrackSessions: new Set(),
     tileLayer: null,
     ready: false,
+    staleTimeout: 300,
+    alertUasIds: new Set(),
 
     escapeHtml(str) {
         if (str === null || str === undefined) return '';
@@ -40,6 +42,7 @@ const MapController = {
             this.config = response.map;
             this.droneAliases = response.drone_aliases || {};
             this.waypoints = response.waypoints || [];
+            this.staleTimeout = response.stale_timeout || 300;
         } catch (e) {
             console.error('Failed to load config:', e);
             this.config = {};
@@ -536,6 +539,21 @@ const MapController = {
      * Filter operators to only show specific UAS IDs
      * Removes operators for UAS IDs not in the visible set
      */
+    /**
+     * Update the set of UAS IDs that have active geozone alerts
+     */
+    updateAlertState(alerts) {
+        this.alertUasIds = new Set((alerts || []).map(a => a.uas_id));
+    },
+
+    /**
+     * Check if a position timestamp is within the stale timeout (still active)
+     */
+    _isPositionActive(timestamp) {
+        const age = (Date.now() - new Date(timestamp).getTime()) / 1000;
+        return age < this.staleTimeout;
+    },
+
     filterOperatorsByUasIds(visibleUasIds) {
         if (!this.ready) return;
 
@@ -688,6 +706,24 @@ const MapController = {
     },
 
     /**
+     * Create a drone icon showing live position, with optional geozone alert badge
+     */
+    createDroneIcon(color, hasAlert) {
+        const badge = hasAlert
+            ? '<i class="fas fa-exclamation-triangle geozone-badge" style="color: #e74c3c;"></i>'
+            : '';
+        return L.divIcon({
+            className: 'custom-div-icon',
+            html: `<div class="drone-position-icon" style="border-color: ${color}; color: ${color};">
+                     <i class="fas fa-drone"></i>${badge}
+                   </div>`,
+            iconSize: [28, 28],
+            iconAnchor: [14, 14],
+            popupAnchor: [0, -14]
+        });
+    },
+
+    /**
      * Add start and end markers for a session
      */
     _addSessionMarkers(uasId, sessionId, positions, color, sessionKey) {
@@ -712,9 +748,15 @@ const MapController = {
         this.tracks[trackKey].markers.push(startMarker);
 
         // Add end marker (only if different from start)
+        // Use a drone icon if the position is recent (within stale timeout)
         if (positions.length > 1) {
+            const isActive = this._isPositionActive(endPos.timestamp);
+            const hasAlert = isActive && this.alertUasIds.has(uasId);
+            const endIcon = isActive
+                ? this.createDroneIcon(color, hasAlert)
+                : this.createSessionEndIcon(color);
             const endMarker = L.marker([endPos.latitude, endPos.longitude], {
-                icon: this.createSessionEndIcon(color),
+                icon: endIcon,
                 opacity: 0.9
             }).addTo(this.layers.tracks);
 

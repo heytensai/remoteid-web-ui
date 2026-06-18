@@ -26,9 +26,37 @@ class TestApiConfig:
         assert "waypoints" in data
         assert "use_metric" in data
         assert "csrf_token" in data
+        assert "stale_timeout" in data
+        assert data["stale_timeout"] == 300
         assert data["map"]["center_lat"] == 37.7749
         assert data["drone_aliases"]["drone-001"] == "Alpha"
         assert data["waypoints"] == []
+
+
+class TestApiAlerts:
+    def test_get_alerts_empty(self, client):
+        resp = client.get("/api/alerts")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "active" in data
+        assert "uas_ids" in data
+        assert "count" in data
+        assert data["active"] == []
+        assert data["uas_ids"] == []
+        assert data["count"] == 0
+
+    def test_get_alerts_with_data(self, client, app):
+        import app as _app_module
+        db = _app_module.DATABASE
+        now = datetime.now()
+        db.enter_geozone("drone-001", "TestZone", now)
+        resp = client.get("/api/alerts")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["count"] == 1
+        assert data["uas_ids"] == ["drone-001"]
+        assert data["active"][0]["geozone_name"] == "TestZone"
+        assert data["active"][0]["uas_id"] == "drone-001"
 
 
 class TestApiDrones:

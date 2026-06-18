@@ -18,6 +18,8 @@ const UIController = {
     visibleSessions: new Set(), // Track which sessions are checked/visible
     showKnownDrones: true,
     showUnknownDrones: true,
+    showGeozoneAlerts: false,
+    alertEvents: [],
     expandedDates: new Set(),
     _suppressTimeChange: false,
 
@@ -137,7 +139,9 @@ const UIController = {
             settingsTimePresets: document.querySelectorAll('.settings-time-presets button'),
             waypointsBtn: document.getElementById('waypointsBtn'),
             waypointsDropdown: document.getElementById('waypointsDropdown'),
-            waypointsList: document.getElementById('waypointsList')
+            waypointsList: document.getElementById('waypointsList'),
+            geozoneAlertFilter: document.getElementById('geozoneAlertFilter'),
+            alertFilterCount: document.getElementById('alertFilterCount')
         };
 
     },
@@ -295,6 +299,13 @@ const UIController = {
                 MapController.panToWaypoint(name);
                 this.elements.waypointsDropdown.classList.remove('open');
             }
+        });
+
+        // Geozone alert filter toggle
+        this.elements.geozoneAlertFilter.addEventListener('click', () => {
+            this.showGeozoneAlerts = !this.showGeozoneAlerts;
+            this.elements.geozoneAlertFilter.classList.toggle('active');
+            this.refreshData();
         });
 
     },
@@ -610,9 +621,22 @@ const UIController = {
             MapController.clearAllDroneMarkers();
             MapController.clearAllOperators();
 
-            // Fetch drones
-            const dronesResponse = await API.getDrones(this.currentStartTime, this.currentEndTime);
+            // Fetch drones and alerts in parallel
+            const [dronesResponse, alertsResponse] = await Promise.all([
+                API.getDrones(this.currentStartTime, this.currentEndTime),
+                API.getAlerts(),
+            ]);
             let drones = dronesResponse.drones || [];
+            this.alertEvents = alertsResponse.active || [];
+
+            // Update map alert state
+            MapController.updateAlertState(this.alertEvents);
+
+            // Update alert filter count
+            if (this.elements.alertFilterCount) {
+                this.elements.alertFilterCount.textContent = this.alertEvents.length;
+                this.elements.alertFilterCount.style.display = this.alertEvents.length > 0 ? '' : 'none';
+            }
 
             // Filter by known/unknown drone visibility
             drones = drones.filter(d => {
@@ -689,6 +713,14 @@ const UIController = {
             return;
         }
 
+        // Build set of UAS IDs with active geozone alerts
+        const alertedUasIds = new Set((this.alertEvents || []).map(e => e.uas_id));
+
+        // Apply geozone alert filter if active
+        if (this.showGeozoneAlerts) {
+            drones = drones.filter(d => alertedUasIds.has(d.uas_id));
+        }
+
         // Group flights by date (using session start date)
         const groups = {};
         drones.forEach(drone => {
@@ -754,12 +786,14 @@ const UIController = {
                             const isSelected = this.selectedDrones.has(rawSessionKey);
                             const isVisible = this.visibleSessions.has(rawSessionKey);
 
+                            const hasAlert = alertedUasIds.has(drone.uas_id);
+
                             return `
-                                <div class="drone-item ${isSelected ? 'active' : ''} ${isVisible ? '' : 'dimmed'}" data-uas-id="${esc(drone.uas_id)}" data-session-key="${esc(rawSessionKey)}" data-session-id="${esc(drone.computed_session_id || '')}">
+                                <div class="drone-item ${isSelected ? 'active' : ''} ${isVisible ? '' : 'dimmed'} ${hasAlert ? 'has-geozone-alert' : ''}" data-uas-id="${esc(drone.uas_id)}" data-session-key="${esc(rawSessionKey)}" data-session-id="${esc(drone.computed_session_id || '')}">
                                     <input type="checkbox" class="drone-checkbox" data-session-key="${esc(rawSessionKey)}" ${isVisible ? 'checked' : ''}>
                                     <div class="drone-color" style="background-color: ${color};"></div>
                                     <div class="drone-info">
-                                        <div class="drone-id">${esc(this.getDroneName(drone.uas_id))}</div>
+                                        <div class="drone-id">${hasAlert ? '<i class="fas fa-exclamation-triangle alert-icon"></i> ' : ''}${esc(this.getDroneName(drone.uas_id))}</div>
                                         <div class="session-id">${esc(sessionId)}</div>
                                         <div class="drone-meta">Alt: ${altitude} | ${timeStr}</div>
                                     </div>

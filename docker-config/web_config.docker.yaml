@@ -54,6 +54,7 @@ web_interface:
       description: "Circle geozone example"
       enabled: true
       category: "demo"
+      alert_enabled: true
     - name: "Demo Rect Zone"
       lat: 37.7700
       lon: -122.4150
@@ -65,6 +66,7 @@ web_interface:
       description: "Rectangle geozone example"
       enabled: true
       category: "demo"
+      alert_enabled: true
 
   # Background session detection
   session_detection:
@@ -72,3 +74,6 @@ web_interface:
     interval: 600
     gap_threshold: 600
     log_level: INFO
+
+  alerts:
+    stale_timeout: 300
