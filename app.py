@@ -62,6 +62,7 @@ def get_config():
             "default_hours": CONFIG.default_hours,
             "sync_enabled": SYNC_MANAGER is not None,
             "drone_aliases": CONFIG.drone_aliases,
+            "manufacturer_prefixes": CONFIG.manufacturer_prefixes,
             "waypoints": CONFIG.to_dict().get("waypoints", []),
             "use_metric": CONFIG.use_metric,
             "stale_timeout": CONFIG.alerts.stale_timeout,

@@ -33,6 +33,15 @@ web_interface:
   # Limit to prevent browser lag
   max_positions_per_query: 5000
 
+  # Manufacturer prefixes: serial prefix -> manufacturer name
+  # ICAO-assigned 4-char manufacturer codes per ANSI/CTA-2063-A
+  manufacturer_prefixes:
+    "1581F": "DJI"         # DJI 20-digit RID serials (length code F)
+    "1588E": "Parrot"      # Parrot Anafi Ai (length code E)
+    "17444": "Wingtra"     # WingtraOne Gen II (length code 4)
+    "1596": "Dronetag"     # Remote ID module manufacturer
+    "2146": "Contixo"      # Contixo Inc.
+
   # Custom waypoints & geozones displayed on the map
   waypoints:
     - name: "Demo Waypoint"

@@ -300,7 +300,7 @@ const MapController = {
                 wpIcon.classList.remove('flash');
                 void wpIcon.offsetWidth;
                 wpIcon.classList.add('flash');
-                setTimeout(() => wpIcon.classList.remove('flash'), 1800);
+                setTimeout(() => wpIcon.classList.remove('flash'), 600);
             }
         }
 
@@ -312,16 +312,14 @@ const MapController = {
 
     _flashShape(shape) {
         const origOpts = Object.assign({}, shape.options);
-        const flashOn = () => shape.setStyle({ opacity: 1, weight: 4, fillOpacity: 0.3 });
-        const flashOff = () => shape.setStyle({
-            opacity: origOpts.opacity,
-            weight: origOpts.weight,
-            fillOpacity: origOpts.fillOpacity
-        });
-        flashOn();
-        setTimeout(flashOff, 400);
-        setTimeout(flashOn, 800);
-        setTimeout(flashOff, 1200);
+        shape.setStyle({ opacity: 1, weight: 4, fillOpacity: 0.3 });
+        setTimeout(() => {
+            shape.setStyle({
+                opacity: origOpts.opacity,
+                weight: origOpts.weight,
+                fillOpacity: origOpts.fillOpacity
+            });
+        }, 600);
     },
 
     createSessionOperatorIcon(color, isSameLocationAsUas) {

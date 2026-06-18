@@ -108,6 +108,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
     api_keys: dict = field(default_factory=dict)
     url_prefix: str = ""
     drone_aliases: dict = field(default_factory=dict)
+    manufacturer_prefixes: dict = field(default_factory=dict)
     use_metric: bool = True
     session_detection: SessionDetectionConfig = field(default_factory=SessionDetectionConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
@@ -201,6 +202,9 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
 
         # Drone aliases: uas_id -> friendly name
         self.drone_aliases = web_data.get("drone_aliases") or {}
+
+        # Manufacturer prefixes: serial prefix -> manufacturer name
+        self.manufacturer_prefixes = web_data.get("manufacturer_prefixes") or {}
 
         # Session detection configuration
         sd_data = web_data.get("session_detection") or {}
@@ -361,6 +365,12 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
             if new_aliases != self.drone_aliases:
                 self.drone_aliases = new_aliases
                 logger.info("Reloaded drone_aliases from %s", self.config_path)
+
+            # Reload manufacturer prefixes
+            new_prefixes = web_data.get("manufacturer_prefixes") or {}
+            if new_prefixes != self.manufacturer_prefixes:
+                self.manufacturer_prefixes = new_prefixes
+                logger.info("Reloaded manufacturer_prefixes from %s", self.config_path)
 
             # Reload waypoints
             use_metric = web_data.get("use_metric", self.use_metric)

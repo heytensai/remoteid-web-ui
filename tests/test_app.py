@@ -23,6 +23,8 @@ class TestApiConfig:
         assert "default_hours" in data
         assert "sync_enabled" in data
         assert "drone_aliases" in data
+        assert "manufacturer_prefixes" in data
+        assert data["manufacturer_prefixes"] == {}
         assert "waypoints" in data
         assert "use_metric" in data
         assert "csrf_token" in data

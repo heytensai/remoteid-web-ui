@@ -576,9 +576,7 @@ html, body {
 
 @keyframes wp-flash {
     0% { transform: scale(1); }
-    25% { transform: scale(1.8); box-shadow: 0 0 12px rgba(0, 0, 0, 0.5); }
-    50% { transform: scale(1); }
-    75% { transform: scale(1.8); box-shadow: 0 0 12px rgba(0, 0, 0, 0.5); }
+    50% { transform: scale(1.8); box-shadow: 0 0 12px rgba(0, 0, 0, 0.5); }
     100% { transform: scale(1); }
 }
 
@@ -682,7 +680,7 @@ html, body {
 
 /* Waypoint flash animation on marker icon */
 .waypoint-icon.flash {
-    animation: wp-flash 0.6s ease-in-out 3;
+    animation: wp-flash 0.6s ease-in-out 1;
 }
 
 /* Map Container */
@@ -1526,4 +1524,80 @@ body.dark-mode .drone-item.has-geozone-alert {
 
 body.dark-mode .drone-position-icon {
     background: #1a1a2e;
+}
+
+/* Manufacturer badge in drone list */
+.mfr-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    font-size: 9px;
+    font-weight: 700;
+    flex-shrink: 0;
+    margin: 2px 6px 2px 0;
+    letter-spacing: 0.5px;
+}
+
+.mfr-badge.mfr-unknown {
+    background: rgba(150, 150, 150, 0.15);
+    color: #999;
+    font-size: 12px;
+}
+
+body.dark-mode .mfr-badge.mfr-unknown {
+    background: rgba(200, 200, 200, 0.1);
+    color: #777;
+}
+
+.mfr-badge.mfr-dji {
+    background: rgba(0, 0, 0, 0.85);
+    color: #fff;
+}
+
+body.dark-mode .mfr-badge.mfr-dji {
+    background: rgba(255, 255, 255, 0.2);
+    color: #fff;
+}
+
+.mfr-badge.mfr-parrot {
+    background: #e91e63;
+    color: #fff;
+}
+
+body.dark-mode .mfr-badge.mfr-parrot {
+    background: #e91e63;
+    color: #fff;
+}
+
+.mfr-badge.mfr-wingtra {
+    background: #2196f3;
+    color: #fff;
+}
+
+body.dark-mode .mfr-badge.mfr-wingtra {
+    background: #1565c0;
+    color: #fff;
+}
+
+.mfr-badge.mfr-dronetag {
+    background: #4caf50;
+    color: #fff;
+}
+
+body.dark-mode .mfr-badge.mfr-dronetag {
+    background: #2e7d32;
+    color: #fff;
+}
+
+.mfr-badge.mfr-contixo {
+    background: #9c27b0;
+    color: #fff;
+}
+
+body.dark-mode .mfr-badge.mfr-contixo {
+    background: #7b1fa2;
+    color: #fff;
 } 

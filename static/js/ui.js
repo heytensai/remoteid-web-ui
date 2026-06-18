@@ -371,6 +371,7 @@ const UIController = {
             const config = await API.getConfig();
             this.defaultHours = config.default_hours || 24;
             this.droneAliases = config.drone_aliases || {};
+            this.manufacturerPrefixes = config.manufacturer_prefixes || {};
 
             // Override default with stored preset if available
             const stored = this._getStoredPreset();
@@ -527,6 +528,35 @@ const UIController = {
      */
     getDroneName(uasId) {
         return this.droneAliases[uasId] || uasId;
+    },
+
+    /**
+     * Get manufacturer name from UAS ID using serial prefix matching.
+     * Returns null if unknown.
+     */
+    getDroneManufacturer(uasId) {
+        if (!this.manufacturerPrefixes) return null;
+        let bestMatch = null;
+        let bestLen = 0;
+        for (const [prefix, name] of Object.entries(this.manufacturerPrefixes)) {
+            if (uasId.startsWith(prefix) && prefix.length > bestLen) {
+                bestMatch = name;
+                bestLen = prefix.length;
+            }
+        }
+        return bestMatch;
+    },
+
+    /**
+     * Get manufacturer badge HTML for a UAS ID.
+     */
+    _getManufacturerBadgeHtml(uasId) {
+        const mfr = this.getDroneManufacturer(uasId);
+        if (!mfr) {
+            return '<span class="mfr-badge mfr-unknown" title="Unknown manufacturer"><i class="fas fa-question-circle"></i></span>';
+        }
+        const abbr = mfr.substring(0, 3).toUpperCase();
+        return `<span class="mfr-badge mfr-${mfr.toLowerCase()}" title="${this.escapeHtml(mfr)}">${this.escapeHtml(abbr)}</span>`;
     },
 
     /**
@@ -791,6 +821,7 @@ const UIController = {
                                 <div class="drone-item ${isSelected ? 'active' : ''} ${isVisible ? '' : 'dimmed'} ${hasAlert ? 'has-geozone-alert' : ''}" data-uas-id="${esc(drone.uas_id)}" data-session-key="${esc(rawSessionKey)}" data-session-id="${esc(drone.computed_session_id || '')}">
                                     <input type="checkbox" class="drone-checkbox" data-session-key="${esc(rawSessionKey)}" ${isVisible ? 'checked' : ''}>
                                     <div class="drone-color" style="background-color: ${color};"></div>
+                                    ${this._getManufacturerBadgeHtml(drone.uas_id)}
                                     <div class="drone-info">
                                         <div class="drone-id">${hasAlert ? '<i class="fas fa-exclamation-triangle alert-icon"></i> ' : ''}${esc(this.getDroneName(drone.uas_id))}</div>
                                         <div class="session-id">${esc(sessionId)}</div>

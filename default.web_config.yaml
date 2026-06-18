@@ -58,6 +58,20 @@ web_interface:
     # "12345": "Skydio X10"
     # "67890": "DJI Mavic 3"
 
+  # Manufacturer prefixes - map serial number prefixes to manufacturer names
+  # The longest matching prefix is used to identify the drone manufacturer.
+  # Format: serial_prefix: "Manufacturer Name"
+  # (hot-reloadable)
+  manufacturer_prefixes:
+    # Examples — ICAO-assigned 4-character manufacturer codes
+    # (per ANSI/CTA-2063-A: SN = [4-char MFR Code][1-char Length Code][MFR Serial])
+    # Known codes (use the first 4–5 characters including length code for precision):
+    "1581F": "DJI"         # Length code F = 15-char serial (DJI 20-digit RID serials)
+    # "1588E": "Parrot"    # Length code E = 14-char serial (Parrot Anafi Ai)
+    # "17444": "Wingtra"   # Length code 4 = 4-char serial (WingtraOne Gen II)
+    # "1596": "Dronetag"   # MFR code only (length code varies by product)
+    # "2146": "Contixo"    # MFR code only
+
   # Custom waypoints and geozones displayed on the map
   # type: "point" (default) — marker with icon at lat/lon
   #       "circle"           — circle with dashed border drawn on map
