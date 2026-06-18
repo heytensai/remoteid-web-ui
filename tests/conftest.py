@@ -66,10 +66,15 @@ def app(sample_config_yaml):
     if _app_module.SYNC_MANAGER:
         _app_module.SYNC_MANAGER.stop()
 
+    if _app_module.SESSION_SCHEDULER:
+        _app_module.SESSION_SCHEDULER.stop()
+
     yield app
 
     if _app_module.SYNC_MANAGER:
         _app_module.SYNC_MANAGER.stop()
+    if _app_module.SESSION_SCHEDULER:
+        _app_module.SESSION_SCHEDULER.stop()
 
 
 @pytest.fixture

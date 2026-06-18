@@ -58,6 +58,26 @@ class CollectorConfig:
     host: Optional[str] = None  # If None, treat as local file
 
 
+VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
+
+
+@dataclass
+class SessionDetectionConfig:
+    """Background session detection configuration"""
+
+    enabled: bool = False
+    interval: int = 600  # seconds between runs
+    gap_threshold: int = 600  # seconds gap to trigger new session
+    log_level: str = "INFO"
+
+    def __init__(self, data: dict = None):
+        if data:
+            self.enabled = data.get("enabled", False)
+            self.interval = data.get("interval", 600)
+            self.gap_threshold = data.get("gap_threshold", 600)
+            self.log_level = data.get("log_level", "INFO").upper()
+
+
 @dataclass
 class WebConfig:  # pylint: disable=too-many-instance-attributes
     """Web interface configuration"""
@@ -75,6 +95,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
     url_prefix: str = ""
     drone_aliases: dict = field(default_factory=dict)
     use_metric: bool = True
+    session_detection: SessionDetectionConfig = field(default_factory=SessionDetectionConfig)
 
     def __init__(self, yaml_file: str):
         self.config_path = yaml_file
@@ -165,6 +186,10 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         # Drone aliases: uas_id -> friendly name
         self.drone_aliases = web_data.get("drone_aliases") or {}
 
+        # Session detection configuration
+        sd_data = web_data.get("session_detection") or {}
+        self.session_detection = SessionDetectionConfig(sd_data)
+
         self._validate()
 
     def _validate(self):
@@ -232,6 +257,18 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                         f"does not exist: {db_dir}"
                     )
 
+        # Session detection validation
+        sd = self.session_detection
+        if sd.interval is not None and sd.interval <= 0:
+            errors.append(f"session_detection.interval must be positive, got {sd.interval}")
+        if sd.gap_threshold is not None and sd.gap_threshold <= 0:
+            errors.append(f"session_detection.gap_threshold must be positive, got {sd.gap_threshold}")
+        if sd.log_level not in VALID_LOG_LEVELS:
+            errors.append(
+                f"session_detection.log_level must be one of {VALID_LOG_LEVELS}, "
+                f"got {sd.log_level!r}"
+            )
+
         db_dir = os.path.dirname(self.database_path)
         if db_dir and not os.path.isdir(db_dir):
             errors.append(
@@ -284,7 +321,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         }
 
     def reload_hot_config(self):
-        """Re-read config file and update hot-reloadable fields (drone_aliases, waypoints)"""
+        """Re-read config file and update hot-reloadable fields (drone_aliases, waypoints, session_detection)"""
         try:
             with open(self.config_path, encoding="utf-8") as fh:
                 data = yaml.safe_load(fh)
@@ -339,5 +376,19 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
             if old_dict != new_dict:
                 self.waypoints = new_waypoints
                 logger.info("Reloaded waypoints from %s", self.config_path)
+
+            # Reload session detection config
+            sd_data = web_data.get("session_detection") or {}
+            new_sd = SessionDetectionConfig(sd_data)
+            if (new_sd.enabled != self.session_detection.enabled
+                    or new_sd.interval != self.session_detection.interval
+                    or new_sd.gap_threshold != self.session_detection.gap_threshold
+                    or new_sd.log_level != self.session_detection.log_level):
+                self.session_detection = new_sd
+                logger.info(
+                    "Reloaded session_detection from %s (enabled=%s, interval=%s, gap=%s, log_level=%s)",
+                    self.config_path, new_sd.enabled, new_sd.interval,
+                    new_sd.gap_threshold, new_sd.log_level,
+                )
         except Exception:  # pylint: disable=broad-exception-caught
             logger.exception("Failed to reload hot config from %s", self.config_path)

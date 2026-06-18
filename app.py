@@ -18,6 +18,7 @@ from flask_wtf.csrf import CSRFProtect, generate_csrf
 
 from config import WebConfig
 from database import WebDatabase
+from session_scheduler import SessionScheduler
 from sync import create_sync_manager
 
 # Configure logging
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 CONFIG: WebConfig = None
 DATABASE: WebDatabase = None
 SYNC_MANAGER = None  # type: Optional[SyncManager]
+SESSION_SCHEDULER: Optional[SessionScheduler] = None
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24).hex())
@@ -486,9 +488,15 @@ def _watch_config():
 
 
 def _init_app(config_path: str):
-    """Initialize application components. Returns Flask app ready to serve."""
+    """Initialize application components. Returns Flask app ready to serve.
+
+    Creates configuration, database, sync manager, and session detector
+    objects but does **not** start any background threads.  Call
+    :func:`start_background_services` when ready to start them
+    (gunicorn master via ``when_ready``, or ``main()`` for dev server).
+    """
     # pylint: disable=global-statement
-    global CONFIG, DATABASE, SYNC_MANAGER
+    global CONFIG, DATABASE, SYNC_MANAGER, SESSION_SCHEDULER
 
     logger.info("Loading configuration from %s", config_path)
     CONFIG = WebConfig(config_path)
@@ -500,16 +508,34 @@ def _init_app(config_path: str):
         DATABASE, CONFIG.collectors, CONFIG.sync_interval
     )
 
-    if SYNC_MANAGER:
-        SYNC_MANAGER.start()
-
-    # Start background config file watcher
-    watcher = threading.Thread(
-        target=_watch_config, daemon=True
-    )
-    watcher.start()
+    SESSION_SCHEDULER = SessionScheduler(CONFIG, CONFIG.database_path)
 
     return app
+
+
+def start_background_services():
+    """Start DB-bound background threads (sync, session detection, config watcher).
+
+    Called once from the gunicorn master process (via ``when_ready``) so
+    only one instance of each runs, or from ``main()`` for the dev server.
+    """
+    if SYNC_MANAGER:
+        SYNC_MANAGER.start()
+    if SESSION_SCHEDULER:
+
+        SESSION_SCHEDULER.start()
+
+    start_config_watcher()
+
+
+def start_config_watcher():
+    """Start a background thread to watch for config file changes."""
+    watcher = threading.Thread(target=_watch_config, daemon=True)
+    watcher.start()
+    logger.info(
+        "Config file watcher started for %s",
+        os.path.abspath(CONFIG.config_path),
+    )
 
 
 def main():
@@ -521,6 +547,7 @@ def main():
     args = parser.parse_args()
 
     _init_app(args.config)
+    start_background_services()
 
     try:
         logger.info("Starting web server on %s:%d", CONFIG.host, CONFIG.port)
@@ -532,6 +559,8 @@ def main():
     finally:
         if SYNC_MANAGER:
             SYNC_MANAGER.stop()
+        if SESSION_SCHEDULER:
+            SESSION_SCHEDULER.stop()
 
 
 if __name__ == "__main__":

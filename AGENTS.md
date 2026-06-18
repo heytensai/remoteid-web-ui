@@ -40,6 +40,7 @@
 - `api_keys` - API keys for remote data submission
 - `drone_aliases` - Map UAS IDs to friendly names
 - `waypoints` - Custom map markers (name, lat, lon, icon, color, description, enabled, category)
+- `session_detection` - Background session detection settings (enabled, interval, gap_threshold, log_level)
 
 ## Code Style Guidelines
 

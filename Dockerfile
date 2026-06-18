@@ -24,7 +24,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY app.py config.py database.py sync.py wsgi.py ./
+COPY app.py config.py database.py session_detect.py session_scheduler.py sync.py wsgi.py gunicorn.conf.py ./
 COPY templates/ templates/
 COPY static/ static/
 
@@ -43,4 +43,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/config')" || exit 1
 
 # Default command - config file should be mounted at /app/config/web_config.yaml
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--access-logfile", "-", "wsgi:application"]
+# Uses preload_app (via gunicorn.conf.py) so background threads run only in master
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "wsgi:application"]

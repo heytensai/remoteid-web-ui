@@ -5,7 +5,7 @@ time gaps between consecutive messages from the same UAS. A new session is
 started when there's a gap larger than the configured threshold.
 
 Usage:
-    python detect_sessions.py --db data/web.db --gap 600
+    python session_detect.py --db data/web.db --gap 600
 
 The default gap threshold is 600 seconds (10 minutes).
 """
@@ -56,10 +56,22 @@ def ensure_session_columns(db_path: str):
         conn.commit()
 
 
-def get_uas_list(db_path: str) -> List[str]:
-    """Get list of all unique UAS IDs in the database"""
+def get_uas_list(db_path: str, since: Optional[datetime] = None) -> List[str]:
+    """Get list of all unique UAS IDs in the database.
+
+    When *since* is provided, only UAS with at least one position
+    at or after that timestamp are returned.
+    """
     with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES) as conn:
-        cursor = conn.execute("SELECT DISTINCT uas_id FROM remoteid WHERE uas_id IS NOT NULL")
+        if since is not None:
+            cursor = conn.execute(
+                "SELECT DISTINCT uas_id FROM remoteid WHERE uas_id IS NOT NULL AND timestamp >= ?",
+                (since,),
+            )
+        else:
+            cursor = conn.execute(
+                "SELECT DISTINCT uas_id FROM remoteid WHERE uas_id IS NOT NULL"
+            )
         return [row[0] for row in cursor.fetchall()]
 
 
@@ -106,7 +118,7 @@ def detect_sessions(positions: List[Tuple[int, datetime]], gap_threshold: int) -
             # Start a new session
             current_session += 1
             session_id = f"session_{timestamp.strftime('%Y%m%d_%H%M%S')}"
-            logger.debug("New session detected at {timestamp} (gap: {gap:.1f}s)")
+            logger.debug("New session detected at %s (gap: %.1fs)", timestamp, gap)
 
         sessions.append((pos_id, session_id))
 
@@ -185,8 +197,19 @@ def analyze_sessions(db_path: str, uas_id: Optional[str] = None) -> dict:
         return {"sessions": results, "total_count": len(results)}
 
 
-def process_database(db_path: str, gap_threshold: int, dry_run: bool = False):
-    """Process the entire database and assign session IDs"""
+def process_database(
+    db_path: str,
+    gap_threshold: int,
+    dry_run: bool = False,
+    since: Optional[datetime] = None,
+):
+    """Process the database and assign session IDs.
+
+    When *since* is provided, only UAS with positions at or after that
+    timestamp are processed (all historic positions for those UAS are
+    still scanned so session boundary detection stays correct). UAS that
+    have had no activity since *since* are skipped entirely.
+    """
     db_path = Path(db_path)
 
     if not db_path.exists():
@@ -195,13 +218,15 @@ def process_database(db_path: str, gap_threshold: int, dry_run: bool = False):
 
     logger.info("Processing database: %s", db_path)
     logger.info("Gap threshold: %i seconds", gap_threshold)
+    if since is not None:
+        logger.info("Incremental mode: only UAS with activity since %s", since)
 
     # Ensure schema is up to date
     if not dry_run:
         ensure_session_columns(str(db_path))
 
-    # Get all UAS IDs
-    uas_list = get_uas_list(str(db_path))
+    # Get relevant UAS IDs (filtered by activity window when since is set)
+    uas_list = get_uas_list(str(db_path), since=since)
     logger.info("Found %i unique UAS IDs", len(uas_list))
 
     total_sessions = 0

@@ -96,3 +96,18 @@ web_interface:
     #   color: "#27ae60"
     #   fill_opacity: 0.12
     #   description: "Helipad and landing area"
+
+  # Background session detection
+  # Periodically recomputes session boundaries based on time gaps between
+  # position records for each drone.  Disabled by default; enable if your
+  # collector import pipeline does not already assign session IDs.
+  # Config is hot-reloadable — changes take effect within one interval.
+  session_detection:
+    enabled: false
+    # Seconds between detection runs (hot-reloadable)
+    interval: 600
+    # Gap threshold in seconds — a time gap larger than this triggers a
+    # new session for that drone (hot-reloadable)
+    gap_threshold: 600
+    # Log verbosity: DEBUG, INFO (default), WARNING, ERROR (hot-reloadable)
+    log_level: INFO

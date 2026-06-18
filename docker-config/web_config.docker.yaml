@@ -65,3 +65,10 @@ web_interface:
       description: "Rectangle geozone example"
       enabled: true
       category: "demo"
+
+  # Background session detection
+  session_detection:
+    enabled: false
+    interval: 600
+    gap_threshold: 600
+    log_level: INFO
