@@ -30,50 +30,54 @@
         <div id="main" class="main">
             <!-- Header -->
             <div class="header">
-                <button id="openSidebar" class="menu-btn">
-                    <i class="fas fa-bars"></i>
-                </button>
-
-                <div class="header-brand">
-                    <img src="{{ url_prefix }}{{ url_for('static', filename='favicon.svg') }}" alt=""> Drone Tracker
-                </div>
-
-                <button id="refreshBtn" class="refresh-btn" title="Refresh">
-                    <i class="fas fa-sync-alt"></i>
-                </button>
-                <div class="sync-toggle">
-                    <div class="sync-wrapper">
-                        <label class="switch">
-                            <input type="checkbox" id="syncToggle" checked>
-                            <span class="slider"></span>
-                        </label>
-                        <span class="sync-label">Sync</span>
-                    </div>
-                </div>
-                <div class="header-time-controls">
-                    <div class="header-time-inputs">
-                        <input type="text" id="startTime" class="flatpickr" placeholder="Start time">
-                        <input type="text" id="endTime" class="flatpickr" placeholder="End time">
-                    </div>
-                    <div class="header-time-presets">
-                        <button data-hours="1">1h</button>
-                        <button data-hours="6">6h</button>
-                        <button data-hours="24">24h</button>
-                        <button data-hours="168">7d</button>
-                    </div>
-                </div>
-                <div class="waypoints-dropdown">
-                    <button id="waypointsBtn" class="waypoints-btn" title="Waypoints">
-                        <i class="fas fa-map-pin"></i> <span class="wp-label">Waypoints</span>
+                <div class="header-start">
+                    <button id="openSidebar" class="menu-btn">
+                        <i class="fas fa-bars"></i>
                     </button>
-                    <div id="waypointsDropdown" class="dropdown-menu">
-                        <div class="dropdown-header">Waypoints</div>
-                        <div id="waypointsList" class="dropdown-list"></div>
+
+                    <div class="header-brand">
+                        <img src="{{ url_prefix }}{{ url_for('static', filename='favicon.svg') }}" alt=""> Drone Tracker
                     </div>
                 </div>
-                <button id="openSettings" class="settings-btn" title="Settings">
-                    <i class="fas fa-cog"></i>
-                </button>
+
+                <div class="header-end">
+                    <button id="refreshBtn" class="refresh-btn" title="Refresh">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                    <div class="sync-toggle">
+                        <div class="sync-wrapper">
+                            <label class="switch">
+                                <input type="checkbox" id="syncToggle" checked>
+                                <span class="slider"></span>
+                            </label>
+                            <span class="sync-label">Sync</span>
+                        </div>
+                    </div>
+                    <div class="header-time-controls">
+                        <div class="header-time-inputs">
+                            <input type="text" id="startTime" class="flatpickr" placeholder="Start time">
+                            <input type="text" id="endTime" class="flatpickr" placeholder="End time">
+                        </div>
+                        <div class="header-time-presets">
+                            <button data-hours="1">1h</button>
+                            <button data-hours="6">6h</button>
+                            <button data-hours="24">24h</button>
+                            <button data-hours="168">7d</button>
+                        </div>
+                    </div>
+                    <div class="waypoints-dropdown">
+                        <button id="waypointsBtn" class="waypoints-btn" title="Waypoints">
+                            <i class="fas fa-map-pin"></i> <span class="wp-label">Waypoints</span>
+                        </button>
+                        <div id="waypointsDropdown" class="dropdown-menu">
+                            <div class="dropdown-header">Waypoints</div>
+                            <div id="waypointsList" class="dropdown-list"></div>
+                        </div>
+                    </div>
+                    <button id="openSettings" class="settings-btn" title="Settings">
+                        <i class="fas fa-cog"></i>
+                    </button>
+                </div>
             </div>
 
             <div class="main-body">
