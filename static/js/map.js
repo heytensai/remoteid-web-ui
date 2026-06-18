@@ -11,11 +11,14 @@ const MapController = {
     layers: {
         drones: null,
         tracks: null,
-        operators: null
+        operators: null,
+        waypoints: null
     },
     config: null,
     bounds: null,
     droneAliases: {},
+    waypoints: [],
+    waypointMarkers: {},
     ready: false,
 
     escapeHtml(str) {
@@ -34,10 +37,12 @@ const MapController = {
             const response = await API.getConfig();
             this.config = response.map;
             this.droneAliases = response.drone_aliases || {};
+            this.waypoints = response.waypoints || [];
         } catch (e) {
             console.error('Failed to load config:', e);
             this.config = {};
             this.droneAliases = {};
+            this.waypoints = [];
         }
 
         // Create map
@@ -59,6 +64,7 @@ const MapController = {
         this.layers.tracks = L.layerGroup().addTo(this.map);
         this.layers.drones = L.layerGroup().addTo(this.map);
         this.layers.operators = L.layerGroup().addTo(this.map);
+        this.layers.waypoints = L.layerGroup().addTo(this.map);
 
         // Reset marker tracking objects
         this.markers = {};
@@ -68,6 +74,9 @@ const MapController = {
         this.sessionOperatorMarkers = {};
 
         this.ready = true;
+
+        // Add custom waypoints from config
+        this._addWaypoints();
 
         // Handle window resize
         window.addEventListener('resize', () => {
@@ -125,13 +134,15 @@ const MapController = {
     },
 
     /**
-     * Create operator icon
+     * Create waypoint icon
      */
-    createOperatorIcon(color) {
+    createWaypointIcon(wp) {
+        const color = wp.color || '#007bff';
+        const icon = wp.icon || 'fa-map-pin';
         return L.divIcon({
             className: 'custom-div-icon',
-            html: `<div class="operator-icon" style="border: 2px solid ${color}; color: ${color};">
-                     <i class="fas fa-user"></i>
+            html: `<div class="waypoint-icon" style="border: 2px solid ${color}; color: ${color};">
+                     <i class="fas ${icon}"></i>
                    </div>`,
             iconSize: [28, 28],
             iconAnchor: [14, 14],
@@ -140,7 +151,106 @@ const MapController = {
     },
 
     /**
-     * Create session-specific operator icon (smaller, with session indicator)
+     * Create popup content for a waypoint
+     */
+    _createWaypointPopup(wp) {
+        const esc = (v) => this.escapeHtml(v);
+        const color = wp.color || '#007bff';
+        const category = wp.category
+            ? `<div class="popup-row">
+                 <span class="popup-label">Category:</span>
+                 <span class="popup-value">${esc(wp.category)}</span>
+               </div>`
+            : '';
+        const description = wp.description
+            ? `<div class="popup-row" style="margin-top: 4px;">
+                 <span class="popup-value" style="font-weight: 400;">${esc(wp.description)}</span>
+               </div>`
+            : '';
+
+        return `
+            <div class="popup-title" style="color: ${color};">
+                <i class="fas ${esc(wp.icon || 'fa-map-pin')}"></i> ${esc(wp.name)}
+            </div>
+            ${category}
+            <div class="popup-row">
+                <span class="popup-label">Latitude:</span>
+                <span class="popup-value">${wp.lat.toFixed(6)}</span>
+            </div>
+            <div class="popup-row">
+                <span class="popup-label">Longitude:</span>
+                <span class="popup-value">${wp.lon.toFixed(6)}</span>
+            </div>
+            ${description}
+        `;
+    },
+
+    /**
+     * Add custom waypoints from config to the map
+     */
+    _addWaypoints() {
+        if (!this.waypoints || this.waypoints.length === 0) return;
+
+        this.waypointMarkers = {};
+        for (const wp of this.waypoints) {
+            if (wp.enabled === false) continue;
+            if (wp.lat == null || wp.lon == null) continue;
+
+            const marker = L.marker([wp.lat, wp.lon], {
+                icon: this.createWaypointIcon(wp),
+                opacity: 0.85
+            }).addTo(this.layers.waypoints);
+
+            marker.bindPopup(this._createWaypointPopup(wp));
+            this.waypointMarkers[wp.name] = marker;
+        }
+    },
+
+    /**
+     * Pan to a waypoint and flash its marker
+     */
+    panToWaypoint(name) {
+        const marker = this.waypointMarkers[name];
+        if (!marker) return;
+
+        const latlng = marker.getLatLng();
+        const isVisible = this.map.getBounds().contains(latlng);
+
+        if (isVisible) {
+            // Flash marker (already on screen)
+            this._flashMarker(marker);
+        } else {
+            // Pan to it then flash
+            this.map.setView(latlng, 16, { animate: true });
+            setTimeout(() => this._flashMarker(marker), 500);
+        }
+    },
+
+    _flashMarker(marker) {
+        const el = marker.getElement();
+        if (!el) return;
+        const wpIcon = el.querySelector('.waypoint-icon');
+        if (!wpIcon) return;
+        wpIcon.classList.remove('flash');
+        // Force reflow so the animation restarts
+        void wpIcon.offsetWidth;
+        wpIcon.classList.add('flash');
+        setTimeout(() => wpIcon.classList.remove('flash'), 1800);
+    },
+
+    /**
+     * Show/hide waypoints layer
+     */
+    toggleWaypoints(show) {
+        if (show) {
+            this.map.addLayer(this.layers.waypoints);
+        } else {
+            this.map.removeLayer(this.layers.waypoints);
+        }
+    },
+
+    /**
+     * Create operator icon
      */
     createSessionOperatorIcon(color, isSameLocationAsUas) {
         return L.divIcon({

@@ -32,3 +32,14 @@ web_interface:
   use_metric: true
   # Limit to prevent browser lag
   max_positions_per_query: 5000
+
+  # Custom waypoints displayed on the map
+  waypoints:
+    - name: "Demo Waypoint"
+      lat: 37.7749
+      lon: -122.4194
+      icon: "fa-map-pin"
+      color: "#e74c3c"
+      description: "Example waypoint for development"
+      enabled: true
+      category: "demo"

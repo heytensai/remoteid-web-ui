@@ -54,6 +54,7 @@ def get_config():
             "default_hours": CONFIG.default_hours,
             "sync_enabled": SYNC_MANAGER is not None,
             "drone_aliases": CONFIG.drone_aliases,
+            "waypoints": CONFIG.to_dict().get("waypoints", []),
             "use_metric": CONFIG.use_metric,
             "csrf_token": generate_csrf(),
         }
@@ -323,7 +324,7 @@ def _parse_time_range(args):
 
 
 def _watch_config():
-    """Background thread: periodically reload drone_aliases from the YAML config."""
+    """Background thread: periodically reload hot-reloadable config fields."""
     logger.info(
         "Config file watcher started for %s",
         os.path.abspath(CONFIG.config_path),
@@ -331,9 +332,9 @@ def _watch_config():
     while True:
         time.sleep(10)
         try:
-            CONFIG.reload_drone_aliases()
+            CONFIG.reload_hot_config()
         except Exception:  # pylint: disable=broad-exception-caught
-            logger.exception("Error reloading drone_aliases")
+            logger.exception("Error reloading hot config")
 
 
 def _init_app(config_path: str):

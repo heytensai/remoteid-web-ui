@@ -58,6 +58,9 @@ const UIController = {
             this._pendingSettings = null;
         }
 
+        // Populate waypoints dropdown and mobile list
+        this._populateWaypointsLists();
+
         // Clear any existing markers before loading data
         MapController.clearAllDroneMarkers();
         MapController.clearAllTracks();
@@ -122,7 +125,10 @@ const UIController = {
             showUnknownDrones: document.getElementById('showUnknownDrones'),
             startTimeMInput: document.getElementById('startTimeM'),
             endTimeMInput: document.getElementById('endTimeM'),
-            settingsTimePresets: document.querySelectorAll('.settings-time-presets button')
+            settingsTimePresets: document.querySelectorAll('.settings-time-presets button'),
+            waypointsBtn: document.getElementById('waypointsBtn'),
+            waypointsDropdown: document.getElementById('waypointsDropdown'),
+            waypointsList: document.getElementById('waypointsList')
         };
 
     },
@@ -248,6 +254,34 @@ const UIController = {
                 this.elements.sidebar.classList.remove('open');
             }
         });
+
+        // Waypoints dropdown toggle
+        this.elements.waypointsBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.elements.waypointsDropdown.classList.toggle('open');
+        });
+
+        // Close waypoints dropdown on outside click
+        document.addEventListener('click', (e) => {
+            if (!this.elements.waypointsDropdown) return;
+            if (!this.elements.waypointsDropdown.contains(e.target) &&
+                e.target !== this.elements.waypointsBtn &&
+                !this.elements.waypointsBtn.contains(e.target)) {
+                this.elements.waypointsDropdown.classList.remove('open');
+            }
+        });
+
+        // Waypoints dropdown item click (event delegation)
+        this.elements.waypointsList.addEventListener('click', (e) => {
+            const item = e.target.closest('.dropdown-item');
+            if (!item) return;
+            const name = item.dataset.wpName;
+            if (name) {
+                MapController.panToWaypoint(name);
+                this.elements.waypointsDropdown.classList.remove('open');
+            }
+        });
+
     },
 
     /**
@@ -332,6 +366,35 @@ const UIController = {
         } catch (e) {
             console.error('Failed to load config:', e);
         }
+    },
+
+    _populateWaypointsLists() {
+        const wpList = this.elements.waypointsList;
+        if (!wpList) return;
+
+        const waypoints = MapController.waypoints || [];
+        const enabled = waypoints.filter(wp => wp.enabled !== false);
+
+        if (enabled.length === 0) {
+            wpList.innerHTML = '<div class="dropdown-empty">No waypoints configured</div>';
+            return;
+        }
+
+        const esc = (v) => this.escapeHtml(v);
+        let html = '';
+        for (const wp of enabled) {
+            const icon = wp.icon || 'fa-map-pin';
+            const color = wp.color || '#007bff';
+            html += `
+                <div class="dropdown-item" data-wp-name="${esc(wp.name)}">
+                    <span class="dropdown-item-icon" style="color: ${color};">
+                        <i class="fas ${esc(icon)}"></i>
+                    </span>
+                    <span class="dropdown-item-name">${esc(wp.name)}</span>
+                </div>
+            `;
+        }
+        wpList.innerHTML = html;
     },
 
     _getStoredPreset() {

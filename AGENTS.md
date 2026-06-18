@@ -39,6 +39,7 @@
 - `use_metric` - Display units: true=metric (meters), false=imperial (feet)
 - `api_keys` - API keys for remote data submission
 - `drone_aliases` - Map UAS IDs to friendly names
+- `waypoints` - Custom map markers (name, lat, lon, icon, color, description, enabled, category)
 
 ## Code Style Guidelines
 

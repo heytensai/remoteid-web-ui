@@ -57,3 +57,15 @@ web_interface:
     # Example:
     # "12345": "Skydio X10"
     # "67890": "DJI Mavic 3"
+
+  # Custom waypoints displayed on the map
+  # These appear as static markers with popup info
+  waypoints:
+    # - name: "Launch Site A"
+    #   lat: 37.7749
+    #   lon: -122.4194
+    #   icon: "fa-rocket"        # Font Awesome icon class (default: fa-map-pin)
+    #   color: "#e74c3c"         # Marker color (default: #007bff)
+    #   description: "Primary launch and recovery zone"  # Popup text
+    #   enabled: true            # Show on map (default: true)
+    #   category: "operations"   # Grouping label (optional)

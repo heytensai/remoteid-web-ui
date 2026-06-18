@@ -23,10 +23,12 @@ class TestApiConfig:
         assert "default_hours" in data
         assert "sync_enabled" in data
         assert "drone_aliases" in data
+        assert "waypoints" in data
         assert "use_metric" in data
         assert "csrf_token" in data
         assert data["map"]["center_lat"] == 37.7749
         assert data["drone_aliases"]["drone-001"] == "Alpha"
+        assert data["waypoints"] == []
 
 
 class TestApiDrones:

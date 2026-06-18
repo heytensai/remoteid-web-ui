@@ -6,7 +6,7 @@ import tempfile
 import pytest
 import yaml
 
-from config import WebConfig, MapConfig, CollectorConfig
+from config import WebConfig, MapConfig, CollectorConfig, WaypointConfig
 
 
 def test_map_config_defaults():
@@ -125,6 +125,80 @@ def test_collector_config_remote():
     assert cc.host == "10.0.0.1"
 
 
+def test_waypoint_config_defaults():
+    wp = WaypointConfig(name="Test", lat=40.0, lon=-74.0)
+    assert wp.name == "Test"
+    assert wp.lat == 40.0
+    assert wp.lon == -74.0
+    assert wp.icon == "fa-map-pin"
+    assert wp.color == "#007bff"
+    assert wp.description == ""
+    assert wp.enabled is True
+    assert wp.category == ""
+
+
+def test_waypoint_config_all_fields():
+    wp = WaypointConfig(
+        name="Launch",
+        lat=37.0,
+        lon=-122.0,
+        icon="fa-rocket",
+        color="#e74c3c",
+        description="Launch pad",
+        enabled=False,
+        category="ops",
+    )
+    assert wp.icon == "fa-rocket"
+    assert wp.color == "#e74c3c"
+    assert wp.description == "Launch pad"
+    assert wp.enabled is False
+    assert wp.category == "ops"
+
+
+def test_waypoints_parsing():
+    with tempfile.TemporaryDirectory() as td:
+        config_data = {
+            "web_interface": {
+                "database_path": os.path.join(td, "web.db"),
+                "waypoints": [
+                    {
+                        "name": "WP1",
+                        "lat": 37.0,
+                        "lon": -122.0,
+                    },
+                    {
+                        "name": "WP2",
+                        "lat": 38.0,
+                        "lon": -123.0,
+                        "icon": "fa-flag",
+                        "color": "#00ff00",
+                        "description": "A waypoint",
+                        "enabled": False,
+                        "category": "test",
+                    },
+                ],
+            }
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.dump(config_data, f)
+            path = f.name
+        try:
+            cfg = WebConfig(path)
+            assert len(cfg.waypoints) == 2
+            assert cfg.waypoints[0].name == "WP1"
+            assert cfg.waypoints[0].lat == 37.0
+            assert cfg.waypoints[0].icon == "fa-map-pin"
+            assert cfg.waypoints[0].enabled is True
+            assert cfg.waypoints[1].name == "WP2"
+            assert cfg.waypoints[1].icon == "fa-flag"
+            assert cfg.waypoints[1].color == "#00ff00"
+            assert cfg.waypoints[1].description == "A waypoint"
+            assert cfg.waypoints[1].enabled is False
+            assert cfg.waypoints[1].category == "test"
+        finally:
+            os.unlink(path)
+
+
 def test_to_dict(sample_config_yaml):
     config_path, _ = sample_config_yaml
     cfg = WebConfig(config_path)
@@ -134,6 +208,46 @@ def test_to_dict(sample_config_yaml):
     assert d["map"]["center_lat"] == 37.7749
     assert d["use_metric"] is True
     assert len(d["collectors"]) == 0
+    assert d["waypoints"] == []
+
+
+def test_to_dict_with_waypoints():
+    with tempfile.TemporaryDirectory() as td:
+        config_data = {
+            "web_interface": {
+                "database_path": os.path.join(td, "web.db"),
+                "waypoints": [
+                    {
+                        "name": "WP1",
+                        "lat": 37.0,
+                        "lon": -122.0,
+                        "icon": "fa-flag",
+                        "color": "#ff0000",
+                        "description": "Test",
+                        "enabled": True,
+                        "category": "cat",
+                    }
+                ],
+            }
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.dump(config_data, f)
+            path = f.name
+        try:
+            cfg = WebConfig(path)
+            d = cfg.to_dict()
+            assert len(d["waypoints"]) == 1
+            wp = d["waypoints"][0]
+            assert wp["name"] == "WP1"
+            assert wp["lat"] == 37.0
+            assert wp["lon"] == -122.0
+            assert wp["icon"] == "fa-flag"
+            assert wp["color"] == "#ff0000"
+            assert wp["description"] == "Test"
+            assert wp["enabled"] is True
+            assert wp["category"] == "cat"
+        finally:
+            os.unlink(path)
 
 
 def test_default_hours_from_config():
@@ -227,6 +341,38 @@ class TestValidation:
     def test_invalid_database_path(self):
         path = _write_config({"database_path": "/nonexistent/subdir/web.db"})
         with pytest.raises(ValueError, match="database_path parent directory"):
+            WebConfig(path)
+
+    def test_waypoint_lat_out_of_range(self):
+        path = _write_config({
+            "database_path": "/tmp",
+            "waypoints": [{"name": "W", "lat": 100, "lon": 0}],
+        })
+        with pytest.raises(ValueError, match="waypoints.*lat.*between -90 and 90"):
+            WebConfig(path)
+
+    def test_waypoint_lon_out_of_range(self):
+        path = _write_config({
+            "database_path": "/tmp",
+            "waypoints": [{"name": "W", "lat": 0, "lon": -200}],
+        })
+        with pytest.raises(ValueError, match="waypoints.*lon.*between -180 and 180"):
+            WebConfig(path)
+
+    def test_waypoint_lat_not_a_number(self):
+        path = _write_config({
+            "database_path": "/tmp",
+            "waypoints": [{"name": "W", "lat": "abc", "lon": 0}],
+        })
+        with pytest.raises(ValueError, match="waypoints.*lat.*must be a number"):
+            WebConfig(path)
+
+    def test_waypoint_empty_name(self):
+        path = _write_config({
+            "database_path": "/tmp",
+            "waypoints": [{"name": "", "lat": 37, "lon": -122}],
+        })
+        with pytest.raises(ValueError, match="waypoints.*name.*must be a non-empty string"):
             WebConfig(path)
 
     def test_no_errors_for_valid_config(self):

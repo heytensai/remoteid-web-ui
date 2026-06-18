@@ -28,6 +28,20 @@ class MapConfig:
 
 
 @dataclass
+class WaypointConfig:
+    """Custom waypoint displayed on the map"""
+
+    name: str
+    lat: float
+    lon: float
+    icon: str = "fa-map-pin"
+    color: str = "#007bff"
+    description: str = ""
+    enabled: bool = True
+    category: str = ""
+
+
+@dataclass
 class CollectorConfig:
     """Collector configuration - can be remote (ssh) or local"""
 
@@ -48,6 +62,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
     max_positions_per_query: int = 5000
     map: MapConfig = field(default_factory=MapConfig)
     collectors: List[CollectorConfig] = field(default_factory=list)
+    waypoints: List[WaypointConfig] = field(default_factory=list)
     api_keys: dict = field(default_factory=dict)
     url_prefix: str = ""
     drone_aliases: dict = field(default_factory=dict)
@@ -92,6 +107,22 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                     name=collector_data["name"],
                     remote_db_path=collector_data["remote_db_path"],
                     host=collector_data.get("host"),  # Optional - None for local
+                )
+            )
+
+        # Waypoint configuration
+        self.waypoints = []
+        for wp_data in web_data.get("waypoints") or []:
+            self.waypoints.append(
+                WaypointConfig(
+                    name=wp_data["name"],
+                    lat=wp_data["lat"],
+                    lon=wp_data["lon"],
+                    icon=wp_data.get("icon", "fa-map-pin"),
+                    color=wp_data.get("color", "#007bff"),
+                    description=wp_data.get("description", ""),
+                    enabled=wp_data.get("enabled", True),
+                    category=wp_data.get("category", ""),
                 )
             )
 
@@ -140,6 +171,19 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
             elif not 1 <= self.map.default_zoom <= 20:
                 errors.append(f"map.default_zoom must be between 1 and 20, got {self.map.default_zoom}")
 
+        for i, wp in enumerate(self.waypoints):
+            prefix = f"waypoints[{i}] ({wp.name!r})"
+            if not wp.name or not isinstance(wp.name, str):
+                errors.append(f"{prefix}.name must be a non-empty string")
+            if not isinstance(wp.lat, (int, float)):
+                errors.append(f"{prefix}.lat must be a number, got {wp.lat!r}")
+            elif not -90 <= wp.lat <= 90:
+                errors.append(f"{prefix}.lat must be between -90 and 90, got {wp.lat}")
+            if not isinstance(wp.lon, (int, float)):
+                errors.append(f"{prefix}.lon must be a number, got {wp.lon!r}")
+            elif not -180 <= wp.lon <= 180:
+                errors.append(f"{prefix}.lon must be between -180 and 180, got {wp.lon}")
+
         for collector in self.collectors:
             if collector.host is None:
                 db_dir = os.path.dirname(collector.remote_db_path)
@@ -179,18 +223,54 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 {"name": c.name, "host": c.host, "remote_db_path": c.remote_db_path}
                 for c in self.collectors
             ],
+            "waypoints": [
+                {
+                    "name": w.name,
+                    "lat": w.lat,
+                    "lon": w.lon,
+                    "icon": w.icon,
+                    "color": w.color,
+                    "description": w.description,
+                    "enabled": w.enabled,
+                    "category": w.category,
+                }
+                for w in self.waypoints
+            ],
             "use_metric": self.use_metric,
         }
 
-    def reload_drone_aliases(self):
-        """Re-read config file and update drone_aliases from disk"""
+    def reload_hot_config(self):
+        """Re-read config file and update hot-reloadable fields (drone_aliases, waypoints)"""
         try:
             with open(self.config_path, encoding="utf-8") as fh:
                 data = yaml.safe_load(fh)
             web_data = data.get("web_interface", {})
+
+            # Reload drone aliases
             new_aliases = web_data.get("drone_aliases") or {}
             if new_aliases != self.drone_aliases:
                 self.drone_aliases = new_aliases
                 logger.info("Reloaded drone_aliases from %s", self.config_path)
+
+            # Reload waypoints
+            new_waypoints = []
+            for wp_data in web_data.get("waypoints") or []:
+                new_waypoints.append(
+                    WaypointConfig(
+                        name=wp_data["name"],
+                        lat=wp_data["lat"],
+                        lon=wp_data["lon"],
+                        icon=wp_data.get("icon", "fa-map-pin"),
+                        color=wp_data.get("color", "#007bff"),
+                        description=wp_data.get("description", ""),
+                        enabled=wp_data.get("enabled", True),
+                        category=wp_data.get("category", ""),
+                    )
+                )
+            old_dict = {w.name: w for w in self.waypoints}
+            new_dict = {w.name: w for w in new_waypoints}
+            if old_dict != new_dict:
+                self.waypoints = new_waypoints
+                logger.info("Reloaded waypoints from %s", self.config_path)
         except Exception:  # pylint: disable=broad-exception-caught
-            logger.exception("Failed to reload drone_aliases from %s", self.config_path)
+            logger.exception("Failed to reload hot config from %s", self.config_path)
