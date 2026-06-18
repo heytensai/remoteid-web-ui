@@ -55,6 +55,14 @@ const UIController = {
             if (this._pendingSettings.trackOpacity !== undefined) {
                 MapController.setTrackOpacity(this._pendingSettings.trackOpacity);
             }
+            if (this._pendingSettings.darkMode !== undefined) {
+                document.body.classList.toggle('dark-mode', this._pendingSettings.darkMode);
+                if (this._pendingSettings.darkMode) {
+                    MapController.setTileProvider('carto-dark');
+                } else {
+                    MapController.setTileProvider('osm');
+                }
+            }
             this._pendingSettings = null;
         }
 
@@ -123,6 +131,7 @@ const UIController = {
             opacityValue: document.getElementById('opacityValue'),
             showKnownDrones: document.getElementById('showKnownDrones'),
             showUnknownDrones: document.getElementById('showUnknownDrones'),
+            darkModeCheckbox: document.getElementById('darkMode'),
             startTimeMInput: document.getElementById('startTimeM'),
             endTimeMInput: document.getElementById('endTimeM'),
             settingsTimePresets: document.querySelectorAll('.settings-time-presets button'),
@@ -243,6 +252,12 @@ const UIController = {
         this.elements.showUnknownDrones.addEventListener('change', (e) => {
             this.showUnknownDrones = e.target.checked;
             this.refreshData();
+            this._saveSettings();
+        });
+
+        // Dark mode toggle
+        this.elements.darkModeCheckbox.addEventListener('change', (e) => {
+            this._toggleDarkMode(e.target.checked);
             this._saveSettings();
         });
 
@@ -422,6 +437,15 @@ const UIController = {
         }
     },
 
+    _toggleDarkMode(enabled) {
+        document.body.classList.toggle('dark-mode', enabled);
+        if (enabled) {
+            MapController.setTileProvider('carto-dark');
+        } else {
+            MapController.setTileProvider('osm');
+        }
+    },
+
     _saveSettings() {
         try {
             const settings = {
@@ -430,6 +454,7 @@ const UIController = {
                 trackOpacity: parseInt(this.elements.trackOpacitySlider.value, 10),
                 showKnownDrones: this.elements.showKnownDrones.checked,
                 showUnknownDrones: this.elements.showUnknownDrones.checked,
+                darkMode: this.elements.darkModeCheckbox.checked,
             };
             localStorage.setItem('remoteid_settings', JSON.stringify(settings));
         } catch {
@@ -463,6 +488,10 @@ const UIController = {
                 this.elements.showUnknownDrones.checked = saved.showUnknownDrones;
                 this.showUnknownDrones = saved.showUnknownDrones;
             }
+            if (saved.darkMode !== undefined) {
+                this.elements.darkModeCheckbox.checked = saved.darkMode;
+                // Defer tile switching to pending settings (needs MapController)
+            }
 
             // Defer MapController-applied settings until after map is ready
             this._pendingSettings = {};
@@ -474,6 +503,9 @@ const UIController = {
             }
             if (saved.trackOpacity !== undefined) {
                 this._pendingSettings.trackOpacity = saved.trackOpacity;
+            }
+            if (saved.darkMode !== undefined) {
+                this._pendingSettings.darkMode = saved.darkMode;
             }
         } catch {
             // ignore

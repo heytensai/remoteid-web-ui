@@ -20,6 +20,7 @@ const MapController = {
     waypoints: [],
     waypointMarkers: {},
     loadedTrackSessions: new Set(),
+    tileLayer: null,
     ready: false,
 
     escapeHtml(str) {
@@ -109,10 +110,23 @@ const MapController = {
                 break;
         }
 
-        L.tileLayer(tileUrl, {
+        this.tileLayer = L.tileLayer(tileUrl, {
             attribution: attribution,
             maxZoom: 19
         }).addTo(this.map);
+    },
+
+    /**
+     * Switch tile provider (e.g. from light to dark tiles)
+     */
+    setTileProvider(provider) {
+        if (this.tileLayer) {
+            this.map.removeLayer(this.tileLayer);
+        }
+        const prevProvider = this.config.tile_provider;
+        this.config.tile_provider = provider;
+        this._addTileLayer();
+        this.config.tile_provider = prevProvider;
     },
 
     /**
