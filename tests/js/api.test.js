@@ -108,6 +108,14 @@ describe('API', () => {
       const url = fetch.mock.calls[0][0];
       expect(url).toContain('/api/tracks/d-1');
     });
+
+    test('includes session_id param when provided', async () => {
+      global.fetch = mockFetch({ uas_id: 'd1', sessions: [] });
+
+      await API.getTrack('d1', null, null, true, 'session-123');
+      const url = fetch.mock.calls[0][0];
+      expect(url).toContain('session_id=session-123');
+    });
   });
 
   describe('_post', () => {

@@ -109,6 +109,18 @@ class TestApiTracks:
         data = resp.get_json()
         assert "track" in data or "sessions" in data
 
+    def test_get_track_by_session_id(self, client, db):
+        """Server-side session filtering returns only the requested session."""
+        resp = client.get("/api/tracks/drone-001?sessions=true")
+        all_sessions = resp.get_json()["sessions"]
+        assert len(all_sessions) >= 1
+        target_id = all_sessions[0]["session_id"]
+
+        resp2 = client.get(f"/api/tracks/drone-001?sessions=true&session_id={target_id}")
+        filtered = resp2.get_json()["sessions"]
+        assert len(filtered) == 1
+        assert filtered[0]["session_id"] == target_id
+
 
 class TestApiOperators:
     def test_get_operators(self, client, db):

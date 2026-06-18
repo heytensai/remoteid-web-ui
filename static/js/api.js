@@ -44,17 +44,19 @@ const API = {
     },
 
     /**
-     * Get track for specific drone
+     * Get track data for a drone
      * @param {string} uasId - UAS ID
      * @param {Date} start - Start time
      * @param {Date} end - End time
      * @param {boolean} groupBySessions - If true, returns tracks grouped by session
+     * @param {string} [sessionId] - Optional session ID to filter to a single session
      */
-    async getTrack(uasId, start, end, groupBySessions = true) {
+    async getTrack(uasId, start, end, groupBySessions = true, sessionId) {
         const params = new URLSearchParams();
         if (start) params.append('start', start.toISOString());
         if (end) params.append('end', end.toISOString());
         if (groupBySessions) params.append('sessions', 'true');
+        if (sessionId) params.append('session_id', sessionId);
         return this._get(`/api/tracks/${encodeURIComponent(uasId)}?${params}`);
     },
 

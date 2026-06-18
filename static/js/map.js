@@ -19,6 +19,7 @@ const MapController = {
     droneAliases: {},
     waypoints: [],
     waypointMarkers: {},
+    loadedTrackSessions: new Set(),
     ready: false,
 
     escapeHtml(str) {
@@ -616,9 +617,16 @@ const MapController = {
         // Also clear session operators for this specific session if sessionKey provided
         if (sessionKey) {
             this._clearSessionOperatorsByKey(sessionKey);
+            this.loadedTrackSessions.delete(sessionKey);
         } else {
             // Clear all session operators for this UAS
             this._clearSessionOperators(uasId);
+            // Clear all cached sessions for this UAS
+            for (const key of this.loadedTrackSessions) {
+                if (key.startsWith(`${uasId}:`)) {
+                    this.loadedTrackSessions.delete(key);
+                }
+            }
         }
     },
 
@@ -626,14 +634,20 @@ const MapController = {
      * Load and draw a single drone track (with session support)
      */
     async loadTrack(uasId, start, end) {
+        // Clear cached sessions for this UAS before re-loading
+        for (const key of this.loadedTrackSessions) {
+            if (key.startsWith(`${uasId}:`)) {
+                this.loadedTrackSessions.delete(key);
+            }
+        }
         try {
             const response = await API.getTrack(uasId, start, end, true);
             if (response.sessions && response.sessions.length > 0) {
                 const color = this.getDroneColor(uasId);
-                // Draw each session separately
                 for (const session of response.sessions) {
                     if (session.positions && session.positions.length > 1) {
                         this._drawTrackSegment(uasId, session.session_id, session.positions, color);
+                        this.loadedTrackSessions.add(`${uasId}:${session.session_id}`);
                     }
                 }
             } else if (response.track && response.track.length > 1) {
@@ -647,20 +661,22 @@ const MapController = {
     },
 
     /**
-     * Load and draw a specific session track
+     * Load and draw a specific session track, with client-side cache
      */
     async loadTrackSession(uasId, sessionId, start, end) {
         if (!this.ready) return;
 
+        const sessionKey = `${uasId}:${sessionId}`;
+        if (this.loadedTrackSessions.has(sessionKey)) return;
+
         try {
-            const response = await API.getTrack(uasId, start, end, true);
+            const response = await API.getTrack(uasId, start, end, true, sessionId);
             if (response.sessions && response.sessions.length > 0) {
-                const color = this.getDroneColor(uasId);
-                // Find the specific session
-                const session = response.sessions.find(s => s.session_id === sessionId);
-                if (session && session.positions && session.positions.length > 1) {
-                    // Draw just this session
+                const session = response.sessions[0];
+                if (session.positions && session.positions.length > 1) {
+                    const color = this.getDroneColor(uasId);
                     this._drawTrackSegment(uasId, sessionId, session.positions, color);
+                    this.loadedTrackSessions.add(sessionKey);
                 }
             }
         } catch (e) {
@@ -676,8 +692,9 @@ const MapController = {
         this.layers.tracks.clearLayers();
         this.tracks = {};
 
-        // Clear all session operators
+        // Clear all session operators and track cache
         this._clearAllSessionOperators();
+        this.loadedTrackSessions.clear();
 
         // Fetch and draw tracks for each drone in parallel
         await Promise.all(uasIds.map(async uasId => {
@@ -689,6 +706,7 @@ const MapController = {
                     for (const session of response.sessions) {
                         if (session.positions && session.positions.length > 1) {
                             this._drawTrackSegment(uasId, session.session_id, session.positions, color);
+                            this.loadedTrackSessions.add(`${uasId}:${session.session_id}`);
                         }
                     }
                 } else if (response.track && response.track.length > 1) {

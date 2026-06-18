@@ -144,13 +144,17 @@ def get_track(uas_id):
         start: start time
         end: end time
         sessions: if "true", return tracks grouped by session (default: false)
+        session_id: optional session id to filter to a single session (requires sessions=true)
     """
     try:
         start, end = _parse_time_range(request.args)
         group_by_session = request.args.get("sessions", "false").lower() == "true"
+        session_id = request.args.get("session_id")
 
         if group_by_session:
             sessions = DATABASE.get_track_sessions(uas_id, start, end)
+            if session_id:
+                sessions = [s for s in sessions if s["session_id"] == session_id]
             return jsonify({"uas_id": uas_id, "sessions": sessions})
         track = DATABASE.get_track(uas_id, start, end)
         return jsonify({"uas_id": uas_id, "track": track})
