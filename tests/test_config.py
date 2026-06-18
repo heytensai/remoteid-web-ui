@@ -83,6 +83,7 @@ def test_web_config_full():
                 "drone_aliases": {"abc": "Drone-ABC"},
                 "alerts": {
                     "stale_timeout": 600,
+                    "skip_known_drones": True,
                 },
             }
         }
@@ -108,6 +109,7 @@ def test_web_config_full():
             assert cfg.api_keys == {"key1": "source1"}
             assert cfg.drone_aliases == {"abc": "Drone-ABC"}
             assert cfg.alerts.stale_timeout == 600
+            assert cfg.alerts.skip_known_drones is True
         finally:
             os.unlink(path)
 
@@ -342,6 +344,7 @@ def test_to_dict_with_alert_enabled():
                 ],
                 "alerts": {
                     "stale_timeout": 600,
+                    "skip_known_drones": True,
                 },
             }
         }
@@ -353,7 +356,9 @@ def test_to_dict_with_alert_enabled():
             d = cfg.to_dict()
             assert d["waypoints"][0]["alert_enabled"] is True
             assert d["alerts"]["stale_timeout"] == 600
+            assert d["alerts"]["skip_known_drones"] is True
             assert cfg.alerts.stale_timeout == 600
+            assert cfg.alerts.skip_known_drones is True
         finally:
             os.unlink(path)
 

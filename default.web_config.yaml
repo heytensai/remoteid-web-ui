@@ -122,3 +122,6 @@ web_interface:
     # as "timed out" and the drone marker reverts to a stop icon
     # (hot-reloadable)
     stale_timeout: 300
+    # Skip geozone alerts for drones that have an alias configured in
+    # drone_aliases (hot-reloadable)
+    skip_known_drones: false

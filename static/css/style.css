@@ -1473,45 +1473,12 @@ body.dark-mode .flatpickr-time .flatpickr-time-separator {
 }
 
 /* Sidebar toolbar */
-.sidebar-toolbar {
-    padding: 0 8px 8px;
-    display: flex;
-    gap: 6px;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
-}
-
-body.dark-mode .sidebar-toolbar {
-    border-bottom-color: rgba(255, 255, 255, 0.08);
-}
-
-/* Geozone alert filter button */
-.alert-filter-btn {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    background: rgba(231, 76, 60, 0.08);
-    border: 1px solid rgba(231, 76, 60, 0.2);
-    color: #c0392b;
-    padding: 4px 10px;
-    border-radius: 6px;
-    font-size: 12px;
-    cursor: pointer;
-    transition: all 0.15s;
-}
-
-.alert-filter-btn:hover {
-    background: rgba(231, 76, 60, 0.15);
-}
-
-.alert-filter-btn.active {
-    background: rgba(231, 76, 60, 0.2);
-    border-color: #e74c3c;
-}
-
-.alert-filter-count {
+/* Geozone alert count badge in settings */
+.geozone-alert-count {
+    color: #e74c3c;
     font-weight: 600;
-    min-width: 14px;
-    text-align: center;
+    margin-left: auto;
+    font-size: 12px;
 }
 
 /* Alert icon in drone list */

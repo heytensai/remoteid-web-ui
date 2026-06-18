@@ -77,3 +77,4 @@ web_interface:
 
   alerts:
     stale_timeout: 300
+    skip_known_drones: false

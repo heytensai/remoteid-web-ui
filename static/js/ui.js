@@ -302,9 +302,8 @@ const UIController = {
         });
 
         // Geozone alert filter toggle
-        this.elements.geozoneAlertFilter.addEventListener('click', () => {
-            this.showGeozoneAlerts = !this.showGeozoneAlerts;
-            this.elements.geozoneAlertFilter.classList.toggle('active');
+        this.elements.geozoneAlertFilter.addEventListener('change', () => {
+            this.showGeozoneAlerts = this.elements.geozoneAlertFilter.checked;
             this.refreshData();
         });
 

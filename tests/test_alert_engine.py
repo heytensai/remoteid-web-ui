@@ -54,16 +54,24 @@ def test_point_in_rectangle_boundary():
 def test_alerts_config_defaults():
     ac = AlertsConfig()
     assert ac.stale_timeout == 300
+    assert ac.skip_known_drones is False
 
 
 def test_alerts_config_from_dict():
     ac = AlertsConfig({"stale_timeout": 600})
     assert ac.stale_timeout == 600
+    assert ac.skip_known_drones is False
 
 
 def test_alerts_config_empty_dict():
     ac = AlertsConfig({})
     assert ac.stale_timeout == 300
+    assert ac.skip_known_drones is False
+
+
+def test_alerts_config_skip_known():
+    ac = AlertsConfig({"stale_timeout": 600, "skip_known_drones": True})
+    assert ac.skip_known_drones is True
 
 
 # --- AlertEngine tests ---
@@ -296,6 +304,38 @@ def test_reload_config(engine):
         wp.alert_enabled = False
     alert_engine.reload_config(config)
     assert len(alert_engine._geozones) == 0
+
+
+def test_skip_known_drones_skips_aliased(engine):
+    """Known (aliased) drones should be skipped when skip_known_drones is enabled"""
+    alert_engine, db, config = engine
+    config.drone_aliases["drone-001"] = "Alpha"
+    config.alerts.skip_known_drones = True
+    now = datetime.now(timezone.utc)
+    alert_engine.evaluate("drone-001", [{"latitude": 37.78, "longitude": -122.42, "timestamp": now}])
+    events = db.get_active_geozone_events()
+    assert len(events) == 0
+
+
+def test_skip_known_drones_allows_unknown(engine):
+    """Unknown drones should still trigger alerts when skip_known_drones is enabled"""
+    alert_engine, db, config = engine
+    config.alerts.skip_known_drones = True
+    now = datetime.now(timezone.utc)
+    alert_engine.evaluate("unknown-drone", [{"latitude": 37.78, "longitude": -122.42, "timestamp": now}])
+    events = db.get_active_geozone_events()
+    assert len(events) == 1
+
+
+def test_skip_known_drones_false_processes_all(engine):
+    """When skip_known_drones is False, aliased drones still trigger alerts"""
+    alert_engine, db, config = engine
+    config.drone_aliases["drone-001"] = "Alpha"
+    config.alerts.skip_known_drones = False
+    now = datetime.now(timezone.utc)
+    alert_engine.evaluate("drone-001", [{"latitude": 37.78, "longitude": -122.42, "timestamp": now}])
+    events = db.get_active_geozone_events()
+    assert len(events) == 1
 
 
 def test_evaluate_string_timestamp(engine):

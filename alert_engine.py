@@ -86,6 +86,9 @@ class AlertEngine:
         if not self._geozones:
             return
 
+        if self._config.alerts.skip_known_drones and uas_id in self._config.drone_aliases:
+            return
+
         for pos in positions:
             lat = pos.get("latitude")
             lon = pos.get("longitude")

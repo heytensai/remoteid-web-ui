@@ -84,10 +84,12 @@ class AlertsConfig:
     """Geozone alerting configuration"""
 
     stale_timeout: int = 300  # seconds without position before marking as left
+    skip_known_drones: bool = False  # skip alerts for drones with aliases
 
     def __init__(self, data: dict = None):
         if data:
             self.stale_timeout = data.get("stale_timeout", 300)
+            self.skip_known_drones = data.get("skip_known_drones", False)
 
 
 @dataclass
@@ -343,6 +345,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
             "use_metric": self.use_metric,
             "alerts": {
                 "stale_timeout": self.alerts.stale_timeout,
+                "skip_known_drones": self.alerts.skip_known_drones,
             },
         }
 
@@ -421,11 +424,13 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
             # Reload alerts config
             alerts_data = web_data.get("alerts") or {}
             new_alerts = AlertsConfig(alerts_data)
-            if new_alerts.stale_timeout != self.alerts.stale_timeout:
+            if (new_alerts.stale_timeout != self.alerts.stale_timeout
+                    or new_alerts.skip_known_drones != self.alerts.skip_known_drones):
                 self.alerts = new_alerts
                 logger.info(
-                    "Reloaded alerts from %s (stale_timeout=%s)",
+                    "Reloaded alerts from %s (stale_timeout=%s, skip_known_drones=%s)",
                     self.config_path, new_alerts.stale_timeout,
+                    new_alerts.skip_known_drones,
                 )
         except Exception:  # pylint: disable=broad-exception-caught
             logger.exception("Failed to reload hot config from %s", self.config_path)
