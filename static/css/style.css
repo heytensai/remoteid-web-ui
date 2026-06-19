@@ -2024,6 +2024,29 @@ body.dark-mode .alert-log-date {
     background: #0056b3;
 }
 
+.alert-log-export-btn {
+    padding: 6px 14px;
+    background: #28a745;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    white-space: nowrap;
+}
+
+.alert-log-export-btn:hover {
+    background: #1e7e34;
+}
+
+body.dark-mode .alert-log-export-btn {
+    background: #2d8a47;
+}
+
+body.dark-mode .alert-log-export-btn:hover {
+    background: #236b38;
+}
+
 .alert-log-summary {
     font-size: 0.8rem;
     color: #6c757d;

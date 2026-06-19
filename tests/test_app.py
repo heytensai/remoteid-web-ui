@@ -556,6 +556,66 @@ class TestExport:
         assert "</kml>" in body
 
 
+class TestAlertExport:
+    def test_export_alert_csv_empty(self, client):
+        resp = client.get("/api/alerts/export/csv")
+        assert resp.status_code == 200
+        assert resp.mimetype == "text/csv"
+        assert "alert_events.csv" in resp.headers["Content-Disposition"]
+        body = resp.get_data(as_text=True)
+        assert "uas_id,geozone_name" in body
+        lines = body.strip().split("\n")
+        assert len(lines) == 1  # header only
+
+    def test_export_alert_csv_with_data(self, client, app):
+        import app as _app_module
+        db = _app_module.DATABASE
+        now = datetime.now()
+        db.enter_geozone("drone-001", "ZoneA", now)
+        events = db.get_active_geozone_events()
+        assert len(events) == 1
+        db.update_geozone_last_seen(events[0]["id"], now + timedelta(seconds=30))
+        resp = client.get("/api/alerts/export/csv")
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        lines = body.strip().split("\n")
+        assert len(lines) == 2  # header + 1 data row
+        assert "drone-001" in lines[1]
+        assert "ZoneA" in lines[1]
+
+    def test_export_alert_csv_with_exited(self, client, app):
+        import app as _app_module
+        db = _app_module.DATABASE
+        now = datetime.now()
+        db.enter_geozone("drone-001", "ZoneA", now)
+        events = db.get_active_geozone_events()
+        assert len(events) == 1
+        db.exit_geozone(events[0]["id"], now + timedelta(minutes=5), "left")
+        resp = client.get("/api/alerts/export/csv")
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        lines = body.strip().split("\n")
+        assert len(lines) == 2
+        assert "left" in lines[1]
+        # duration should be ~300 seconds
+        parts = lines[1].split(",")
+        duration_str = parts[6]  # duration_seconds column
+        assert duration_str and int(float(duration_str)) >= 295
+
+    def test_export_alert_csv_filter_uas(self, client, app):
+        import app as _app_module
+        db = _app_module.DATABASE
+        now = datetime.now()
+        db.enter_geozone("drone-001", "ZoneA", now)
+        db.enter_geozone("drone-002", "ZoneB", now)
+        resp = client.get("/api/alerts/export/csv?uas_id=drone-001")
+        body = resp.get_data(as_text=True)
+        lines = body.strip().split("\n")
+        assert len(lines) == 2
+        assert "drone-001" in lines[1]
+        assert "drone-002" not in body
+
+
 class TestCSRF:
     def test_csrf_on_post(self, client):
         with client.application.app_context():

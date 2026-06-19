@@ -163,6 +163,7 @@ const UIController = {
             alertLogGeozoneFilter: document.getElementById('alertLogGeozoneFilter'),
             alertLogFromDate: document.getElementById('alertLogFromDate'),
             alertLogToDate: document.getElementById('alertLogToDate'),
+            alertLogExportBtn: document.getElementById('alertLogExportBtn'),
             statDrones: document.getElementById('statDrones'),
             statSessions: document.getElementById('statSessions'),
             statPositions: document.getElementById('statPositions'),
@@ -394,6 +395,10 @@ const UIController = {
                 this.alertLogPage++;
                 this._loadAlertLog();
             }
+        });
+
+        this.elements.alertLogExportBtn.addEventListener('click', () => {
+            this._exportAlertLog();
         });
 
         // Enter key in filter inputs triggers search
@@ -787,6 +792,25 @@ const UIController = {
         if (this.elements.alertLogNext) {
             this.elements.alertLogNext.disabled = currentPage >= totalPages;
         }
+    },
+
+    /**
+     * Export alert log as CSV with current filters
+     */
+    _exportAlertLog() {
+        const params = new URLSearchParams();
+        const uasVal = this.elements.alertLogUasFilter.value.trim();
+        if (uasVal) params.set('uas_id', uasVal);
+        const geoVal = this.elements.alertLogGeozoneFilter.value.trim();
+        if (geoVal) params.set('geozone_name', geoVal);
+        if (this._alertLogFromFp && this._alertLogFromFp.selectedDates.length > 0) {
+            params.set('from', this._alertLogFromFp.selectedDates[0].toISOString());
+        }
+        if (this._alertLogToFp && this._alertLogToFp.selectedDates.length > 0) {
+            params.set('to', this._alertLogToFp.selectedDates[0].toISOString());
+        }
+        const url = `/api/alerts/export/csv?${params.toString()}`;
+        window.open(url, '_blank');
     },
 
     /**

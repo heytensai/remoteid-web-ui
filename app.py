@@ -541,6 +541,78 @@ def get_alert_history():
         return jsonify({"error": "Internal server error"}), 500
 
 
+def _export_alert_csv(events):
+    """Generate CSV export from geozone event data"""
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "uas_id", "geozone_name", "entered_at", "last_seen_at",
+        "exited_at", "exited_reason", "duration_seconds"
+    ])
+
+    for ev in events:
+        entered = ev.get("entered_at")
+        last_seen = ev.get("last_seen_at")
+        exited = ev.get("exited_at")
+        duration = None
+        if entered:
+            end = exited or datetime.now()
+            if hasattr(entered, "timestamp"):
+                duration = int(end.timestamp() - entered.timestamp())
+
+        def fmt_dt(val):
+            if val and hasattr(val, "isoformat"):
+                return val.isoformat()
+            return str(val) if val else ""
+
+        writer.writerow([
+            ev.get("uas_id", ""),
+            ev.get("geozone_name", ""),
+            fmt_dt(entered),
+            fmt_dt(last_seen),
+            fmt_dt(exited),
+            ev.get("exited_reason", "") or "",
+            duration if duration is not None else "",
+        ])
+
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=alert_events.csv"},
+    )
+
+
+@app.route("/api/alerts/export/csv", methods=["GET"])
+def export_alert_csv():
+    """Export geozone alert history as CSV."""
+    try:
+        uas_id = request.args.get("uas_id") or None
+        geozone_name = request.args.get("geozone_name") or None
+
+        from_str = request.args.get("from")
+        to_str = request.args.get("to")
+        from_date = None
+        to_date = None
+        if from_str:
+            from_date = datetime.fromisoformat(from_str.replace("Z", "+00:00"))
+        if to_str:
+            to_date = datetime.fromisoformat(to_str.replace("Z", "+00:00"))
+
+        events, _ = DATABASE.get_geozone_event_history(
+            uas_id=uas_id,
+            geozone_name=geozone_name,
+            from_date=from_date,
+            to_date=to_date,
+            limit=1000000,
+            offset=0,
+        )
+
+        return _export_alert_csv(events)
+    except (ValueError, TypeError, sqlite3.Error):
+        logger.exception("Error exporting alert CSV")
+        return jsonify({"error": "Internal server error"}), 500
+
+
 @app.route("/api/stats", methods=["GET"])
 def get_stats():
     """Get aggregate statistics for the current time window."""
