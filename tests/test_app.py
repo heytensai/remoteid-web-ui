@@ -21,7 +21,6 @@ class TestApiConfig:
         data = resp.get_json()
         assert "map" in data
         assert "default_hours" in data
-        assert "sync_enabled" in data
         assert "drone_aliases" in data
         assert "manufacturer_prefixes" in data
         assert data["manufacturer_prefixes"] == {}
@@ -339,30 +338,12 @@ class TestApiBounds:
         assert data["bounds"] is None
 
 
-class TestApiSync:
-    def test_get_sync_status(self, client):
-        resp = client.get("/api/sync/status")
+class TestApiSources:
+    def test_get_sources(self, client):
+        resp = client.get("/api/sources")
         assert resp.status_code == 200
         data = resp.get_json()
-        assert "enabled" in data
-
-    def test_get_collectors_status(self, client):
-        resp = client.get("/api/sync/collectors")
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert "collectors" in data
-
-    def test_trigger_sync_no_collectors(self, client):
-        resp = client.post("/api/sync")
-        assert resp.status_code == 400
-
-    def test_sync_status_post_no_collectors(self, client):
-        resp = client.post(
-            "/api/sync/status",
-            data=json.dumps({"enabled": True}),
-            content_type="application/json",
-        )
-        assert resp.status_code == 400
+        assert "sources" in data
 
 
 class TestApiSubmit:
@@ -730,17 +711,6 @@ class TestAlertExport:
 
 
 class TestCSRF:
-    def test_csrf_on_post(self, client):
-        with client.application.app_context():
-            from flask_wtf.csrf import generate_csrf
-            token = generate_csrf()
-
-        resp = client.post(
-            "/api/sync",
-            headers={"X-CSRFToken": token},
-        )
-        assert resp.status_code in (200, 400)
-
     def test_csrf_present_in_config(self, client):
         resp = client.get("/api/config")
         data = resp.get_json()

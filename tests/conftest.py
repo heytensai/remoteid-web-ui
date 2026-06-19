@@ -27,7 +27,6 @@ def sample_config_yaml():
             "host": "127.0.0.1",
             "port": 5001,
             "database_path": db_path,
-            "sync_interval": 9999,
             "default_hours": 24,
             "max_positions_per_query": 5000,
             "map": {
@@ -36,7 +35,6 @@ def sample_config_yaml():
                 "default_zoom": 11,
                 "tile_provider": "osm",
             },
-            "collectors": [],
             "api_keys": {SAMPLE_API_KEY: "test-source"},
             "drone_aliases": {"drone-001": "Alpha", "drone-002": "Bravo"},
             "use_metric": True,
@@ -63,16 +61,11 @@ def app(sample_config_yaml):
     app.config["WTF_CSRF_ENABLED"] = False
     app.config["SERVER_NAME"] = "localhost"
 
-    if _app_module.SYNC_MANAGER:
-        _app_module.SYNC_MANAGER.stop()
-
     if _app_module.SESSION_SCHEDULER:
         _app_module.SESSION_SCHEDULER.stop()
 
     yield app
 
-    if _app_module.SYNC_MANAGER:
-        _app_module.SYNC_MANAGER.stop()
     if _app_module.SESSION_SCHEDULER:
         _app_module.SESSION_SCHEDULER.stop()
 

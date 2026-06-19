@@ -6,7 +6,7 @@ import tempfile
 import pytest
 import yaml
 
-from config import WebConfig, MapConfig, CollectorConfig, WaypointConfig
+from config import WebConfig, MapConfig, WaypointConfig
 
 
 def test_map_config_defaults():
@@ -41,13 +41,11 @@ def test_web_config_defaults():
         assert cfg.host == "0.0.0.0"
         assert cfg.port == 5000
         assert cfg.database_path == "./web.db"
-        assert cfg.sync_interval == 30
         assert cfg.default_hours == 24
         assert cfg.max_positions_per_query == 5000
         assert cfg.use_metric is True
         assert cfg.url_prefix == ""
         assert cfg.map.tile_provider == "osm"
-        assert cfg.collectors == []
         assert cfg.api_keys == {}
         assert cfg.drone_aliases == {}
     finally:
@@ -56,15 +54,12 @@ def test_web_config_defaults():
 
 def test_web_config_full():
     with tempfile.TemporaryDirectory() as td:
-        local_db_dir = os.path.join(td, "collector_data")
-        os.makedirs(local_db_dir, exist_ok=True)
 
         config_data = {
             "web_interface": {
                 "host": "0.0.0.0",
                 "port": 8080,
                 "database_path": os.path.join(td, "web.db"),
-                "sync_interval": 60,
                 "default_hours": 12,
                 "max_positions_per_query": 1000,
                 "use_metric": False,
@@ -75,10 +70,6 @@ def test_web_config_full():
                     "default_zoom": 12,
                     "tile_provider": "carto-light",
                 },
-                "collectors": [
-                    {"name": "c1", "remote_db_path": os.path.join(local_db_dir, "c1.db")},
-                    {"name": "c2", "remote_db_path": "/remote/c2.db", "host": "10.0.0.1"},
-                ],
                 "api_keys": {"key1": "source1"},
                 "drone_aliases": {"abc": "Drone-ABC"},
                 "alerts": {
@@ -95,17 +86,12 @@ def test_web_config_full():
             assert cfg.host == "0.0.0.0"
             assert cfg.port == 8080
             assert cfg.database_path == os.path.join(td, "web.db")
-            assert cfg.sync_interval == 60
             assert cfg.default_hours == 12
             assert cfg.max_positions_per_query == 1000
             assert cfg.use_metric is False
             assert cfg.url_prefix == "/rid"
             assert cfg.map.center_lat == 51.5
             assert cfg.map.tile_provider == "carto-light"
-            assert len(cfg.collectors) == 2
-            assert cfg.collectors[0].name == "c1"
-            assert cfg.collectors[0].host is None
-            assert cfg.collectors[1].host == "10.0.0.1"
             assert cfg.api_keys == {"key1": "source1"}
             assert cfg.drone_aliases == {"abc": "Drone-ABC"}
             assert cfg.alerts.stale_timeout == 600
@@ -117,18 +103,6 @@ def test_web_config_full():
 def test_web_config_missing_file():
     with pytest.raises(FileNotFoundError):
         WebConfig("/nonexistent/config.yaml")
-
-
-def test_collector_config():
-    cc = CollectorConfig(name="test", remote_db_path="/path/to/db")
-    assert cc.name == "test"
-    assert cc.remote_db_path == "/path/to/db"
-    assert cc.host is None
-
-
-def test_collector_config_remote():
-    cc = CollectorConfig(name="remote", remote_db_path="/path", host="10.0.0.1")
-    assert cc.host == "10.0.0.1"
 
 
 def test_waypoint_config_defaults():
@@ -259,7 +233,6 @@ def test_to_dict(sample_config_yaml):
     assert d["port"] == 5001
     assert d["map"]["center_lat"] == 37.7749
     assert d["use_metric"] is True
-    assert len(d["collectors"]) == 0
     assert d["waypoints"] == []
 
 
@@ -427,29 +400,10 @@ class TestValidation:
         with pytest.raises(ValueError, match="default_zoom.*must be an integer"):
             WebConfig(path)
 
-    def test_negative_sync_interval(self):
-        path = _write_config({"sync_interval": -5})
-        with pytest.raises(ValueError, match="sync_interval"):
-            WebConfig(path)
-
     def test_negative_default_hours(self):
         path = _write_config({"default_hours": -1})
         with pytest.raises(ValueError, match="default_hours"):
             WebConfig(path)
-
-    def test_invalid_collector_local_path(self):
-        path = _write_config({
-            "collectors": [{"name": "bad", "remote_db_path": "/nonexistent/dir/db.db"}],
-        })
-        with pytest.raises(ValueError, match="collector.*bad.*parent directory"):
-            WebConfig(path)
-
-    def test_remote_collector_skips_path_check(self):
-        path = _write_config({
-            "collectors": [{"name": "remote", "remote_db_path": "/doesnt/exist.db", "host": "10.0.0.1"}],
-        })
-        cfg = WebConfig(path)
-        assert cfg.collectors[0].name == "remote"
 
     def test_invalid_database_path(self):
         path = _write_config({"database_path": "/nonexistent/subdir/web.db"})

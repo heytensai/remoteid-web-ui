@@ -4,7 +4,7 @@ This document explains how to write a client that submits Remote ID data to the 
 
 ## Overview
 
-Remote nodes (collectors) can submit drone detection data via HTTP API. The API uses Bearer token authentication and accepts JSON payloads.
+Remote nodes can submit drone detection data via HTTP API. The API uses Bearer token authentication and accepts JSON payloads.
 
 ## Authentication
 

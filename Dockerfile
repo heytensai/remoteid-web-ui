@@ -3,13 +3,8 @@
 
 FROM python:3.11-slim
 
-# Install system dependencies
-# - rsync: Required for syncing from remote collectors via SSH
-# - openssh-client: Required for SSH connections to collectors
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    rsync \
-    openssh-client \
-    && rm -rf /var/lib/apt/lists/*
+# Install system dependencies (none required for the web server)
+# Data is received via HTTP API — no rsync/SSH needed
 
 # Create app user for security
 RUN useradd -m -u 1000 appuser
@@ -24,7 +19,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY app.py config.py database.py session_detect.py session_scheduler.py sync.py wsgi.py gunicorn.conf.py alert_engine.py ./
+COPY app.py config.py database.py session_detect.py session_scheduler.py wsgi.py gunicorn.conf.py alert_engine.py import_db.py ./
 COPY templates/ templates/
 COPY static/ static/
 

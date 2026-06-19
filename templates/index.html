@@ -44,15 +44,6 @@
                     <button id="refreshBtn" class="refresh-btn" title="Refresh">
                         <i class="fas fa-sync-alt"></i>
                     </button>
-                    <div class="sync-toggle">
-                        <div class="sync-wrapper">
-                            <label class="switch">
-                                <input type="checkbox" id="syncToggle" checked>
-                                <span class="slider"></span>
-                            </label>
-                            <span class="sync-label">Sync</span>
-                        </div>
-                    </div>
                     <div class="header-time-controls">
                         <div class="header-time-inputs">
                             <input type="text" id="startTime" class="flatpickr" placeholder="Start time">
@@ -342,17 +333,17 @@
                         <span id="replayTimeDisplay" class="replay-time-display">00:00:00</span>
                     </div>
                 </div>
-                <div class="collector-bar" id="collectorBar">
-                    <div class="collector-bar-left">
-                        <span id="collectorSummary">Sync not configured</span>
+                <div class="remote-bar" id="remoteBar">
+                    <div class="remote-bar-left">
+                        <span id="remoteSummary">No remotes configured</span>
                     </div>
-                    <div class="collector-bar-right">
+                    <div class="remote-bar-right">
                         <span id="lastUpdate">Last updated: never</span>
                     </div>
                 </div>
-                <div class="collector-detail" id="collectorDetail" style="display: none;">
-                    <div class="collector-detail-header">Collectors</div>
-                    <div id="collectorDetailBody" class="collector-detail-body"></div>
+                <div class="remote-detail" id="remoteDetail" style="display: none;">
+                    <div class="remote-detail-header">Remote Sources</div>
+                    <div id="remoteDetailBody" class="remote-detail-body"></div>
                 </div>
             </div>
         </div>

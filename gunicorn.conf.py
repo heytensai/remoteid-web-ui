@@ -1,7 +1,7 @@
 """Gunicorn configuration for Remote ID Web UI.
 
 Uses ``--preload`` so the app is imported once in the master process.
-Background threads (sync manager, session detector) start in the master
+Background threads (session detector) start in the master
 and do **not** survive ``fork()`` into workers — each worker inherits a
 dead copy, so only one instance of each DB-bound service runs.
 
@@ -22,7 +22,7 @@ def when_ready(server):
     """Start background threads in the master process.
 
     Called after the preloaded app is ready but before workers fork.
-    Threads (sync, session detection, config watcher) run only here —
+    Threads (session detection, config watcher) run only here —
     they don't survive ``fork()``.
     """
     start_background_services()

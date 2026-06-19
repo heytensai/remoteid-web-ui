@@ -9,16 +9,6 @@ web_interface:
   # Path to web interface database (local SQLite inside container)
   database_path: "/app/data/web.db"
 
-  # Sync settings
-  sync_interval: 30  # seconds between syncs from collectors
-
-  # Collector sources
-  # For Docker dev, we use a mock collector with sample data
-  collectors:
-    - name: "Mock-Collector"
-      # In Docker dev, we mount mock data at this path
-      remote_db_path: "/app/data/mock_collector.db"
-
   # Map configuration
   # Default to a demo location (San Francisco area)
   map:

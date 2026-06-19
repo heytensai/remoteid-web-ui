@@ -91,31 +91,10 @@ const API = {
     },
 
     /**
-     * Trigger manual sync
+     * Get remote sources status (API submitters)
      */
-    async triggerSync() {
-        return this._post('/api/sync');
-    },
-
-    /**
-     * Get sync status
-     */
-    async getSyncStatus() {
-        return this._get('/api/sync/status');
-    },
-
-    /**
-     * Set sync status
-     */
-    async setSyncStatus(enabled) {
-        return this._post('/api/sync/status', { enabled });
-    },
-
-    /**
-     * Get collectors status
-     */
-    async getCollectorsStatus() {
-        return this._get('/api/sync/collectors');
+    async getSources() {
+        return this._get('/api/sources');
     },
 
     /**

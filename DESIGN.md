@@ -9,7 +9,7 @@
 
 ## 1. Overview
 
-A standalone web interface to visualize Remote ID drone data on an interactive map using Leaflet.js with OpenStreetMap tiles. The web interface runs separately from the Raspberry Pi decoder and pulls data via rsync (for remote) or direct file access (for local development).
+A standalone web interface to visualize Remote ID drone data on an interactive map using Leaflet.js with OpenStreetMap tiles. The web interface runs separately from the Raspberry Pi decoder and receives data via HTTP API submission or on-demand database import.
 
 ---
 
@@ -21,7 +21,7 @@ A standalone web interface to visualize Remote ID drone data on an interactive m
 - Filter by date/time with Flatpickr picker
 - Default time window: last 24 hours
 - Mobile-responsive design
-- Architecture supports future multi-collector setup
+- Architecture supports future multi-source setup
 
 ---
 
@@ -29,28 +29,24 @@ A standalone web interface to visualize Remote ID drone data on an interactive m
 
 ```
 ┌─────────────────────┐         ┌─────────────────────┐
-│   Raspberry Pi      │         │   Web Server        │
-│                     │         │                     │
-│  ┌───────────────┐  │         │  ┌───────────────┐  │
-│  │   decoder.py  │  │         │  │  Flask App    │  │
-│  └───────┬───────┘  │         │  │               │  │
-│          │ write    │         │  │  ┌─────────┐  │  │
-│          ▼          │         │  │  │  sync   │  │  │
-│  ┌───────────────┐  │         │  │  │ thread  │  │  │
-│  │  remoteid.db  │◀─┼─rsync───┤  │  └────┬────┘  │  │
-│  │  (SQLite)     │  │  30s    │  │       │       │  │
-│  └───────────────┘  │         │  │  ┌────▼────┐  │  │
-└─────────────────────┘         │  │   web.db   │  │  │
-                                │  │  (SQLite)  │  │  │
-                                │  └────────────┘  │  │
-                                └──────────────────┘  │
-                                         │            │
-                                         │ HTTP       │
-                                         ▼            │
-                                 ┌─────────────────────┐ │
-                                 │   Browser (Mobile)  │◀┘
-                                 │   Leaflet Map       │
-                                 └─────────────────────┘
+│   Remote Node       │         │   Web Server        │
+│   (Decoder)         │         │                     │
+│                     │  POST   │  ┌───────────────┐  │
+│  ┌───────────────┐  │─/api/───│  │  Flask App    │  │
+│  │   decoder.py  │  │ submit  │  │               │  │
+│  └───────┬───────┘  │ Bearer  │  │  ┌─────────┐  │  │
+│          │          │  token  │  │  │ web.db  │  │  │
+│          ▼          │         │  │  │ (SQLite)│  │  │
+│  ┌───────────────┐  │         │  │  └─────────┘  │  │
+│  │  remoteid.db  │  │         │  └───────┬───────┘  │
+│  │  (SQLite)     │  │         │          │          │
+│  └───────────────┘  │         │          │ HTTP     │
+│                     │         │          ▼          │
+│                     │         │  ┌────────────────┐ │
+│                     │         │  │  Browser       │ │
+│                     │         │  │  Leaflet Map   │ │
+└─────────────────────┘         │  └────────────────┘ │
+                                └──────────────────────┘
 ```
 
 ---
@@ -65,7 +61,7 @@ A standalone web interface to visualize Remote ID drone data on an interactive m
 | Drone Icon | `fa-plane` (Font Awesome) |
 | Operator Icon | `fa-user` (same color as drone) |
 | Default View | Configurable center/zoom, or auto-fit |
-| Sync Interval | 30 seconds (configurable) |
+| Data Ingestion | HTTP POST (push) or database import (pull) |
 | Track Simplification | No (until usage data) |
 | Data Retention | Keep everything |
 | Deployment | Docker or manual run |
@@ -81,18 +77,6 @@ web_interface:
   host: "0.0.0.0"
   port: 5000
   database_path: "./web.db"
-
-  # Sync settings
-  sync_interval: 30  # seconds
-  collectors:
-    # Remote collector (Raspberry Pi via SSH/rsync)
-    - name: "Pi-Field-1"
-      host: "rpi.local"
-      remote_db_path: "/opt/remoteid/remoteid.db"
-
-    # Local collector (for development - no SSH/rsync needed)
-    # - name: "Local-Dev"
-    #   remote_db_path: "../remoteid.db"  # Path to local database file
 
   # API keys for remote node data submission
   api_keys:
@@ -111,7 +95,7 @@ web_interface:
   max_positions_per_query: 5000
 ```
 
-**Note**: For local development, omit the `host` field to use direct file access instead of rsync.
+**Note**: For local development, submit data directly to `/api/submit` or use `import_db.py` for a one-time import.
 
 ---
 
@@ -122,7 +106,7 @@ web_interface/
 ├── app.py                    # Flask entry point
 ├── config.py                 # YAML config loader
 ├── database.py               # Web DB read/write with explicit column mapping
-├── sync.py                   # Background sync thread (rsync + local)
+├── import_db.py               # On-demand database import tool
 ├── requirements.txt          # Flask, PyYAML, etc.
 ├── CLIENT_API.md             # Client API documentation for remote nodes
 ├── static/
@@ -150,7 +134,6 @@ web_interface/
 | `/api/operators` | GET | Get operator positions |
 | `/api/config` | GET | Get map config (center, zoom defaults) |
 | `/api/bounds` | GET | Get bounding box of all positions |
-| `/api/sync` | POST | Manually trigger sync from collectors |
 | `/api/last-timestamp` | GET | Get most recent timestamp (for bootstrapping clients) |
 | `/api/submit` | POST | Submit data from remote nodes (requires API key) |
 
@@ -163,7 +146,7 @@ web_interface/
 
 ## 8. Remote Node API (Data Submission)
 
-Remote collectors can push data directly to the web interface via HTTP API, bypassing the rsync-based sync mechanism. This is useful for nodes that can establish outbound HTTP connections but cannot host an rsync/SSH server.
+Remote nodes push data to the web interface via HTTP API using Bearer token authentication. This is the primary data ingestion path for remote decoder nodes. For details, see `CLIENT_API.md`.
 
 ### Authentication
 
@@ -273,33 +256,6 @@ CREATE TABLE sync_log(
     records_imported INTEGER
 );
 ```
-
----
-
-## 10. Sync Mechanism
-
-The sync system supports both remote (rsync) and local collectors:
-
-```python
-def sync_loop():
-    while True:
-        for collector in config.collectors:
-            if collector.host:
-                # Remote: rsync over SSH
-                rsync(collector.host, collector.remote_db_path, '/tmp/incoming.db')
-                import_new_records('/tmp/incoming.db', collector.name)
-            else:
-                # Local: direct file import
-                import_new_records(collector.remote_db_path, collector.name)
-        time.sleep(config.sync_interval)
-```
-
-### Key Implementation Details
-
-- **Explicit Column Mapping**: Import uses explicit column names to avoid order mismatches between source and destination databases
-- **Incremental Sync**: Only imports records newer than the last sync timestamp
-- **Duplicate Prevention**: Checks for existing records by `uas_id` + `timestamp` before inserting
-- **WAL Mode**: Database uses Write-Ahead Logging for better concurrent access
 
 ---
 

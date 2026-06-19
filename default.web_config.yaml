@@ -11,21 +11,6 @@ web_interface:
   # For local dev: use "./data/web.db" or "./web.db"
   database_path: "./data/web.db"
 
-  # Sync settings - how often to sync data from collectors (in seconds)
-  sync_interval: 30
-
-  # Collector sources (RPis running decoder)
-  # Add one entry per collector. For local development, omit 'host' to use local file.
-  collectors:
-    # Local collector - reads from a file path
-    - name: "Local-Collector"
-      remote_db_path: "./data/collector.db"
-
-    # Remote collector via SSH/rsync (uncomment and configure as needed)
-    # - name: "Pi-Field-1"
-    #   host: "rpi.local"  # or IP address like "192.168.1.100"
-    #   remote_db_path: "/opt/remoteid/remoteid.db"
-
   # Map configuration
   # If center_lat/center_lon are not specified, map will auto-fit to show all drones
   map:
@@ -116,7 +101,7 @@ web_interface:
   # Background session detection
   # Periodically recomputes session boundaries based on time gaps between
   # position records for each drone.  Disabled by default; enable if your
-  # collector import pipeline does not already assign session IDs.
+  # data import pipeline does not already assign session IDs.
   # Config is hot-reloadable — changes take effect within one interval.
   session_detection:
     enabled: false

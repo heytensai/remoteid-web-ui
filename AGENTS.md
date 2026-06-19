@@ -31,8 +31,6 @@
 - `host` - Web server host (default: "0.0.0.0")
 - `port` - Web server port (default: 5000)
 - `database_path` - Path to SQLite database
-- `sync_interval` - Seconds between collector syncs
-- `collectors` - List of data collector sources
 - `map` - Map configuration (center_lat, center_lon, default_zoom, tile_provider)
 - `default_hours` - Default time window for queries
 - `max_positions_per_query` - Limit to prevent browser lag

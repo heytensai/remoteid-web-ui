@@ -39,7 +39,7 @@ class TestIndexTemplate:
         assert soup.find(id="startTime") is not None
         assert soup.find(id="endTime") is not None
         assert soup.find(id="refreshBtn") is not None
-        assert soup.find(id="syncToggle") is not None
+        assert soup.find(id="remoteDetail") is not None
         assert soup.find(id="showOperators") is not None
         assert soup.find(id="showTracks") is not None
         assert soup.find(id="trackOpacity") is not None

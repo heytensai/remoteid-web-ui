@@ -487,70 +487,6 @@ html, body {
     gap: 8px;
 }
 
-.sync-toggle {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.sync-wrapper {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.sync-toggle .switch {
-    position: relative;
-    display: inline-block;
-    width: 40px;
-    height: 22px;
-}
-
-.sync-toggle .switch input {
-    opacity: 0;
-    width: 0;
-    height: 0;
-}
-
-.sync-toggle .slider {
-    position: absolute;
-    cursor: pointer;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background-color: rgba(255, 255, 255, 0.3);
-    transition: .4s;
-    border-radius: 22px;
-}
-
-.sync-toggle .slider:before {
-    position: absolute;
-    content: "";
-    height: 16px;
-    width: 16px;
-    left: 3px;
-    bottom: 3px;
-    background-color: white;
-    transition: .4s;
-    border-radius: 50%;
-}
-
-.sync-toggle input:checked + .slider {
-    background-color: rgba(40, 167, 69, 0.8);
-}
-
-.sync-toggle input:checked + .slider:before {
-    transform: translateX(18px);
-}
-
-.sync-toggle .sync-label {
-    color: white;
-    font-size: 0.85rem;
-    font-weight: 500;
-}
-
 .header-time-inputs {
     display: flex;
     gap: 4px;
@@ -919,8 +855,8 @@ body.dark-mode .analytics-alert-log-btn:hover {
     color: #6c757d;
 }
 
-/* Collector status bar */
-.collector-bar {
+/* Remote sources status bar */
+.remote-bar {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -928,11 +864,11 @@ body.dark-mode .analytics-alert-log-btn:hover {
     user-select: none;
 }
 
-.collector-bar:hover {
+.remote-bar:hover {
     opacity: 0.8;
 }
 
-.collector-bar-left {
+.remote-bar-left {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -940,34 +876,34 @@ body.dark-mode .analytics-alert-log-btn:hover {
     color: #6c757d;
 }
 
-.collector-bar-right {
+.remote-bar-right {
     font-size: 0.8rem;
     color: #6c757d;
 }
 
-.collector-status-ok {
+.remote-status-ok {
     color: #28a745;
     font-weight: 600;
 }
 
-.collector-status-partial {
+.remote-status-partial {
     color: #e67e22;
     font-weight: 600;
 }
 
-.collector-status-none {
+.remote-status-none {
     color: #6c757d;
     font-weight: 600;
 }
 
-/* Collector detail panel (expands from bottom) */
-.collector-detail {
+/* Remote detail panel (expands from bottom) */
+.remote-detail {
     border-top: 1px solid #dee2e6;
     margin-top: 8px;
     padding-top: 8px;
 }
 
-.collector-detail-header {
+.remote-detail-header {
     font-size: 0.75rem;
     font-weight: 600;
     text-transform: uppercase;
@@ -976,20 +912,20 @@ body.dark-mode .analytics-alert-log-btn:hover {
     margin-bottom: 8px;
 }
 
-.collector-detail-body {
+.remote-detail-body {
     display: flex;
     flex-direction: column;
     gap: 6px;
 }
 
-.collector-empty {
+.remote-empty {
     font-size: 0.8rem;
     color: #999;
     padding: 8px 10px;
     text-align: center;
 }
 
-.collector-row {
+.remote-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -999,13 +935,13 @@ body.dark-mode .analytics-alert-log-btn:hover {
     font-size: 0.8rem;
 }
 
-.collector-row-left {
+.remote-row-left {
     display: flex;
     align-items: center;
     gap: 8px;
 }
 
-.collector-row-right {
+.remote-row-right {
     display: flex;
     flex-direction: column;
     align-items: flex-end;
@@ -1014,30 +950,30 @@ body.dark-mode .analytics-alert-log-btn:hover {
     color: #6c757d;
 }
 
-.collector-time-label {
+.remote-time-label {
     color: #999;
     font-weight: 500;
     margin-right: 2px;
 }
 
-.collector-icon {
+.remote-icon {
     font-size: 0.85rem;
 }
 
-.collector-icon.active {
+.remote-icon.active {
     color: #28a745;
 }
 
-.collector-icon.stale {
+.remote-icon.stale {
     color: #adb5bd;
 }
 
-.collector-name {
+.remote-name {
     font-weight: 500;
     color: #2c3e50;
 }
 
-.collector-type-badge {
+.remote-type-badge {
     font-size: 0.65rem;
     color: #6c757d;
     background: #e9ecef;
@@ -1046,35 +982,35 @@ body.dark-mode .analytics-alert-log-btn:hover {
     white-space: nowrap;
 }
 
-body.dark-mode .collector-bar {
+body.dark-mode .remote-bar {
     color: #a0a0c0;
 }
 
-body.dark-mode .collector-bar-left {
+body.dark-mode .remote-bar-left {
     color: #a0a0c0;
 }
 
-body.dark-mode .collector-bar-right {
+body.dark-mode .remote-bar-right {
     color: #a0a0c0;
 }
 
-body.dark-mode .collector-detail {
+body.dark-mode .remote-detail {
     border-color: #333;
 }
 
-body.dark-mode .collector-detail-header {
+body.dark-mode .remote-detail-header {
     color: #a0a0c0;
 }
 
-body.dark-mode .collector-row {
+body.dark-mode .remote-row {
     background: #2a2a3e;
 }
 
-body.dark-mode .collector-name {
+body.dark-mode .remote-name {
     color: #e0e0e0;
 }
 
-body.dark-mode .collector-type-badge {
+body.dark-mode .remote-type-badge {
     background: #3a3a4e;
     color: #999;
 }

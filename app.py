@@ -20,7 +20,6 @@ from config import WebConfig
 from database import WebDatabase
 from session_detect import process_database as redetect_sessions
 from session_scheduler import SessionScheduler
-from sync import create_sync_manager
 from alert_engine import AlertEngine
 
 # Configure logging
@@ -32,7 +31,6 @@ logger = logging.getLogger(__name__)
 # Global instances
 CONFIG: WebConfig = None
 DATABASE: WebDatabase = None
-SYNC_MANAGER = None  # type: Optional[SyncManager]
 SESSION_SCHEDULER: Optional[SessionScheduler] = None
 ALERT_ENGINE: Optional[AlertEngine] = None
 
@@ -61,7 +59,6 @@ def get_config():
                 "tile_provider": CONFIG.map.tile_provider,
             },
             "default_hours": CONFIG.default_hours,
-            "sync_enabled": SYNC_MANAGER is not None,
             "drone_aliases": CONFIG.drone_aliases,
             "manufacturer_prefixes": CONFIG.manufacturer_prefixes,
             "waypoints": CONFIG.to_dict().get("waypoints", []),
@@ -72,75 +69,25 @@ def get_config():
     )
 
 
-@app.route("/api/sync/status", methods=["GET"])
-def get_sync_status():
-    """Get sync thread status"""
-    if SYNC_MANAGER:
-        return jsonify({"enabled": True})
-    return jsonify({"enabled": False})
-
-
-@app.route("/api/sync/status", methods=["POST"])
-def set_sync_status():
-    """Enable or disable sync thread"""
-    data = request.get_json()
-    enabled = data.get("enabled", True)
-
-    if SYNC_MANAGER:
-        if enabled:
-            SYNC_MANAGER.start()
-        else:
-            SYNC_MANAGER.stop()
-        return jsonify({"status": "ok", "enabled": enabled})
-    return jsonify({"status": "disabled", "enabled": False}), 400
-
-
-@app.route("/api/sync/collectors")
-def get_collectors_status():
-    """Get status of all data sources (sync collectors + API submitters)"""
-    collectors_status = {}
-    known_sources = set()
-
-    # Add configured sync collectors
-    if SYNC_MANAGER:
-        for collector in SYNC_MANAGER.collectors:
-            known_sources.add(collector.name)
-            last_sync = SYNC_MANAGER.get_last_sync(collector.name)
-            last_data = DATABASE.get_most_recent_timestamp(source=collector.name)
-            collectors_status[collector.name] = {
-                "name": collector.name,
-                "type": "collector",
-                "host": collector.host,
-                "path": collector.remote_db_path,
-                "last_sync": (
-                    last_sync.strftime("%Y-%m-%d %H:%M") if last_sync else "Never"
-                ),
-                "last_data": (
-                    last_data.strftime("%Y-%m-%d %H:%M:%S") if last_data else "Never"
-                ),
-            }
-
-    # Add API submitters from sync_log
+@app.route("/api/sources")
+def get_sources():
+    """Get status of all data sources (API submitters)"""
+    sources = []
     for source_info in DATABASE.get_all_sources():
         name = source_info["source"]
-        if name not in known_sources:
-            known_sources.add(name)
-            last_data = DATABASE.get_most_recent_timestamp(source=name)
-            last_sync = source_info["last_sync"]
-            collectors_status[name] = {
-                "name": name,
-                "type": "api",
-                "host": None,
-                "path": None,
-                "last_sync": (
-                    last_sync.strftime("%Y-%m-%d %H:%M") if last_sync else "Never"
-                ),
-                "last_data": (
-                    last_data.strftime("%Y-%m-%d %H:%M:%S") if last_data else "Never"
-                ),
-            }
+        last_data = DATABASE.get_most_recent_timestamp(source=name)
+        last_sync = source_info["last_sync"]
+        sources.append({
+            "name": name,
+            "last_sync": (
+                last_sync.strftime("%Y-%m-%d %H:%M") if last_sync else "Never"
+            ),
+            "last_data": (
+                last_data.strftime("%Y-%m-%d %H:%M:%S") if last_data else "Never"
+            ),
+        })
 
-    return jsonify({"collectors": list(collectors_status.values())})
+    return jsonify({"sources": sources})
 
 
 @app.route("/api/drones")
@@ -273,17 +220,6 @@ def get_bounds():
     except (ValueError, TypeError, sqlite3.Error):
         logger.exception("Error getting bounds")
         return jsonify({"error": "Internal server error"}), 500
-
-
-@app.route("/api/sync", methods=["POST"])
-def trigger_sync():
-    """Manually trigger sync from collectors"""
-    if SYNC_MANAGER:
-        failures = SYNC_MANAGER.force_sync()
-        if failures:
-            return jsonify({"status": "sync completed with errors", "failed": failures}), 500
-        return jsonify({"status": "sync completed", "failed": 0})
-    return jsonify({"status": "sync disabled - no collectors configured"}), 400
 
 
 def _export_csv(positions, filename):
@@ -507,7 +443,7 @@ def submit_ping():
     """Heartbeat endpoint for API key submitters.
 
     Requires Authorization: Bearer <api_key> header.
-    Logs a check-in to sync_log so the collector status panel
+    Logs a check-in to sync_log so the sources status panel
     shows the source as recently connected.
     """
     source = _get_api_key_source()
@@ -764,23 +700,19 @@ def _watch_config():
 def _init_app(config_path: str):
     """Initialize application components. Returns Flask app ready to serve.
 
-    Creates configuration, database, sync manager, and session detector
+    Creates configuration, database, session scheduler, and alert engine
     objects but does **not** start any background threads.  Call
     :func:`start_background_services` when ready to start them
     (gunicorn master via ``when_ready``, or ``main()`` for dev server).
     """
     # pylint: disable=global-statement
-    global CONFIG, DATABASE, SYNC_MANAGER, SESSION_SCHEDULER, ALERT_ENGINE
+    global CONFIG, DATABASE, SESSION_SCHEDULER, ALERT_ENGINE
 
     logger.info("Loading configuration from %s", config_path)
     CONFIG = WebConfig(config_path)
 
     logger.info("Initializing database at %s", CONFIG.database_path)
     DATABASE = WebDatabase(CONFIG.database_path)
-
-    SYNC_MANAGER = create_sync_manager(
-        DATABASE, CONFIG.collectors, CONFIG.sync_interval
-    )
 
     ALERT_ENGINE = AlertEngine(DATABASE, CONFIG)
 
@@ -790,13 +722,11 @@ def _init_app(config_path: str):
 
 
 def start_background_services():
-    """Start DB-bound background threads (sync, session detection, config watcher).
+    """Start DB-bound background threads (session detection, config watcher).
 
     Called once from the gunicorn master process (via ``when_ready``) so
     only one instance of each runs, or from ``main()`` for the dev server.
     """
-    if SYNC_MANAGER:
-        SYNC_MANAGER.start()
     if SESSION_SCHEDULER:
 
         SESSION_SCHEDULER.start()
@@ -833,8 +763,6 @@ def main():
             logger.info("URL prefix: (none)")
         app.run(host=CONFIG.host, port=CONFIG.port, debug=False, threaded=True)
     finally:
-        if SYNC_MANAGER:
-            SYNC_MANAGER.stop()
         if SESSION_SCHEDULER:
             SESSION_SCHEDULER.stop()
 

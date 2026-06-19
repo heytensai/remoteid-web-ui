@@ -70,7 +70,7 @@ DESIGN.md notes "Track Simplification: No (until usage data)." When datasets gro
 If hundreds of drones are active, the sidebar list could become very long. Consider:
 - Virtual scrolling for the drone list
 - Search/filter by uas_id or mac_address
-- Group drones by source/collector
+- Group drones by source
 
 ### 2.3 Position Query Optimization
 **Priority: Medium | Effort: Low**
@@ -112,20 +112,12 @@ Instead of polling the API every time the user changes the time window, use WebS
 **Priority: Low | Effort: Low**
 
 Add a `/health` endpoint that returns:
-- Last sync time per collector
+- Last sync time per remote
 - Database size / record count
 - Uptime
 - Collector connectivity status
 
 Useful for monitoring and alerting.
-
-### 3.4 Graceful Degradation for Failed Collectors
-**Priority: Low | Effort: Low**
-
-If a remote collector is unreachable (SSH down, rsync times out), the sync thread currently fails silently. Add:
-- Per-collector failure logging with timestamp
-- Visual indicator in the UI showing which collectors are online/offline
-- Exponential backoff for failed sync attempts
 
 ---
 
@@ -196,7 +188,6 @@ Even on private networks, HTTPS is a good practice. Provide:
 **Priority: Low | Effort: Low**
 
 Add startup validation for `web_config.yaml`:
-- Check that collector paths exist (local) or SSH is reachable (remote)
 - Validate coordinate ranges
 - Warn about misconfigured tile providers
 - Validate port is available

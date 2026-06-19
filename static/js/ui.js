@@ -29,8 +29,8 @@ const UIController = {
     alertLogLimit: 50,
     alertLogTotal: 0,
     expandedDates: new Set(),
-    collectors: [],
-    collectorDetailOpen: false,
+    remotes: [],
+    remoteDetailOpen: false,
     _suppressTimeChange: false,
 
     // DOM Elements
@@ -127,8 +127,6 @@ const UIController = {
             detailOperatorId: document.getElementById('detailOperatorId'),
             detailOperatorPos: document.getElementById('detailOperatorPos'),
             refreshBtn: document.getElementById('refreshBtn'),
-            syncToggle: document.getElementById('syncToggle'),
-            syncToggleContainer: document.querySelector('.sync-toggle'),
             startTimeInput: document.getElementById('startTime'),
             endTimeInput: document.getElementById('endTime'),
             lastUpdateSpan: document.getElementById('lastUpdate'),
@@ -173,10 +171,10 @@ const UIController = {
             statPositions: document.getElementById('statPositions'),
             statActiveAlerts: document.getElementById('statActiveAlerts'),
             statTotalAlerts: document.getElementById('statTotalAlerts'),
-            collectorBar: document.getElementById('collectorBar'),
-            collectorSummary: document.getElementById('collectorSummary'),
-            collectorDetail: document.getElementById('collectorDetail'),
-            collectorDetailBody: document.getElementById('collectorDetailBody'),
+            remoteBar: document.getElementById('remoteBar'),
+            remoteSummary: document.getElementById('remoteSummary'),
+            remoteDetail: document.getElementById('remoteDetail'),
+            remoteDetailBody: document.getElementById('remoteDetailBody'),
             replayPlayBtn: document.getElementById('replayPlayBtn'),
             replayControls: document.getElementById('replayControls'),
             replayPlayPauseBtn: document.getElementById('replayPlayPauseBtn'),
@@ -214,11 +212,6 @@ const UIController = {
         // Refresh button
         this.elements.refreshBtn.addEventListener('click', () => {
             this.refreshData();
-        });
-
-        // Sync toggle
-        this.elements.syncToggle.addEventListener('change', (e) => {
-            this._toggleSync(e.target.checked);
         });
 
         // Close detail panel
@@ -399,10 +392,10 @@ const UIController = {
             }
         });
 
-        // Collector status bar toggle
-        this.elements.collectorBar.addEventListener('click', () => {
-            this.collectorDetailOpen = !this.collectorDetailOpen;
-            this.elements.collectorDetail.style.display = this.collectorDetailOpen ? 'block' : 'none';
+        // Remote sources status bar toggle
+        this.elements.remoteBar.addEventListener('click', () => {
+            this.remoteDetailOpen = !this.remoteDetailOpen;
+            this.elements.remoteDetail.style.display = this.remoteDetailOpen ? 'block' : 'none';
         });
 
         // Geozone alert filter toggle
@@ -537,15 +530,8 @@ const UIController = {
                 this.defaultHours = stored;
             }
 
-            // Load sync status
-            if (config.sync_enabled) {
-                await this._loadSyncStatus();
-            } else if (this.elements.syncToggleContainer) {
-                this.elements.syncToggleContainer.style.display = 'none';
-            }
-
-            // Always load collector/remotes status
-            await this._loadCollectorStatus();
+            // Load remote sources status
+            await this._loadRemoteStatus();
 
             // Initialize units from config
             Units.init(config);
@@ -920,50 +906,26 @@ const UIController = {
     },
 
     /**
-     * Toggle sync thread on/off
+     * Load remote sources status from server
      */
-    async _toggleSync(enabled) {
+    async _loadRemoteStatus() {
         try {
-            await API.setSyncStatus(enabled);
+            const data = await API.getSources();
+            this.remotes = data.sources || [];
+            this._updateRemoteSummary();
+            this._renderRemoteDetail();
         } catch (e) {
-            console.error('Failed to toggle sync:', e);
-            this.elements.syncToggle.checked = !enabled;
+            console.error('Failed to load remote status:', e);
         }
     },
 
     /**
-     * Load sync status from server
+     * Update remote sources summary bar
      */
-    async _loadSyncStatus() {
-        try {
-            const status = await API.getSyncStatus();
-            this.elements.syncToggle.checked = status.enabled;
-        } catch (e) {
-            console.error('Failed to load sync status:', e);
-        }
-    },
-
-    /**
-     * Load collector status from server
-     */
-    async _loadCollectorStatus() {
-        try {
-            const data = await API.getCollectorsStatus();
-            this.collectors = data.collectors || [];
-            this._updateCollectorSummary();
-            this._renderCollectorDetail();
-        } catch (e) {
-            console.error('Failed to load collector status:', e);
-        }
-    },
-
-    /**
-     * Update collector status summary bar
-     */
-    _updateCollectorSummary() {
-        const el = this.elements.collectorSummary;
+    _updateRemoteSummary() {
+        const el = this.elements.remoteSummary;
         if (!el) return;
-        const total = this.collectors.length;
+        const total = this.remotes.length;
         if (total === 0) {
             el.innerHTML = 'No remotes configured';
             return;
@@ -972,19 +934,19 @@ const UIController = {
         const twentyMin = 20 * 60 * 1000;
         let connected = 0;
         let latestDataTs = 0;
-        for (const c of this.collectors) {
-            if (c.last_sync && c.last_sync !== 'Never') {
-                const ts = new Date(c.last_sync).getTime();
+        for (const r of this.remotes) {
+            if (r.last_sync && r.last_sync !== 'Never') {
+                const ts = new Date(r.last_sync).getTime();
                 if (now - ts < twentyMin) connected++;
             }
-            if (c.last_data && c.last_data !== 'Never') {
-                const ts = new Date(c.last_data).getTime();
+            if (r.last_data && r.last_data !== 'Never') {
+                const ts = new Date(r.last_data).getTime();
                 if (ts > latestDataTs) latestDataTs = ts;
             }
         }
         const statusClass = connected === total
-            ? 'collector-status-ok'
-            : connected > 0 ? 'collector-status-partial' : 'collector-status-none';
+            ? 'remote-status-ok'
+            : connected > 0 ? 'remote-status-partial' : 'remote-status-none';
         const latestStr = latestDataTs > 0
             ? new Date(latestDataTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
             : 'never';
@@ -992,15 +954,15 @@ const UIController = {
     },
 
     /**
-     * Render collector detail panel
+     * Render remote sources detail panel
      */
-    _renderCollectorDetail() {
-        const body = this.elements.collectorDetailBody;
-        const header = this.elements.collectorDetail?.querySelector('.collector-detail-header');
+    _renderRemoteDetail() {
+        const body = this.elements.remoteDetailBody;
+        const header = this.elements.remoteDetail?.querySelector('.remote-detail-header');
         if (!body) return;
-        if (this.collectors.length === 0) {
+        if (this.remotes.length === 0) {
             if (header) header.textContent = 'Remote Sources';
-            body.innerHTML = '<div class="collector-empty">No remote sources configured</div>';
+            body.innerHTML = '<div class="remote-empty">No remote sources configured</div>';
             return;
         }
         if (header) header.textContent = 'Remote Sources';
@@ -1015,23 +977,21 @@ const UIController = {
         };
 
         let html = '';
-        for (const c of this.collectors) {
-            const syncTs = c.last_sync && c.last_sync !== 'Never' ? new Date(c.last_sync) : null;
+        for (const r of this.remotes) {
+            const syncTs = r.last_sync && r.last_sync !== 'Never' ? new Date(r.last_sync) : null;
             const isActive = syncTs && (now - syncTs.getTime() < twentyMin);
             const iconHtml = isActive
-                ? '<i class="fas fa-check-circle collector-icon active" title="Synced in last 20 min"></i>'
-                : '<i class="fas fa-clock collector-icon stale" title="No recent sync"></i>';
-            const typeLabel = c.type === 'api' ? 'API' : 'Sync';
-            const typeIcon = c.type === 'api' ? '<i class="fas fa-cloud-upload-alt"></i>' : '<i class="fas fa-database"></i>';
-            html += `<div class="collector-row">
-                <div class="collector-row-left">
+                ? '<i class="fas fa-check-circle remote-icon active" title="Active in last 20 min"></i>'
+                : '<i class="fas fa-clock remote-icon stale" title="No recent activity"></i>';
+            html += `<div class="remote-row">
+                <div class="remote-row-left">
                     ${iconHtml}
-                    <span class="collector-name">${esc(c.name)}</span>
-                    <span class="collector-type-badge">${typeIcon} ${typeLabel}</span>
+                    <span class="remote-name">${esc(r.name)}</span>
+                    <span class="remote-type-badge"><i class="fas fa-cloud-upload-alt"></i> API</span>
                 </div>
-                <div class="collector-row-right">
-                    <div class="collector-time"><span class="collector-time-label">Data:</span> ${esc(fmt(c.last_data))}</div>
-                    <div class="collector-time"><span class="collector-time-label">Sync:</span> ${esc(fmt(c.last_sync))}</div>
+                <div class="remote-row-right">
+                    <div class="remote-time"><span class="remote-time-label">Data:</span> ${esc(fmt(r.last_data))}</div>
+                    <div class="remote-time"><span class="remote-time-label">Last Seen:</span> ${esc(fmt(r.last_sync))}</div>
                 </div>
             </div>`;
         }
@@ -1077,19 +1037,19 @@ const UIController = {
             MapController.clearAllDroneMarkers();
             MapController.clearAllOperators();
 
-            // Fetch drones, alerts, stats, and collector status in parallel
-            const [dronesResponse, alertsResponse, statsResponse, collectorsResponse] = await Promise.all([
+            // Fetch drones, alerts, stats, and remote status in parallel
+            const [dronesResponse, alertsResponse, statsResponse, remotesResponse] = await Promise.all([
                 API.getDrones(this.currentStartTime, this.currentEndTime),
                 API.getAlerts(),
                 API.getStats(this.currentStartTime, this.currentEndTime),
-                API.getCollectorsStatus().catch(() => ({ collectors: [] })),
+                API.getSources().catch(() => ({ sources: [] })),
             ]);
 
-            // Update collector status
-            this.collectors = collectorsResponse.collectors || [];
-            this._updateCollectorSummary();
-            if (this.collectorDetailOpen) {
-                this._renderCollectorDetail();
+            // Update remote status
+            this.remotes = remotesResponse.sources || [];
+            this._updateRemoteSummary();
+            if (this.remoteDetailOpen) {
+                this._renderRemoteDetail();
             }
             let drones = dronesResponse.drones || [];
             this.alertEvents = alertsResponse.active || [];

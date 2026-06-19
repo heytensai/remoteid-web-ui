@@ -50,14 +50,6 @@ class WaypointConfig:
     alert_enabled: bool = False
 
 
-@dataclass
-class CollectorConfig:
-    """Collector configuration - can be remote (ssh) or local"""
-
-    name: str
-    remote_db_path: str
-    host: Optional[str] = None  # If None, treat as local file
-
 
 VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 
@@ -99,11 +91,9 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
     host: str = "0.0.0.0"
     port: int = 5000
     database_path: str = "./web.db"
-    sync_interval: int = 30
     default_hours: int = 24
     max_positions_per_query: int = 5000
     map: MapConfig = field(default_factory=MapConfig)
-    collectors: List[CollectorConfig] = field(default_factory=list)
     waypoints: List[WaypointConfig] = field(default_factory=list)
     api_keys: dict = field(default_factory=dict)
     url_prefix: str = ""
@@ -135,7 +125,6 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         self.host = web_data.get("host", "0.0.0.0")
         self.port = web_data.get("port", 5000)
         self.database_path = web_data.get("database_path", "./web.db")
-        self.sync_interval = web_data.get("sync_interval", 30)
         self.default_hours = web_data.get("default_hours", 24)
         self.max_positions_per_query = web_data.get("max_positions_per_query", 5000)
         self.url_prefix = web_data.get("url_prefix", "")
@@ -143,17 +132,6 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         # Map configuration
         map_data = web_data.get("map") or {}
         self.map = MapConfig(map_data)
-
-        # Collector configuration
-        self.collectors = []
-        for collector_data in web_data.get("collectors") or []:
-            self.collectors.append(
-                CollectorConfig(
-                    name=collector_data["name"],
-                    remote_db_path=collector_data["remote_db_path"],
-                    host=collector_data.get("host"),  # Optional - None for local
-                )
-            )
 
         # Units preference: true for metric (meters), false for imperial (feet)
         self.use_metric = web_data.get("use_metric", True)
@@ -223,9 +201,6 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         if not isinstance(self.port, int) or not 1 <= self.port <= 65535:
             errors.append(f"port must be an integer between 1 and 65535, got {self.port!r}")
 
-        if self.sync_interval is not None and self.sync_interval <= 0:
-            errors.append(f"sync_interval must be positive, got {self.sync_interval}")
-
         if self.default_hours is not None and self.default_hours <= 0:
             errors.append(f"default_hours must be positive, got {self.default_hours}")
 
@@ -272,15 +247,6 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 if wp.height <= 0:
                     errors.append(f"{prefix}.height must be > 0 for type 'rectangle', got {wp.height}")
 
-        for collector in self.collectors:
-            if collector.host is None:
-                db_dir = os.path.dirname(collector.remote_db_path)
-                if db_dir and not os.path.isdir(db_dir):
-                    errors.append(
-                        f"collector '{collector.name}': remote_db_path parent directory "
-                        f"does not exist: {db_dir}"
-                    )
-
         # Alerts validation
         if self.alerts.stale_timeout is not None and self.alerts.stale_timeout <= 0:
             errors.append(f"alerts.stale_timeout must be positive, got {self.alerts.stale_timeout}")
@@ -314,7 +280,6 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
             "host": self.host,
             "port": self.port,
             "database_path": self.database_path,
-            "sync_interval": self.sync_interval,
             "default_hours": self.default_hours,
             "max_positions_per_query": self.max_positions_per_query,
             "map": {
@@ -323,10 +288,6 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 "default_zoom": self.map.default_zoom,
                 "tile_provider": self.map.tile_provider,
             },
-            "collectors": [
-                {"name": c.name, "host": c.host, "remote_db_path": c.remote_db_path}
-                for c in self.collectors
-            ],
             "waypoints": [
                 {
                     "name": w.name,

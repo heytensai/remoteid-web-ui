@@ -183,7 +183,7 @@ describe('API', () => {
       API.csrfToken = 'csrf-abc';
       global.fetch = mockFetch({ status: 'ok' });
 
-      await API.triggerSync();
+      await API.getTracksBatch([{ uas_id: 'd1', session_id: 's1' }]);
       const options = fetch.mock.calls[0][1];
       expect(options.method).toBe('POST');
       expect(options.headers['X-CSRFToken']).toBe('csrf-abc');
