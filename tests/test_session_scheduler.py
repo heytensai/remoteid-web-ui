@@ -144,9 +144,18 @@ class TestSessionSchedulerLifecycle:
 
         scheduler.stop()
 
-        # First call should have since=None (initial run)
+        # First call uses oldest-undetected heuristic. Since the fake DB
+        # doesn't exist, it falls back to "now" (skip all on first cycle).
         first_call = mock_process_database.call_args_list[0]
-        assert first_call == call("/fake/db.sqlite", 120, dry_run=False, since=None)
+        assert first_call.args == ("/fake/db.sqlite", 120)
+        assert first_call.kwargs["dry_run"] is False
+        since = first_call.kwargs["since"]
+        assert since is not None
+        assert isinstance(since, datetime)
+        # Should be roughly "now" since the fake DB has no undetected records
+        diff = abs((since - datetime.now(timezone.utc)).total_seconds())
+        assert diff < 5, f"since={since} too far from now"
+
         assert scheduler.last_run is not None
         assert isinstance(scheduler.last_run, datetime)
 
