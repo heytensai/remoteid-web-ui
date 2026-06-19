@@ -461,6 +461,29 @@ def submit_data():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/api/submit/ping", methods=["GET"])
+@csrf.exempt
+@cross_origin()
+def submit_ping():
+    """Heartbeat endpoint for API key submitters.
+
+    Requires Authorization: Bearer <api_key> header.
+    Logs a check-in to sync_log so the collector status panel
+    shows the source as recently connected.
+    """
+    source = _get_api_key_source()
+    if source is None:
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+
+    try:
+        DATABASE.log_submission(source, 0)
+        logger.info("Heartbeat from %s", source)
+        return jsonify({"success": True, "source": source})
+    except sqlite3.Error as e:
+        logger.exception("Error logging heartbeat from %s", source)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/alerts", methods=["GET"])
 def get_alerts():
     """Get active geozone alert events."""
