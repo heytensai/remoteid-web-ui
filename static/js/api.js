@@ -61,6 +61,16 @@ const API = {
     },
 
     /**
+     * Batch fetch tracks for multiple sessions
+     * @param {Array<{uas_id: string, session_id: string}>} sessions
+     * @returns {Promise<Object>} Map of "uas_id:session_id" -> {uas_id, session_id, positions}
+     */
+    async getTracksBatch(sessions) {
+        if (!sessions || sessions.length === 0) return { tracks: {} };
+        return this._post('/api/tracks/batch', { sessions });
+    },
+
+    /**
      * Get operator positions
      */
     async getOperators(start, end) {

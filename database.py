@@ -650,6 +650,33 @@ class WebDatabase:
 
             return [self._sanitize_record(dict(row)) for row in cursor.fetchall()]
 
+    def get_track_session_positions(
+        self, uas_id: str, session_id: str
+    ) -> List[Dict]:
+        """Get positions for a specific session using indexed lookup.
+
+        Uses the computed_session_id index directly instead of scanning
+        the full time window. Much faster when loading individual sessions.
+        """
+        with sqlite3.connect(
+            self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
+        ) as conn:
+            conn.row_factory = sqlite3.Row
+
+            cursor = conn.execute(
+                """
+                SELECT latitude, longitude, altitude, timestamp,
+                       operator_id, operator_latitude, operator_longitude,
+                       computed_session_id
+                FROM remoteid
+                WHERE uas_id = ? AND computed_session_id = ?
+                ORDER BY timestamp ASC
+            """,
+                (uas_id, session_id),
+            )
+
+            return [self._sanitize_record(dict(row)) for row in cursor.fetchall()]
+
     def get_track_sessions(
         self, uas_id: str, start_time: datetime, end_time: datetime
     ) -> List[Dict]:

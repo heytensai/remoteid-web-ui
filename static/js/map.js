@@ -648,6 +648,44 @@ const MapController = {
     },
 
     /**
+     * Load and draw tracks for multiple sessions in a single batch request
+     * @param {Array<{uas_id: string, session_id: string}>} sessions - Array of session descriptors
+     * @returns {Promise<Array<string>>} Array of session keys that were successfully loaded
+     */
+    async loadTracksBatch(sessions) {
+        if (!this.ready || !sessions || sessions.length === 0) return [];
+
+        // Filter out already-loaded sessions
+        const pending = sessions.filter(s => {
+            const key = `${s.uas_id}:${s.session_id}`;
+            return s.session_id && !this.loadedTrackSessions.has(key);
+        });
+
+        if (pending.length === 0) return [];
+
+        try {
+            const response = await API.getTracksBatch(pending);
+            const loaded = [];
+            const trackData = response.tracks || {};
+
+            for (const entry of pending) {
+                const key = `${entry.uas_id}:${entry.session_id}`;
+                const data = trackData[key];
+                if (data && data.positions && data.positions.length > 1) {
+                    const color = this.getDroneColor(entry.uas_id);
+                    this._drawTrackSegment(entry.uas_id, entry.session_id, data.positions, color);
+                    this.loadedTrackSessions.add(key);
+                    loaded.push(key);
+                }
+            }
+            return loaded;
+        } catch (e) {
+            console.error('Failed to load track batch:', e);
+            return [];
+        }
+    },
+
+    /**
      * Draw a track segment (single session) on the map
      */
     _drawTrackSegment(uasId, sessionId, positions, color) {

@@ -237,6 +237,75 @@ class TestApiTracks:
         assert len(filtered) == 1
         assert filtered[0]["session_id"] == target_id
 
+    def test_get_track_by_session_id_uses_indexed_lookup(self, client, db):
+        """Session-specific track uses indexed query, not window scan."""
+        now = datetime.now()
+        start = (now - timedelta(days=1)).isoformat()
+        end = (now + timedelta(days=1)).isoformat()
+
+        # Fetch all sessions first
+        resp = client.get(f"/api/tracks/drone-001?sessions=true&start={start}&end={end}")
+        all_sessions = resp.get_json()["sessions"]
+
+        for session in all_sessions:
+            sid = session["session_id"]
+            resp2 = client.get(
+                f"/api/tracks/drone-001"
+                f"?sessions=true&session_id={sid}&start={start}&end={end}"
+            )
+            data = resp2.get_json()
+            assert len(data["sessions"]) == 1
+            assert data["sessions"][0]["session_id"] == sid
+            # Positions should match exactly (not filtered from full window)
+            assert len(data["sessions"][0]["positions"]) == len(session["positions"])
+
+    def test_tracks_batch(self, client, db):
+        """Batch endpoint returns multiple sessions in one request."""
+        resp = client.get("/api/tracks/drone-001?sessions=true")
+        all_sessions = resp.get_json()["sessions"]
+        assert len(all_sessions) >= 1
+
+        session_list = [
+            {"uas_id": "drone-001", "session_id": s["session_id"]}
+            for s in all_sessions[:2]
+        ]
+
+        resp2 = client.post(
+            "/api/tracks/batch",
+            data=json.dumps({"sessions": session_list}),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp2.status_code == 200
+        data = resp2.get_json()
+        assert "tracks" in data
+        for entry in session_list:
+            key = f"{entry['uas_id']}:{entry['session_id']}"
+            assert key in data["tracks"]
+            assert len(data["tracks"][key]["positions"]) > 0
+
+    def test_tracks_batch_empty(self, client):
+        """Empty batch request returns empty tracks."""
+        resp = client.post(
+            "/api/tracks/batch",
+            data=json.dumps({"sessions": []}),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["tracks"] == {}
+
+    def test_tracks_batch_invalid_body(self, client):
+        """Invalid batch body returns 400."""
+        resp = client.post(
+            "/api/tracks/batch",
+            data=json.dumps({"sessions": "not-an-array"}),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 400
+
 
 class TestApiOperators:
     def test_get_operators(self, client, db):

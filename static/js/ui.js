@@ -1241,24 +1241,26 @@ const UIController = {
             cb.indeterminate = true;
         });
 
-        // Load tracks for visible sessions on the most recent date
+        // Load tracks for visible sessions on the most recent date via batch
         if (mostRecentDate) {
-            const promises = [];
-
+            const pending = [];
             for (const drone of groups[mostRecentDate]) {
                 const sessionKey = `${drone.uas_id}:${drone.computed_session_id || 'unknown'}`;
                 const sessionId = drone.computed_session_id;
-
                 if (sessionId && this.visibleSessions.has(sessionKey) && !this.loadedTracks.has(sessionKey)) {
                     this.loadedTracks.add(sessionKey);
-                    promises.push(
-                        MapController.loadTrackSession(drone.uas_id, sessionId, this.currentStartTime, this.currentEndTime)
-                            .then(success => { if (!success) this.loadedTracks.delete(sessionKey); })
-                    );
+                    pending.push({ uas_id: drone.uas_id, session_id: sessionId });
                 }
             }
-            if (promises.length > 0) {
-                Promise.allSettled(promises);
+            if (pending.length > 0) {
+                MapController.loadTracksBatch(pending).then(loaded => {
+                    // Remove any sessions that failed to load
+                    const loadedSet = new Set(loaded);
+                    pending.forEach(s => {
+                        const key = `${s.uas_id}:${s.session_id}`;
+                        if (!loadedSet.has(key)) this.loadedTracks.delete(key);
+                    });
+                });
             }
         }
 

@@ -190,14 +190,52 @@ def get_track(uas_id):
         session_id = request.args.get("session_id")
 
         if group_by_session:
-            sessions = DATABASE.get_track_sessions(uas_id, start, end)
             if session_id:
-                sessions = [s for s in sessions if s["session_id"] == session_id]
+                positions = DATABASE.get_track_session_positions(uas_id, session_id)
+                return jsonify({
+                    "uas_id": uas_id,
+                    "sessions": [{"session_id": session_id, "positions": positions}],
+                })
+            sessions = DATABASE.get_track_sessions(uas_id, start, end)
             return jsonify({"uas_id": uas_id, "sessions": sessions})
         track = DATABASE.get_track(uas_id, start, end)
         return jsonify({"uas_id": uas_id, "track": track})
     except (ValueError, TypeError, sqlite3.Error):
         logger.exception("Error getting track")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@app.route("/api/tracks/batch", methods=["POST"])
+def get_tracks_batch():
+    """Batch fetch tracks for multiple sessions in one request.
+
+    Request body: {"sessions": [{"uas_id": "...", "session_id": "..."}, ...]}
+    Response: {"tracks": {"uas_id:session_id": {"uas_id": "...", "session_id": "...", "positions": [...]}, ...}}
+    """
+    try:
+        data = request.get_json(force=True)
+        session_list = data.get("sessions", []) if isinstance(data, dict) else []
+
+        if not isinstance(session_list, list):
+            return jsonify({"error": "sessions must be an array"}), 400
+
+        results = {}
+        for entry in session_list:
+            uas_id = entry.get("uas_id", "")
+            session_id = entry.get("session_id", "")
+            if not uas_id or not session_id:
+                continue
+            key = f"{uas_id}:{session_id}"
+            positions = DATABASE.get_track_session_positions(uas_id, session_id)
+            results[key] = {
+                "uas_id": uas_id,
+                "session_id": session_id,
+                "positions": positions,
+            }
+
+        return jsonify({"tracks": results})
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.exception("Error in batch track fetch")
         return jsonify({"error": "Internal server error"}), 500
 
 

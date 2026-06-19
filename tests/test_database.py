@@ -186,6 +186,27 @@ def test_get_track_sessions(db):
         assert len(s["positions"]) > 0
 
 
+def test_get_track_session_positions(db):
+    """Indexed session lookup returns only positions for that session."""
+    now = datetime.now(timezone.utc)
+    start = now - timedelta(days=1)
+    end = now + timedelta(days=1)
+    sessions = db.get_track_sessions("drone-001", start, end)
+    assert len(sessions) >= 1
+    target = sessions[0]
+
+    positions = db.get_track_session_positions("drone-001", target["session_id"])
+    assert len(positions) == len(target["positions"])
+    for p in positions:
+        assert p["computed_session_id"] == target["session_id"]
+
+
+def test_get_track_session_positions_nonexistent(db):
+    """Non-existent session returns empty list."""
+    positions = db.get_track_session_positions("drone-001", "session_nonexistent")
+    assert positions == []
+
+
 def test_get_operators(db):
     now = datetime.now(timezone.utc)
     start = now - timedelta(days=1)
