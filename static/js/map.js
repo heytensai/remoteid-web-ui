@@ -713,7 +713,7 @@ const MapController = {
         return L.divIcon({
             className: 'custom-div-icon',
             html: `<div class="drone-position-icon" style="border-color: ${color}; color: ${color};">
-                     <i class="fas fa-drone"></i>${badge}
+                     <i class="fas fa-plane"></i>${badge}
                    </div>`,
             iconSize: [28, 28],
             iconAnchor: [14, 14],
