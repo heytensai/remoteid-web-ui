@@ -16,6 +16,7 @@ const UIController = {
     selectedDrone: null,
     selectedDroneTrack: null,
     visibleSessions: new Set(), // Track which sessions are checked/visible
+    dismissedSessionKeys: new Set(), // Sessions manually unchecked by user
     showKnownDrones: true,
     showUnknownDrones: true,
     showGeozoneAlerts: false,
@@ -1063,7 +1064,6 @@ const UIController = {
 
             // Get current session keys from filtered data
             const currentSessionKeys = new Set(drones.map(d => `${d.uas_id}:${d.computed_session_id || 'unknown'}`));
-
             // Remove tracks for sessions no longer in the data
             for (const sessionKey of this.loadedTracks) {
                 if (!currentSessionKeys.has(sessionKey)) {
@@ -1073,6 +1073,7 @@ const UIController = {
             }
             this.loadedTracks = new Set([...this.loadedTracks].filter(k => currentSessionKeys.has(k)));
             this.visibleSessions = new Set([...this.visibleSessions].filter(k => currentSessionKeys.has(k)));
+            this.dismissedSessionKeys = new Set([...this.dismissedSessionKeys].filter(k => currentSessionKeys.has(k)));
 
             // Update drone list (controls checkbox state, tracks loadedTracks)
             this._updateDroneList(drones);
@@ -1149,16 +1150,18 @@ const UIController = {
 
         const sortedDates = Object.keys(groups).sort().reverse();
 
-        // Determine most recent date for default selection (only on initial load)
+        // Determine most recent date for default selection
         const mostRecentDate = sortedDates.length > 0 ? sortedDates[0] : null;
         const isInitialLoad = this.visibleSessions.size === 0;
 
-        // Pre-populate visibleSessions for most recent date on initial load
-        if (isInitialLoad && mostRecentDate) {
-            groups[mostRecentDate].forEach(drone => {
+        // Auto-check new sessions on the most recent date (before HTML rendering)
+        if (mostRecentDate) {
+            for (const drone of groups[mostRecentDate]) {
                 const sessionKey = `${drone.uas_id}:${drone.computed_session_id || 'unknown'}`;
-                this.visibleSessions.add(sessionKey);
-            });
+                if (!this.visibleSessions.has(sessionKey) && !this.loadedTracks.has(sessionKey) && !this.dismissedSessionKeys.has(sessionKey)) {
+                    this.visibleSessions.add(sessionKey);
+                }
+            }
         }
 
         const esc = (v) => this.escapeHtml(v);
@@ -1238,26 +1241,30 @@ const UIController = {
             cb.indeterminate = true;
         });
 
-        // Load tracks for initially visible sessions (most recent date)
-        if (isInitialLoad && mostRecentDate) {
-            const mostRecentSessions = groups[mostRecentDate];
-            const dateStart = new Date(mostRecentDate + 'T00:00:00');
-            const dateEnd = new Date(mostRecentDate + 'T23:59:59.999');
+        // Load tracks for visible sessions on the most recent date
+        if (mostRecentDate) {
+            const promises = [];
 
-            for (const drone of mostRecentSessions) {
+            for (const drone of groups[mostRecentDate]) {
                 const sessionKey = `${drone.uas_id}:${drone.computed_session_id || 'unknown'}`;
                 const sessionId = drone.computed_session_id;
-                if (sessionId && !this.loadedTracks.has(sessionKey)) {
-                    MapController.loadTrackSession(drone.uas_id, sessionId, dateStart, dateEnd);
+
+                if (sessionId && this.visibleSessions.has(sessionKey) && !this.loadedTracks.has(sessionKey)) {
                     this.loadedTracks.add(sessionKey);
+                    promises.push(
+                        MapController.loadTrackSession(drone.uas_id, sessionId, this.currentStartTime, this.currentEndTime)
+                            .then(success => { if (!success) this.loadedTracks.delete(sessionKey); })
+                    );
                 }
+            }
+            if (promises.length > 0) {
+                Promise.allSettled(promises);
             }
         }
 
         // Add date checkbox handlers
         list.querySelectorAll('.date-checkbox').forEach(checkbox => {
             checkbox.addEventListener('change', (e) => {
-                const date = e.target.dataset.date;
                 const group = e.target.closest('.date-group');
                 const droneCheckboxes = group.querySelectorAll('.drone-checkbox');
                 const isChecked = e.target.checked;
@@ -1275,11 +1282,10 @@ const UIController = {
                         if (!this.loadedTracks.has(sessionKey)) {
                             const uasId = droneItem.dataset.uasId;
                             const sessionId = droneItem.dataset.sessionId;
-                            const dateStart = new Date(date + 'T00:00:00');
-                            const dateEnd = new Date(date + 'T23:59:59.999');
                             if (sessionId) {
-                                MapController.loadTrackSession(uasId, sessionId, dateStart, dateEnd);
                                 this.loadedTracks.add(sessionKey);
+                                MapController.loadTrackSession(uasId, sessionId, this.currentStartTime, this.currentEndTime)
+                                    .then(success => { if (!success) this.loadedTracks.delete(sessionKey); });
                             }
                         }
                     } else {
@@ -1289,6 +1295,7 @@ const UIController = {
                         const uasId = droneItem.dataset.uasId;
                         MapController.removeTrack(uasId, sessionKey);
                         this.loadedTracks.delete(sessionKey);
+                        this.dismissedSessionKeys.add(sessionKey);
 
                         // Close detail panel if this session is currently selected
                         if (this.selectedSession === droneItem.dataset.sessionId) {
@@ -1337,7 +1344,6 @@ const UIController = {
                 const uasId = droneItem.dataset.uasId;
                 const sessionId = droneItem.dataset.sessionId;
                 const group = droneItem.closest('.date-group');
-                const dateStr = group.dataset.date;
                 const isChecked = e.target.checked;
 
                 if (isChecked) {
@@ -1345,11 +1351,10 @@ const UIController = {
                     droneItem.classList.remove('dimmed');
                     // Load track
                     if (!this.loadedTracks.has(sessionKey)) {
-                        const dateStart = new Date(dateStr + 'T00:00:00');
-                        const dateEnd = new Date(dateStr + 'T23:59:59.999');
                         if (sessionId) {
-                            MapController.loadTrackSession(uasId, sessionId, dateStart, dateEnd);
                             this.loadedTracks.add(sessionKey);
+                            MapController.loadTrackSession(uasId, sessionId, this.currentStartTime, this.currentEndTime)
+                                .then(success => { if (!success) this.loadedTracks.delete(sessionKey); });
                         }
                     }
                 } else {
@@ -1358,6 +1363,7 @@ const UIController = {
                     // Remove track
                     MapController.removeTrack(uasId, sessionKey);
                     this.loadedTracks.delete(sessionKey);
+                    this.dismissedSessionKeys.add(sessionKey);
 
                     // Close detail panel if this session is currently selected
                     if (this.selectedSession === sessionId) {
@@ -1425,8 +1431,6 @@ const UIController = {
                 const uasId = item.dataset.uasId;
                 const sessionKey = item.dataset.sessionKey;
                 const sessionId = item.dataset.sessionId;
-                const group = item.closest('.date-group');
-                const dateStr = group ? group.dataset.date : null;
 
                 // Only focus if visible
                 if (!this.visibleSessions.has(sessionKey)) {
@@ -1437,10 +1441,9 @@ const UIController = {
 
                 // Also load the track for this session if not loaded
                 if (sessionId && !this.loadedTracks.has(sessionKey)) {
-                    const dateStart = new Date(dateStr + 'T00:00:00');
-                    const dateEnd = new Date(dateStr + 'T23:59:59.999');
-                    MapController.loadTrackSession(uasId, sessionId, dateStart, dateEnd);
                     this.loadedTracks.add(sessionKey);
+                    MapController.loadTrackSession(uasId, sessionId, this.currentStartTime, this.currentEndTime)
+                        .then(success => { if (!success) this.loadedTracks.delete(sessionKey); });
                 }
 
                 // Close sidebar on mobile

@@ -502,6 +502,7 @@ const MapController = {
         if (!this.ready || !this.layers.tracks) return;
         this.layers.tracks.clearLayers();
         this.tracks = {};
+        this.loadedTrackSessions.clear();
     },
 
     /**
@@ -623,10 +624,10 @@ const MapController = {
      * Load and draw a specific session track, with client-side cache
      */
     async loadTrackSession(uasId, sessionId, start, end) {
-        if (!this.ready) return;
+        if (!this.ready) return false;
 
         const sessionKey = `${uasId}:${sessionId}`;
-        if (this.loadedTrackSessions.has(sessionKey)) return;
+        if (this.loadedTrackSessions.has(sessionKey)) return true;
 
         try {
             const response = await API.getTrack(uasId, start, end, true, sessionId);
@@ -636,10 +637,13 @@ const MapController = {
                     const color = this.getDroneColor(uasId);
                     this._drawTrackSegment(uasId, sessionId, session.positions, color);
                     this.loadedTrackSessions.add(sessionKey);
+                    return true;
                 }
             }
+            return false;
         } catch (e) {
             console.error(`Failed to get track for ${uasId}:${sessionId}:`, e);
+            return false;
         }
     },
 
