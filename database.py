@@ -827,6 +827,58 @@ class WebDatabase:
                 return val
             return None
 
+    def get_stats(self, start_time: datetime, end_time: datetime) -> Dict:
+        """Get aggregate statistics for the given time window.
+
+        Returns dict with total_drones, total_sessions, total_positions,
+        active_alerts, and total_alerts_in_window.
+        """
+        with sqlite3.connect(
+            self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
+        ) as conn:
+            # Total unique drones
+            cursor = conn.execute(
+                "SELECT COUNT(DISTINCT uas_id) FROM remoteid WHERE timestamp BETWEEN ? AND ?",
+                (start_time, end_time),
+            )
+            total_drones = cursor.fetchone()[0] or 0
+
+            # Total distinct sessions
+            cursor = conn.execute(
+                "SELECT COUNT(DISTINCT computed_session_id) FROM remoteid "
+                "WHERE timestamp BETWEEN ? AND ? AND computed_session_id IS NOT NULL",
+                (start_time, end_time),
+            )
+            total_sessions = cursor.fetchone()[0] or 0
+
+            # Total positions
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM remoteid WHERE timestamp BETWEEN ? AND ?",
+                (start_time, end_time),
+            )
+            total_positions = cursor.fetchone()[0] or 0
+
+            # Active geozone events
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM geozone_events WHERE exited_at IS NULL"
+            )
+            active_alerts = cursor.fetchone()[0] or 0
+
+            # Total geozone events in time window (by entered_at)
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM geozone_events WHERE entered_at BETWEEN ? AND ?",
+                (start_time, end_time),
+            )
+            total_alerts = cursor.fetchone()[0] or 0
+
+        return {
+            "total_drones": total_drones,
+            "total_sessions": total_sessions,
+            "total_positions": total_positions,
+            "active_alerts": active_alerts,
+            "total_alerts": total_alerts,
+        }
+
     def get_drones_for_alert_check(
         self, since: Optional[datetime] = None
     ) -> List[str]:

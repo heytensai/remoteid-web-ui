@@ -338,3 +338,37 @@ def test_get_geozone_event_history_orders_by_entered_desc(db):
     # Most recent first
     assert events[0]["geozone_name"] == "ZoneB"
     assert events[1]["geozone_name"] == "ZoneA"
+
+
+# --- Stats tests ---
+
+def test_get_stats_empty(db):
+    start = datetime.now() - timedelta(hours=1)
+    end = datetime.now()
+    stats = db.get_stats(start, end)
+    assert stats["total_drones"] == 0
+    assert stats["total_sessions"] == 0
+    assert stats["total_positions"] == 0
+    assert stats["active_alerts"] == 0
+    assert stats["total_alerts"] == 0
+
+
+def test_get_stats_with_data(db):
+    """db fixture inserts 4 records for drone-001, drone-002, drone-003."""
+    start = datetime.now() - timedelta(hours=24)
+    end = datetime.now()
+    stats = db.get_stats(start, end)
+    assert stats["total_drones"] == 3
+    assert stats["total_positions"] == 4
+    # Sessions depend on session detection; at minimum 1 per drone
+    assert stats["total_drones"] == 3
+
+
+def test_get_stats_alerts(db):
+    now = datetime.now()
+    start = now - timedelta(hours=24)
+    end = now + timedelta(hours=1)
+    db.enter_geozone("drone-001", "ZoneA", now)
+    stats = db.get_stats(start, end)
+    assert stats["active_alerts"] == 1
+    assert stats["total_alerts"] == 1

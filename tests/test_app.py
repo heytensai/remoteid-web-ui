@@ -122,6 +122,31 @@ class TestApiAlertHistory:
         assert data["offset"] == 0
 
 
+class TestApiStats:
+    def test_get_stats(self, client, db):
+        resp = client.get("/api/stats")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "total_drones" in data
+        assert "total_sessions" in data
+        assert "total_positions" in data
+        assert "active_alerts" in data
+        assert "total_alerts" in data
+        assert data["total_drones"] >= 0
+        assert data["total_sessions"] >= 0
+        assert data["total_positions"] >= 0
+
+    def test_get_stats_with_alerts(self, client, app):
+        import app as _app_module
+        db = _app_module.DATABASE
+        db.enter_geozone("drone-001", "ZoneA", datetime.now())
+        resp = client.get("/api/stats")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["active_alerts"] == 1
+        assert data["total_alerts"] == 1
+
+
 class TestApiDrones:
     def test_get_drones(self, client, db):
         resp = client.get("/api/drones")

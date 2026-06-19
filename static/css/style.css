@@ -616,6 +616,139 @@ html, body {
     font-size: 0.9rem;
 }
 
+/* Analytics dropdown */
+.analytics-dropdown {
+    position: relative;
+    margin-left: 12px;
+}
+
+.analytics-btn {
+    background: rgba(255, 255, 255, 0.1);
+    border: none;
+    color: white;
+    font-size: 0.85rem;
+    cursor: pointer;
+    padding: 6px 12px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: background 0.2s;
+    white-space: nowrap;
+}
+
+.analytics-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.analytics-btn i {
+    font-size: 0.9rem;
+}
+
+.analytics-body {
+    padding: 10px 14px;
+}
+
+.analytics-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.analytics-stats .stat-card {
+    background: #f8f9fa;
+    border: 1px solid #eee;
+    border-radius: 6px;
+    padding: 8px 6px;
+    text-align: center;
+}
+
+body.dark-mode .analytics-stats .stat-card {
+    background: #2a2a3e;
+    border-color: #3a3a4e;
+}
+
+.analytics-stats .stat-icon {
+    font-size: 0.8rem;
+    color: #6c757d;
+}
+
+body.dark-mode .analytics-stats .stat-icon {
+    color: #999;
+}
+
+.analytics-stats .stat-card-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+}
+
+.analytics-stats .stat-card-value {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: #333;
+    line-height: 1.2;
+}
+
+body.dark-mode .analytics-stats .stat-card-value {
+    color: #e0e0e0;
+}
+
+.analytics-stats .stat-card-label {
+    display: block;
+    font-size: 0.6rem;
+    color: #6c757d;
+    margin-top: 1px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+body.dark-mode .analytics-stats .stat-card-label {
+    color: #999;
+}
+
+.analytics-actions {
+    border-top: 1px solid #eee;
+    padding-top: 8px;
+}
+
+body.dark-mode .analytics-actions {
+    border-color: #333;
+}
+
+.analytics-alert-log-btn {
+    width: 100%;
+    padding: 8px 12px;
+    background: #f0f0f0;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    text-align: center;
+    color: #333;
+    transition: background 0.15s;
+}
+
+.analytics-alert-log-btn:hover {
+    background: #e0e0e0;
+}
+
+.analytics-alert-log-btn i {
+    margin-right: 6px;
+}
+
+body.dark-mode .analytics-alert-log-btn {
+    background: #2a2a3e;
+    border-color: #3a3a4e;
+    color: #ccc;
+}
+
+body.dark-mode .analytics-alert-log-btn:hover {
+    background: #3a3a4e;
+}
+
 .dropdown-menu {
     position: absolute;
     top: calc(100% + 4px);
@@ -1192,7 +1325,8 @@ html, body {
         display: none;
     }
 
-    .waypoints-btn .wp-label {
+    .waypoints-btn .wp-label,
+    .analytics-btn .analytics-label {
         display: none;
     }
 
@@ -1361,7 +1495,8 @@ body.dark-mode .last-update {
 
 body.dark-mode .menu-btn,
 body.dark-mode .settings-btn,
-body.dark-mode .waypoints-btn {
+body.dark-mode .waypoints-btn,
+body.dark-mode .analytics-btn {
     color: #e0e0e0;
 }
 
@@ -1891,5 +2026,62 @@ body.dark-mode .alert-log-page-btn:hover:not(:disabled) {
 }
 
 body.dark-mode #alertLogPageInfo {
+    color: #999;
+}
+
+/* Statistics grid in settings panel */
+.stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.stat-card {
+    background: #f8f9fa;
+    border: 1px solid #eee;
+    border-radius: 8px;
+    padding: 10px;
+    text-align: center;
+    min-width: 0;
+}
+
+body.dark-mode .stat-card {
+    background: #2a2a3e;
+    border-color: #3a3a4e;
+}
+
+.stat-icon {
+    font-size: 1rem;
+    color: #6c757d;
+    margin-bottom: 4px;
+}
+
+body.dark-mode .stat-icon {
+    color: #999;
+}
+
+.stat-card-value {
+    display: block;
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: #333;
+    line-height: 1.2;
+}
+
+body.dark-mode .stat-card-value {
+    color: #e0e0e0;
+}
+
+.stat-card-label {
+    display: block;
+    font-size: 0.65rem;
+    color: #6c757d;
+    margin-top: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+body.dark-mode .stat-card-label {
     color: #999;
 } 

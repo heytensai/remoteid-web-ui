@@ -109,6 +109,16 @@ const API = {
     },
 
     /**
+     * Get aggregate statistics for a time window
+     */
+    async getStats(start, end) {
+        const params = new URLSearchParams();
+        if (start) params.append('start', start.toISOString());
+        if (end) params.append('end', end.toISOString());
+        return this._get(`/api/stats?${params}`);
+    },
+
+    /**
      * Get active geozone alerts
      */
     async getAlerts() {

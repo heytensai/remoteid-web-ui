@@ -146,7 +146,9 @@ const UIController = {
             waypointsList: document.getElementById('waypointsList'),
             geozoneAlertFilter: document.getElementById('geozoneAlertFilter'),
             alertFilterCount: document.getElementById('alertFilterCount'),
-            openAlertLogBtn: document.getElementById('openAlertLog'),
+            analyticsBtn: document.getElementById('analyticsBtn'),
+            analyticsDropdown: document.getElementById('analyticsDropdown'),
+            openAlertLogBtn: document.getElementById('openAlertLogDropdown'),
             alertLogModal: document.getElementById('alertLogModal'),
             closeAlertLogBtn: document.getElementById('closeAlertLog'),
             alertLogBody: document.getElementById('alertLogBody'),
@@ -159,6 +161,11 @@ const UIController = {
             alertLogGeozoneFilter: document.getElementById('alertLogGeozoneFilter'),
             alertLogFromDate: document.getElementById('alertLogFromDate'),
             alertLogToDate: document.getElementById('alertLogToDate'),
+            statDrones: document.getElementById('statDrones'),
+            statSessions: document.getElementById('statSessions'),
+            statPositions: document.getElementById('statPositions'),
+            statActiveAlerts: document.getElementById('statActiveAlerts'),
+            statTotalAlerts: document.getElementById('statTotalAlerts'),
         };
 
     },
@@ -315,6 +322,22 @@ const UIController = {
             if (name) {
                 MapController.panToWaypoint(name);
                 this.elements.waypointsDropdown.classList.remove('open');
+            }
+        });
+
+        // Analytics dropdown toggle
+        this.elements.analyticsBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.elements.analyticsDropdown.classList.toggle('open');
+        });
+
+        // Close analytics dropdown on outside click
+        document.addEventListener('click', (e) => {
+            if (!this.elements.analyticsDropdown) return;
+            if (!this.elements.analyticsDropdown.contains(e.target) &&
+                e.target !== this.elements.analyticsBtn &&
+                !this.elements.analyticsBtn.contains(e.target)) {
+                this.elements.analyticsDropdown.classList.remove('open');
             }
         });
 
@@ -751,6 +774,22 @@ const UIController = {
     },
 
     /**
+     * Render stats into the settings panel stat cards
+     */
+    _renderStats(stats) {
+        if (!stats) return;
+        const setVal = (id, val) => {
+            const el = this.elements[id];
+            if (el) el.textContent = val != null ? String(val) : '-';
+        };
+        setVal('statDrones', stats.total_drones);
+        setVal('statSessions', stats.total_sessions);
+        setVal('statPositions', stats.total_positions);
+        setVal('statActiveAlerts', stats.active_alerts);
+        setVal('statTotalAlerts', stats.total_alerts);
+    },
+
+    /**
      * Get manufacturer badge HTML for a UAS ID.
      */
     _getManufacturerBadgeHtml(uasId) {
@@ -853,13 +892,15 @@ const UIController = {
             MapController.clearAllDroneMarkers();
             MapController.clearAllOperators();
 
-            // Fetch drones and alerts in parallel
-            const [dronesResponse, alertsResponse] = await Promise.all([
+            // Fetch drones, alerts, and stats in parallel
+            const [dronesResponse, alertsResponse, statsResponse] = await Promise.all([
                 API.getDrones(this.currentStartTime, this.currentEndTime),
                 API.getAlerts(),
+                API.getStats(this.currentStartTime, this.currentEndTime),
             ]);
             let drones = dronesResponse.drones || [];
             this.alertEvents = alertsResponse.active || [];
+            this._renderStats(statsResponse);
 
             // Update map alert state
             MapController.updateAlertState(this.alertEvents);

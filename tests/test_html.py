@@ -126,8 +126,8 @@ class TestIndexTemplate:
         resp = client.get("/")
         soup = BeautifulSoup(resp.data, "html.parser")
 
-        # Alert log button in settings
-        assert soup.find(id="openAlertLog") is not None
+        # Alert log button in analytics dropdown
+        assert soup.find(id="openAlertLogDropdown") is not None
         assert soup.find(id="alertLogModal") is not None
         assert soup.find(id="closeAlertLog") is not None
         assert soup.find(id="alertLogBody") is not None
@@ -136,9 +136,23 @@ class TestIndexTemplate:
         assert soup.find(id="alertLogUasFilter") is not None
         assert soup.find(id="alertLogGeozoneFilter") is not None
 
-    def test_alert_log_settings_section(self, client):
+    def test_analytics_dropdown(self, client):
         resp = client.get("/")
         soup = BeautifulSoup(resp.data, "html.parser")
-        section_titles = soup.find_all("h4", class_="settings-section-title")
-        titles_text = [t.get_text(strip=True) for t in section_titles]
-        assert "Alert Log" in titles_text
+
+        # Analytics dropdown in header
+        assert soup.find(id="analyticsBtn") is not None
+        assert soup.find(id="analyticsDropdown") is not None
+        header_dropdowns = soup.select(".analytics-dropdown .dropdown-header")
+        assert any("Analytics" in d.get_text() for d in header_dropdowns)
+
+        # Stats cards inside dropdown
+        assert soup.find(id="statDrones") is not None
+        assert soup.find(id="statSessions") is not None
+        assert soup.find(id="statPositions") is not None
+        assert soup.find(id="statActiveAlerts") is not None
+        assert soup.find(id="statTotalAlerts") is not None
+        assert len(soup.select(".analytics-stats .stat-card")) == 5
+
+        # Alert log button inside dropdown
+        assert soup.find(id="openAlertLogDropdown") is not None

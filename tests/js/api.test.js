@@ -59,6 +59,28 @@ describe('API', () => {
     });
   });
 
+  describe('getStats', () => {
+    test('fetches stats with time params', async () => {
+      global.fetch = mockFetch({ total_drones: 5, total_positions: 100 });
+      const start = new Date('2024-01-01T00:00:00Z');
+      const end = new Date('2024-01-02T00:00:00Z');
+
+      await API.getStats(start, end);
+      const url = fetch.mock.calls[0][0];
+      expect(url).toContain('/api/stats?');
+      expect(url).toContain('start=');
+      expect(url).toContain('end=');
+    });
+
+    test('fetches stats without params', async () => {
+      global.fetch = mockFetch({ total_drones: 0 });
+
+      await API.getStats(null, null);
+      const url = fetch.mock.calls[0][0];
+      expect(url).toBe('/api/stats?');
+    });
+  });
+
   describe('getDrones', () => {
     test('builds URL with start and end params', async () => {
       global.fetch = mockFetch({ drones: [] });

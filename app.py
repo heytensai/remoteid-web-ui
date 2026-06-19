@@ -488,6 +488,18 @@ def get_alert_history():
         return jsonify({"error": "Internal server error"}), 500
 
 
+@app.route("/api/stats", methods=["GET"])
+def get_stats():
+    """Get aggregate statistics for the current time window."""
+    try:
+        start, end = _parse_time_range(request.args)
+        stats = DATABASE.get_stats(start, end)
+        return jsonify(stats)
+    except (ValueError, TypeError, sqlite3.Error):
+        logger.exception("Error getting stats")
+        return jsonify({"error": "Internal server error"}), 500
+
+
 @app.route("/api/last-timestamp", methods=["GET"])
 def get_last_timestamp():
     """Get the most recent timestamp in the database.

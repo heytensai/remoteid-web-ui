@@ -74,6 +74,58 @@
                             <div id="waypointsList" class="dropdown-list"></div>
                         </div>
                     </div>
+                    <div class="analytics-dropdown">
+                        <button id="analyticsBtn" class="analytics-btn" title="Analytics">
+                            <i class="fas fa-chart-bar"></i> <span class="analytics-label">Analytics</span>
+                        </button>
+                        <div id="analyticsDropdown" class="dropdown-menu">
+                            <div class="dropdown-header">Analytics</div>
+                            <div class="analytics-body">
+                                <div class="analytics-stats">
+                                    <div class="stat-card">
+                                        <div class="stat-card-row">
+                                            <i class="fas fa-plane stat-icon"></i>
+                                            <span class="stat-card-value" id="statDrones">-</span>
+                                        </div>
+                                        <span class="stat-card-label">Drones</span>
+                                    </div>
+                                    <div class="stat-card">
+                                        <div class="stat-card-row">
+                                            <i class="fas fa-play-circle stat-icon"></i>
+                                            <span class="stat-card-value" id="statSessions">-</span>
+                                        </div>
+                                        <span class="stat-card-label">Sessions</span>
+                                    </div>
+                                    <div class="stat-card">
+                                        <div class="stat-card-row">
+                                            <i class="fas fa-map-marker-alt stat-icon"></i>
+                                            <span class="stat-card-value" id="statPositions">-</span>
+                                        </div>
+                                        <span class="stat-card-label">Positions</span>
+                                    </div>
+                                    <div class="stat-card">
+                                        <div class="stat-card-row">
+                                            <i class="fas fa-exclamation-triangle stat-icon"></i>
+                                            <span class="stat-card-value" id="statActiveAlerts">-</span>
+                                        </div>
+                                        <span class="stat-card-label">Active Alerts</span>
+                                    </div>
+                                    <div class="stat-card">
+                                        <div class="stat-card-row">
+                                            <i class="fas fa-history stat-icon"></i>
+                                            <span class="stat-card-value" id="statTotalAlerts">-</span>
+                                        </div>
+                                        <span class="stat-card-label">Total Alerts</span>
+                                    </div>
+                                </div>
+                                <div class="analytics-actions">
+                                    <button id="openAlertLogDropdown" class="analytics-alert-log-btn">
+                                        <i class="fas fa-history"></i> Browse Alert History
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                     <button id="openSettings" class="settings-btn" title="Settings">
                         <i class="fas fa-cog"></i>
                     </button>
@@ -156,12 +208,6 @@
                             <input type="checkbox" id="geozoneAlertFilter">
                             Show Geozone Alerts Only <i class="fas fa-exclamation-triangle"></i> <span class="geozone-alert-count" id="alertFilterCount">0</span>
                         </label>
-                    </div>
-                    <div class="settings-section">
-                        <h4 class="settings-section-title">Alert Log</h4>
-                        <button id="openAlertLog" class="alert-log-btn">
-                            <i class="fas fa-history"></i> Browse Event History
-                        </button>
                     </div>
                 </div>
             </div>
