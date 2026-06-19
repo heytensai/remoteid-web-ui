@@ -1,6 +1,7 @@
 """Database layer for web interface"""
 
 import sqlite3
+import uuid
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -369,7 +370,7 @@ class WebDatabase:
                 return current_session
 
             # New session due to gap
-            new_session = f"session_{timestamp.strftime('%Y%m%d_%H%M%S')}"
+            new_session = f"session_{uuid.uuid4().hex[:12]}"
             logger.debug(
                 "New session for %s at %s (gap: %.1fs)", uas_id, timestamp, gap
             )
@@ -392,14 +393,14 @@ class WebDatabase:
                 return last_session
 
             # New session
-            new_session = f"session_{timestamp.strftime('%Y%m%d_%H%M%S')}"
+            new_session = f"session_{uuid.uuid4().hex[:12]}"
             logger.debug(
                 "New session for %s at %s (gap: %.1fs)", uas_id, timestamp, gap
             )
             return new_session
 
         # First time seeing this UAS
-        return f"session_{timestamp.strftime('%Y%m%d_%H%M%S')}"
+        return f"session_{uuid.uuid4().hex[:12]}"
 
     @staticmethod
     def _sanitize_record(record: dict) -> dict:

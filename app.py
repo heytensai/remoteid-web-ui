@@ -18,6 +18,7 @@ from flask_wtf.csrf import CSRFProtect, generate_csrf
 
 from config import WebConfig
 from database import WebDatabase
+from session_detect import process_database as redetect_sessions
 from session_scheduler import SessionScheduler
 from sync import create_sync_manager
 from alert_engine import AlertEngine
@@ -482,6 +483,33 @@ def submit_ping():
     except sqlite3.Error as e:
         logger.exception("Error logging heartbeat from %s", source)
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/sessions/redetect", methods=["POST"])
+@csrf.exempt
+@cross_origin()
+def redetect():
+    """Force full session re-detection for all UAS.
+
+    Requires Authorization: Bearer <api_key> header.
+    Useful after bulk timestamp corrections or data migrations.
+    """
+    source = _get_api_key_source()
+    if source is None:
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+
+    try:
+        redetect_sessions(
+            CONFIG.database_path,
+            CONFIG.session_detection.gap_threshold,
+            dry_run=False,
+            force=True,
+        )
+        logger.info("Full session re-detection triggered by %s", source)
+        return jsonify({"success": True})
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.exception("Session re-detection failed")
+        return jsonify({"success": False, "error": "Re-detection failed"}), 500
 
 
 @app.route("/api/alerts", methods=["GET"])

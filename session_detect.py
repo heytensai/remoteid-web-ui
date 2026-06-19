@@ -11,6 +11,7 @@ The default gap threshold is 600 seconds (10 minutes).
 """
 
 import argparse
+import uuid
 import logging
 import sqlite3
 from datetime import datetime
@@ -102,9 +103,7 @@ def detect_sessions(positions: List[Tuple[int, datetime]], gap_threshold: int) -
         return []
 
     sessions = []
-    current_session = 1
-    session_start_time = positions[0][1]
-    session_id = f"session_{session_start_time.strftime('%Y%m%d_%H%M%S')}"
+    session_id = f"session_{uuid.uuid4().hex[:12]}"
 
     for i, (pos_id, timestamp) in enumerate(positions):
         if i == 0:
@@ -116,8 +115,7 @@ def detect_sessions(positions: List[Tuple[int, datetime]], gap_threshold: int) -
 
         if gap > gap_threshold:
             # Start a new session
-            current_session += 1
-            session_id = f"session_{timestamp.strftime('%Y%m%d_%H%M%S')}"
+            session_id = f"session_{uuid.uuid4().hex[:12]}"
             logger.debug("New session detected at %s (gap: %.1fs)", timestamp, gap)
 
         sessions.append((pos_id, session_id))
@@ -202,6 +200,7 @@ def process_database(
     gap_threshold: int,
     dry_run: bool = False,
     since: Optional[datetime] = None,
+    force: bool = False,
 ):
     """Process the database and assign session IDs.
 
@@ -209,7 +208,12 @@ def process_database(
     timestamp are processed (all historic positions for those UAS are
     still scanned so session boundary detection stays correct). UAS that
     have had no activity since *since* are skipped entirely.
+
+    When *force* is True, all UAS are processed regardless of *since*.
     """
+    if force:
+        since = None
+
     db_path = Path(db_path)
 
     if not db_path.exists():
@@ -236,10 +240,9 @@ def process_database(
         positions = get_positions_for_uas(str(db_path), uas_id)
 
         if len(positions) < 2:
-            # Single record - assign session based on timestamp
+            # Single record - assign an opaque session ID
             if positions and not dry_run:
-                timestamp = positions[0][1]
-                session_id = f"session_{timestamp.strftime('%Y%m%d_%H%M%S')}"
+                session_id = f"session_{uuid.uuid4().hex[:12]}"
                 update_session_ids(str(db_path), [(session_id, datetime.now(), positions[0][0])])
             continue
 
@@ -296,6 +299,11 @@ def main():
         help="Show what would be done without making changes"
     )
     parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force full scan of all UAS, bypassing incremental mode"
+    )
+    parser.add_argument(
         "--analyze",
         metavar="UAS_ID",
         help="Analyze sessions for a specific UAS ID"
@@ -330,7 +338,7 @@ def main():
             print()
     else:
         # Process the database
-        process_database(args.db, args.gap, args.dry_run)
+        process_database(args.db, args.gap, args.dry_run, force=args.force)
 
 
 if __name__ == "__main__":
