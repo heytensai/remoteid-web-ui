@@ -110,6 +110,10 @@ class WebDatabase:
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_source ON remoteid(source)")
             conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_uas_time_unique "
+                "ON remoteid(uas_id, timestamp)"
+            )
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_timestamp ON remoteid(timestamp)"
             )
             conn.execute(
@@ -480,26 +484,56 @@ class WebDatabase:
             conn.commit()
 
     def get_all_sources(self) -> List[Dict]:
-        """Get all unique data sources from sync_log with their latest info"""
+        """Get all unique data sources from sync_log and remoteid tables"""
         with sqlite3.connect(
             self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
         ) as conn:
             conn.row_factory = sqlite3.Row
-            cursor = conn.execute(
+            # Get sources from sync_log
+            sync_cursor = conn.execute(
                 "SELECT source, MAX(last_sync) as last_sync, "
                 "SUM(records_imported) as total_records "
                 "FROM sync_log GROUP BY source ORDER BY source"
             )
-            rows = cursor.fetchall()
-            result = []
-            for row in rows:
-                entry = {
+            sync_rows = sync_cursor.fetchall()
+
+            # Also get sources that have data in remoteid but may not be in sync_log
+            data_cursor = conn.execute(
+                "SELECT source, MAX(timestamp) as last_ts "
+                "FROM remoteid WHERE source IS NOT NULL "
+                "GROUP BY source ORDER BY source"
+            )
+            data_rows = data_cursor.fetchall()
+
+            def _parse_ts(val):
+                if isinstance(val, datetime):
+                    return val
+                if isinstance(val, str):
+                    try:
+                        return datetime.fromisoformat(val)
+                    except (ValueError, TypeError):
+                        return None
+                return None
+
+            # Merge: sync_log entries take priority, supplement with remoteid-only sources
+            source_map = {}
+            for row in sync_rows:
+                source_map[row["source"]] = {
                     "source": row["source"],
-                    "last_sync": row["last_sync"],
+                    "last_sync": _parse_ts(row["last_sync"]),
                     "total_records": row["total_records"],
                 }
-                result.append(entry)
-            return result
+
+            for row in data_rows:
+                name = row["source"]
+                if name not in source_map:
+                    source_map[name] = {
+                        "source": name,
+                        "last_sync": _parse_ts(row["last_ts"]),
+                        "total_records": None,
+                    }
+
+            return sorted(source_map.values(), key=lambda s: s["source"])
 
     def get_drones(self, start_time: datetime, end_time: datetime) -> List[Dict]:
         """Get list of unique drones seen in time window with latest positions
@@ -715,6 +749,9 @@ class WebDatabase:
         # pylint: disable=too-many-locals
         """Insert multiple records into remoteid table with session detection.
 
+        Uses INSERT OR IGNORE with a UNIQUE index on (uas_id, timestamp)
+        to skip duplicates without per-record SELECT checks.
+
         Args:
             source: The source name to associate with records
             records: List of record dictionaries
@@ -723,110 +760,105 @@ class WebDatabase:
         Returns:
             Tuple of (inserted_count, errors, most_recent_timestamp)
         """
-        inserted = 0
         errors = []
+        batch_params = []
+        uas_sessions = {}
         most_recent = None
 
-        # Track session state per UAS for this batch
-        uas_sessions = {}
+        # Phase 1: validate records and build batch params (no DB I/O)
+        for idx, record in enumerate(records):
+            try:
+                if not record.get("uas_id"):
+                    errors.append({"index": idx, "reason": "Missing uas_id"})
+                    continue
 
+                ts_str = record.get("timestamp")
+                if not ts_str:
+                    errors.append({"index": idx, "reason": "Missing timestamp"})
+                    continue
+
+                try:
+                    timestamp = datetime.fromisoformat(
+                        ts_str.replace("Z", "+00:00").replace("+00:00", "")
+                    )
+                except ValueError:
+                    errors.append(
+                        {"index": idx, "reason": f"Invalid timestamp: {ts_str}"}
+                    )
+                    continue
+
+                lat = self._sanitize_float(record.get("latitude"), "latitude")
+                lon = self._sanitize_float(record.get("longitude"), "longitude")
+                alt = self._sanitize_float(record.get("altitude"), "altitude")
+                op_lat = self._sanitize_float(
+                    record.get("operator_latitude"), "operator_latitude"
+                )
+                op_lon = self._sanitize_float(
+                    record.get("operator_longitude"), "operator_longitude"
+                )
+
+                batch_params.append({
+                    "source": source,
+                    "timestamp": timestamp,
+                    "uas_id": record["uas_id"],
+                    "mac_address": record.get("mac_address"),
+                    "session_id": record.get("session_id"),
+                    "latitude": lat,
+                    "longitude": lon,
+                    "altitude": alt,
+                    "operator_id": record.get("operator_id"),
+                    "operator_latitude": op_lat,
+                    "operator_longitude": op_lon,
+                    "session_detected_at": datetime.now(),
+                })
+
+                if most_recent is None or timestamp > most_recent:
+                    most_recent = timestamp
+
+            except (ValueError, TypeError) as e:
+                errors.append({"index": idx, "reason": str(e)})
+
+        if not batch_params:
+            return 0, errors, most_recent
+
+        # Phase 2: batch insert with session detection (single DB round-trip)
         with sqlite3.connect(
             self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
         ) as conn:
-            for idx, record in enumerate(records):
-                try:
-                    # Validate required fields
-                    if not record.get("uas_id"):
-                        errors.append({"index": idx, "reason": "Missing uas_id"})
-                        continue
+            before = conn.execute("SELECT COUNT(*) FROM remoteid").fetchone()[0]
 
-                    # Parse and validate timestamp
-                    ts_str = record.get("timestamp")
-                    if not ts_str:
-                        errors.append({"index": idx, "reason": "Missing timestamp"})
-                        continue
+            rows = []
+            for rec in batch_params:
+                uas_id = rec["uas_id"]
+                timestamp = rec["timestamp"]
+                computed_session_id = self._detect_session(
+                    conn, uas_id, timestamp, uas_sessions, session_gap_threshold
+                )
+                rec["computed_session_id"] = computed_session_id
+                rows.append((
+                    rec["source"], rec["timestamp"], rec["mac_address"],
+                    rec["uas_id"], rec["session_id"], rec["latitude"],
+                    rec["longitude"], rec["altitude"], rec["operator_id"],
+                    rec["operator_latitude"], rec["operator_longitude"],
+                    rec["computed_session_id"], rec["session_detected_at"],
+                ))
+                uas_sessions[uas_id] = (timestamp, computed_session_id)
 
-                    try:
-                        timestamp = datetime.fromisoformat(
-                            ts_str.replace("Z", "+00:00").replace("+00:00", "")
-                        )
-                    except ValueError:
-                        errors.append(
-                            {"index": idx, "reason": f"Invalid timestamp: {ts_str}"}
-                        )
-                        continue
-
-                    # Check for duplicate (uas_id + timestamp)
-                    existing = conn.execute(
-                        "SELECT 1 FROM remoteid WHERE uas_id = ? AND timestamp = ?",
-                        (record["uas_id"], timestamp),
-                    ).fetchone()
-
-                    if existing:
-                        # Skip duplicate - don't count as error
-                        continue
-
-                    # Sanitize coordinates
-                    lat = self._sanitize_float(record.get("latitude"), "latitude")
-                    lon = self._sanitize_float(record.get("longitude"), "longitude")
-                    alt = self._sanitize_float(record.get("altitude"), "altitude")
-                    op_lat = self._sanitize_float(
-                        record.get("operator_latitude"), "operator_latitude"
-                    )
-                    op_lon = self._sanitize_float(
-                        record.get("operator_longitude"), "operator_longitude"
-                    )
-
-                    # Detect session
-                    uas_id = record["uas_id"]
-                    computed_session_id = self._detect_session(
-                        conn, uas_id, timestamp, uas_sessions, session_gap_threshold
-                    )
-
-                    # Build insert parameters
-                    params = {
-                        "source": source,
-                        "timestamp": timestamp,
-                        "uas_id": uas_id,
-                        "mac_address": record.get("mac_address"),
-                        "session_id": record.get("session_id"),
-                        "latitude": lat,
-                        "longitude": lon,
-                        "altitude": alt,
-                        "operator_id": record.get("operator_id"),
-                        "operator_latitude": op_lat,
-                        "operator_longitude": op_lon,
-                        "computed_session_id": computed_session_id,
-                        "session_detected_at": datetime.now(),
-                    }
-
-                    conn.execute(
-                        """
-                        INSERT INTO remoteid
-                        (source, timestamp, mac_address, uas_id, session_id,
-                         latitude, longitude, altitude, operator_id,
-                         operator_latitude, operator_longitude,
-                         computed_session_id, session_detected_at)
-                        VALUES (:source, :timestamp, :mac_address, :uas_id, :session_id,
-                                :latitude, :longitude, :altitude, :operator_id,
-                                :operator_latitude, :operator_longitude,
-                                :computed_session_id, :session_detected_at)
-                        """,
-                        params,
-                    )
-                    inserted += 1
-
-                    # Update session tracking for this batch
-                    uas_sessions[uas_id] = (timestamp, computed_session_id)
-
-                    # Track most recent timestamp
-                    if most_recent is None or timestamp > most_recent:
-                        most_recent = timestamp
-
-                except (sqlite3.Error, ValueError, TypeError) as e:
-                    errors.append({"index": idx, "reason": str(e)})
-
+            conn.executemany(
+                """
+                INSERT OR IGNORE INTO remoteid
+                (source, timestamp, mac_address, uas_id, session_id,
+                 latitude, longitude, altitude, operator_id,
+                 operator_latitude, operator_longitude,
+                 computed_session_id, session_detected_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
             conn.commit()
+
+            after = conn.execute("SELECT COUNT(*) FROM remoteid").fetchone()[0]
+            inserted = after - before
 
         return inserted, errors, most_recent
 

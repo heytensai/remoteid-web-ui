@@ -350,7 +350,6 @@ const UIController = {
 
         // Collector status bar toggle
         this.elements.collectorBar.addEventListener('click', () => {
-            if (this.collectors.length === 0) return;
             this.collectorDetailOpen = !this.collectorDetailOpen;
             this.elements.collectorDetail.style.display = this.collectorDetailOpen ? 'block' : 'none';
         });
@@ -921,19 +920,22 @@ const UIController = {
         const now = Date.now();
         const twentyMin = 20 * 60 * 1000;
         let connected = 0;
-        let latestTs = 0;
+        let latestDataTs = 0;
         for (const c of this.collectors) {
+            if (c.last_sync && c.last_sync !== 'Never') {
+                const ts = new Date(c.last_sync).getTime();
+                if (now - ts < twentyMin) connected++;
+            }
             if (c.last_data && c.last_data !== 'Never') {
                 const ts = new Date(c.last_data).getTime();
-                if (ts > latestTs) latestTs = ts;
-                if (now - ts < twentyMin) connected++;
+                if (ts > latestDataTs) latestDataTs = ts;
             }
         }
         const statusClass = connected === total
             ? 'collector-status-ok'
             : connected > 0 ? 'collector-status-partial' : 'collector-status-none';
-        const latestStr = latestTs > 0
-            ? new Date(latestTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+        const latestStr = latestDataTs > 0
+            ? new Date(latestDataTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
             : 'never';
         el.innerHTML = `Connected: <span class="${statusClass}">${connected}/${total}</span> &middot; Last Data: ${latestStr}`;
     },
@@ -943,34 +945,43 @@ const UIController = {
      */
     _renderCollectorDetail() {
         const body = this.elements.collectorDetailBody;
+        const header = this.elements.collectorDetail?.querySelector('.collector-detail-header');
         if (!body) return;
         if (this.collectors.length === 0) {
-            body.innerHTML = '';
+            if (header) header.textContent = 'Remote Sources';
+            body.innerHTML = '<div class="collector-empty">No remote sources configured</div>';
             return;
         }
+        if (header) header.textContent = 'Remote Sources';
         const now = Date.now();
         const twentyMin = 20 * 60 * 1000;
         const esc = (v) => this.escapeHtml(v);
 
+        const fmt = (v) => {
+            if (!v || v === 'Never') return 'Never';
+            const d = new Date(v);
+            return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+        };
+
         let html = '';
         for (const c of this.collectors) {
-            const ts = c.last_data && c.last_data !== 'Never' ? new Date(c.last_data) : null;
-            const isActive = ts && (now - ts.getTime() < twentyMin);
+            const syncTs = c.last_sync && c.last_sync !== 'Never' ? new Date(c.last_sync) : null;
+            const isActive = syncTs && (now - syncTs.getTime() < twentyMin);
             const iconHtml = isActive
-                ? '<i class="fas fa-check-circle collector-icon active" title="Data received in last 20 min"></i>'
-                : '<i class="fas fa-clock collector-icon stale" title="No recent data"></i>';
+                ? '<i class="fas fa-check-circle collector-icon active" title="Synced in last 20 min"></i>'
+                : '<i class="fas fa-clock collector-icon stale" title="No recent sync"></i>';
             const typeLabel = c.type === 'api' ? 'API' : 'Sync';
             const typeIcon = c.type === 'api' ? '<i class="fas fa-cloud-upload-alt"></i>' : '<i class="fas fa-database"></i>';
-            const timeStr = ts
-                ? ts.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
-                : 'Never';
             html += `<div class="collector-row">
                 <div class="collector-row-left">
                     ${iconHtml}
                     <span class="collector-name">${esc(c.name)}</span>
                     <span class="collector-type-badge">${typeIcon} ${typeLabel}</span>
                 </div>
-                <div class="collector-row-right">${esc(timeStr)}</div>
+                <div class="collector-row-right">
+                    <div class="collector-time"><span class="collector-time-label">Data:</span> ${esc(fmt(c.last_data))}</div>
+                    <div class="collector-time"><span class="collector-time-label">Sync:</span> ${esc(fmt(c.last_sync))}</div>
+                </div>
             </div>`;
         }
         body.innerHTML = html;

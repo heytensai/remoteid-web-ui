@@ -959,6 +959,13 @@ body.dark-mode .analytics-alert-log-btn:hover {
     gap: 6px;
 }
 
+.collector-empty {
+    font-size: 0.8rem;
+    color: #999;
+    padding: 8px 10px;
+    text-align: center;
+}
+
 .collector-row {
     display: flex;
     align-items: center;
@@ -976,8 +983,18 @@ body.dark-mode .analytics-alert-log-btn:hover {
 }
 
 .collector-row-right {
-    font-size: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    font-size: 0.7rem;
     color: #6c757d;
+}
+
+.collector-time-label {
+    color: #999;
+    font-weight: 500;
+    margin-right: 2px;
 }
 
 .collector-icon {
