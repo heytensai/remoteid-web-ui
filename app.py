@@ -96,23 +96,50 @@ def set_sync_status():
 
 @app.route("/api/sync/collectors")
 def get_collectors_status():
-    """Get status of all sync collectors"""
+    """Get status of all data sources (sync collectors + API submitters)"""
+    collectors_status = {}
+    known_sources = set()
+
+    # Add configured sync collectors
     if SYNC_MANAGER:
-        collectors_status = []
         for collector in SYNC_MANAGER.collectors:
+            known_sources.add(collector.name)
             last_sync = SYNC_MANAGER.get_last_sync(collector.name)
-            collectors_status.append(
-                {
-                    "name": collector.name,
-                    "host": collector.host,
-                    "path": collector.remote_db_path,
-                    "last_sync": (
-                        last_sync.strftime("%Y-%m-%d %H:%M") if last_sync else "Never"
-                    ),
-                }
-            )
-        return jsonify({"collectors": collectors_status})
-    return jsonify({"collectors": []})
+            last_data = DATABASE.get_most_recent_timestamp(source=collector.name)
+            collectors_status[collector.name] = {
+                "name": collector.name,
+                "type": "collector",
+                "host": collector.host,
+                "path": collector.remote_db_path,
+                "last_sync": (
+                    last_sync.strftime("%Y-%m-%d %H:%M") if last_sync else "Never"
+                ),
+                "last_data": (
+                    last_data.strftime("%Y-%m-%d %H:%M:%S") if last_data else "Never"
+                ),
+            }
+
+    # Add API submitters from sync_log
+    for source_info in DATABASE.get_all_sources():
+        name = source_info["source"]
+        if name not in known_sources:
+            known_sources.add(name)
+            last_data = DATABASE.get_most_recent_timestamp(source=name)
+            last_sync = source_info["last_sync"]
+            collectors_status[name] = {
+                "name": name,
+                "type": "api",
+                "host": None,
+                "path": None,
+                "last_sync": (
+                    last_sync.strftime("%Y-%m-%d %H:%M") if last_sync else "Never"
+                ),
+                "last_data": (
+                    last_data.strftime("%Y-%m-%d %H:%M:%S") if last_data else "Never"
+                ),
+            }
+
+    return jsonify({"collectors": list(collectors_status.values())})
 
 
 @app.route("/api/drones")
@@ -401,6 +428,9 @@ def submit_data():
     try:
         # Insert records
         inserted, errors, _ = DATABASE.insert_remoteid_records(source, data)
+
+        # Log the submission to sync_log
+        DATABASE.log_submission(source, inserted)
 
         # Check submitted positions against alert-enabled geozones
         if ALERT_ENGINE:

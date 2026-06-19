@@ -313,8 +313,17 @@
 
             <!-- Time Controls -->
             <div class="time-controls">
-                <div class="last-update">
-                    <span id="lastUpdate">Last updated: never</span>
+                <div class="collector-bar" id="collectorBar">
+                    <div class="collector-bar-left">
+                        <span id="collectorSummary">Sync not configured</span>
+                    </div>
+                    <div class="collector-bar-right">
+                        <span id="lastUpdate">Last updated: never</span>
+                    </div>
+                </div>
+                <div class="collector-detail" id="collectorDetail" style="display: none;">
+                    <div class="collector-detail-header">Collectors</div>
+                    <div id="collectorDetailBody" class="collector-detail-body"></div>
                 </div>
             </div>
         </div>

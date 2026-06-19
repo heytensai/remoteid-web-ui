@@ -25,6 +25,8 @@ const UIController = {
     alertLogLimit: 50,
     alertLogTotal: 0,
     expandedDates: new Set(),
+    collectors: [],
+    collectorDetailOpen: false,
     _suppressTimeChange: false,
 
     // DOM Elements
@@ -166,6 +168,10 @@ const UIController = {
             statPositions: document.getElementById('statPositions'),
             statActiveAlerts: document.getElementById('statActiveAlerts'),
             statTotalAlerts: document.getElementById('statTotalAlerts'),
+            collectorBar: document.getElementById('collectorBar'),
+            collectorSummary: document.getElementById('collectorSummary'),
+            collectorDetail: document.getElementById('collectorDetail'),
+            collectorDetailBody: document.getElementById('collectorDetailBody'),
         };
 
     },
@@ -341,6 +347,13 @@ const UIController = {
             }
         });
 
+        // Collector status bar toggle
+        this.elements.collectorBar.addEventListener('click', () => {
+            if (this.collectors.length === 0) return;
+            this.collectorDetailOpen = !this.collectorDetailOpen;
+            this.elements.collectorDetail.style.display = this.collectorDetailOpen ? 'block' : 'none';
+        });
+
         // Geozone alert filter toggle
         this.elements.geozoneAlertFilter.addEventListener('change', () => {
             this.showGeozoneAlerts = this.elements.geozoneAlertFilter.checked;
@@ -475,6 +488,9 @@ const UIController = {
             } else if (this.elements.syncToggleContainer) {
                 this.elements.syncToggleContainer.style.display = 'none';
             }
+
+            // Always load collector/remotes status
+            await this._loadCollectorStatus();
 
             // Initialize units from config
             Units.init(config);
@@ -854,6 +870,89 @@ const UIController = {
     },
 
     /**
+     * Load collector status from server
+     */
+    async _loadCollectorStatus() {
+        try {
+            const data = await API.getCollectorsStatus();
+            this.collectors = data.collectors || [];
+            this._updateCollectorSummary();
+            this._renderCollectorDetail();
+        } catch (e) {
+            console.error('Failed to load collector status:', e);
+        }
+    },
+
+    /**
+     * Update collector status summary bar
+     */
+    _updateCollectorSummary() {
+        const el = this.elements.collectorSummary;
+        if (!el) return;
+        const total = this.collectors.length;
+        if (total === 0) {
+            el.innerHTML = 'No remotes configured';
+            return;
+        }
+        const now = Date.now();
+        const twentyMin = 20 * 60 * 1000;
+        let connected = 0;
+        let latestTs = 0;
+        for (const c of this.collectors) {
+            if (c.last_data && c.last_data !== 'Never') {
+                const ts = new Date(c.last_data).getTime();
+                if (ts > latestTs) latestTs = ts;
+                if (now - ts < twentyMin) connected++;
+            }
+        }
+        const statusClass = connected === total
+            ? 'collector-status-ok'
+            : connected > 0 ? 'collector-status-partial' : 'collector-status-none';
+        const latestStr = latestTs > 0
+            ? new Date(latestTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+            : 'never';
+        el.innerHTML = `Connected: <span class="${statusClass}">${connected}/${total}</span> &middot; Last Data: ${latestStr}`;
+    },
+
+    /**
+     * Render collector detail panel
+     */
+    _renderCollectorDetail() {
+        const body = this.elements.collectorDetailBody;
+        if (!body) return;
+        if (this.collectors.length === 0) {
+            body.innerHTML = '';
+            return;
+        }
+        const now = Date.now();
+        const twentyMin = 20 * 60 * 1000;
+        const esc = (v) => this.escapeHtml(v);
+
+        let html = '';
+        for (const c of this.collectors) {
+            const ts = c.last_data && c.last_data !== 'Never' ? new Date(c.last_data) : null;
+            const isActive = ts && (now - ts.getTime() < twentyMin);
+            const iconHtml = isActive
+                ? '<i class="fas fa-check-circle collector-icon active" title="Data received in last 20 min"></i>'
+                : '<i class="fas fa-clock collector-icon stale" title="No recent data"></i>';
+            const typeLabel = c.type === 'api' ? 'API' : 'Sync';
+            const typeIcon = c.type === 'api' ? '<i class="fas fa-cloud-upload-alt"></i>' : '<i class="fas fa-database"></i>';
+            const timeStr = ts
+                ? ts.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
+                : 'Never';
+            html += `<div class="collector-row">
+                <div class="collector-row-left">
+                    ${iconHtml}
+                    <span class="collector-name">${esc(c.name)}</span>
+                    <span class="collector-type-badge">${typeIcon} ${typeLabel}</span>
+                </div>
+                <div class="collector-row-right">${esc(timeStr)}</div>
+            </div>`;
+        }
+        body.innerHTML = html;
+    },
+
+    /**
      * Activate the preset matching the given hours, clear others
      */
     _updateActivePresetForHours(hours) {
@@ -892,12 +991,20 @@ const UIController = {
             MapController.clearAllDroneMarkers();
             MapController.clearAllOperators();
 
-            // Fetch drones, alerts, and stats in parallel
-            const [dronesResponse, alertsResponse, statsResponse] = await Promise.all([
+            // Fetch drones, alerts, stats, and collector status in parallel
+            const [dronesResponse, alertsResponse, statsResponse, collectorsResponse] = await Promise.all([
                 API.getDrones(this.currentStartTime, this.currentEndTime),
                 API.getAlerts(),
                 API.getStats(this.currentStartTime, this.currentEndTime),
+                API.getCollectorsStatus().catch(() => ({ collectors: [] })),
             ]);
+
+            // Update collector status
+            this.collectors = collectorsResponse.collectors || [];
+            this._updateCollectorSummary();
+            if (this.collectorDetailOpen) {
+                this._renderCollectorDetail();
+            }
             let drones = dronesResponse.drones || [];
             this.alertEvents = alertsResponse.active || [];
             this._renderStats(statsResponse);

@@ -896,6 +896,149 @@ body.dark-mode .analytics-alert-log-btn:hover {
     color: #6c757d;
 }
 
+/* Collector status bar */
+.collector-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+}
+
+.collector-bar:hover {
+    opacity: 0.8;
+}
+
+.collector-bar-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8rem;
+    color: #6c757d;
+}
+
+.collector-bar-right {
+    font-size: 0.8rem;
+    color: #6c757d;
+}
+
+.collector-status-ok {
+    color: #28a745;
+    font-weight: 600;
+}
+
+.collector-status-partial {
+    color: #e67e22;
+    font-weight: 600;
+}
+
+.collector-status-none {
+    color: #6c757d;
+    font-weight: 600;
+}
+
+/* Collector detail panel (expands from bottom) */
+.collector-detail {
+    border-top: 1px solid #dee2e6;
+    margin-top: 8px;
+    padding-top: 8px;
+}
+
+.collector-detail-header {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #6c757d;
+    margin-bottom: 8px;
+}
+
+.collector-detail-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.collector-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    background: #f8f9fa;
+    border-radius: 6px;
+    font-size: 0.8rem;
+}
+
+.collector-row-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.collector-row-right {
+    font-size: 0.75rem;
+    color: #6c757d;
+}
+
+.collector-icon {
+    font-size: 0.85rem;
+}
+
+.collector-icon.active {
+    color: #28a745;
+}
+
+.collector-icon.stale {
+    color: #adb5bd;
+}
+
+.collector-name {
+    font-weight: 500;
+    color: #2c3e50;
+}
+
+.collector-type-badge {
+    font-size: 0.65rem;
+    color: #6c757d;
+    background: #e9ecef;
+    padding: 1px 6px;
+    border-radius: 8px;
+    white-space: nowrap;
+}
+
+body.dark-mode .collector-bar {
+    color: #a0a0c0;
+}
+
+body.dark-mode .collector-bar-left {
+    color: #a0a0c0;
+}
+
+body.dark-mode .collector-bar-right {
+    color: #a0a0c0;
+}
+
+body.dark-mode .collector-detail {
+    border-color: #333;
+}
+
+body.dark-mode .collector-detail-header {
+    color: #a0a0c0;
+}
+
+body.dark-mode .collector-row {
+    background: #2a2a3e;
+}
+
+body.dark-mode .collector-name {
+    color: #e0e0e0;
+}
+
+body.dark-mode .collector-type-badge {
+    background: #3a3a4e;
+    color: #999;
+}
+
 /* Leaflet Popup Customization */
 .leaflet-popup-content-wrapper {
     border-radius: 8px;

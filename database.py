@@ -468,6 +468,39 @@ class WebDatabase:
             )
             conn.commit()
 
+    def log_submission(self, source_name: str, records_count: int):
+        """Log an HTTP data submission to the sync log"""
+        with sqlite3.connect(
+            self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
+        ) as conn:
+            conn.execute(
+                "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (?, ?, ?)",
+                (source_name, datetime.now(), records_count),
+            )
+            conn.commit()
+
+    def get_all_sources(self) -> List[Dict]:
+        """Get all unique data sources from sync_log with their latest info"""
+        with sqlite3.connect(
+            self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
+        ) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                "SELECT source, MAX(last_sync) as last_sync, "
+                "SUM(records_imported) as total_records "
+                "FROM sync_log GROUP BY source ORDER BY source"
+            )
+            rows = cursor.fetchall()
+            result = []
+            for row in rows:
+                entry = {
+                    "source": row["source"],
+                    "last_sync": row["last_sync"],
+                    "total_records": row["total_records"],
+                }
+                result.append(entry)
+            return result
+
     def get_drones(self, start_time: datetime, end_time: datetime) -> List[Dict]:
         """Get list of unique drones seen in time window with latest positions
 
