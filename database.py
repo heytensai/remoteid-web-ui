@@ -941,6 +941,63 @@ class WebDatabase:
             )
             conn.commit()
 
+    def get_geozone_event_history(
+        self,
+        uas_id: Optional[str] = None,
+        geozone_name: Optional[str] = None,
+        from_date: Optional[datetime] = None,
+        to_date: Optional[datetime] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Tuple[List[Dict], int]:
+        """Get geozone event history with filtering and pagination.
+
+        Returns (events, total_count) tuple.
+        """
+        with sqlite3.connect(
+            self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
+        ) as conn:
+            conn.row_factory = sqlite3.Row
+
+            conditions = []
+            params = []
+
+            if uas_id:
+                conditions.append("uas_id = ?")
+                params.append(uas_id)
+            if geozone_name:
+                conditions.append("geozone_name = ?")
+                params.append(geozone_name)
+            if from_date:
+                conditions.append("entered_at >= ?")
+                params.append(from_date)
+            if to_date:
+                conditions.append("entered_at <= ?")
+                params.append(to_date)
+
+            where = " AND ".join(conditions) if conditions else "1=1"
+
+            # Get total count
+            count_cursor = conn.execute(
+                f"SELECT COUNT(*) FROM geozone_events WHERE {where}", params
+            )
+            total = count_cursor.fetchone()[0]
+
+            # Get paginated results
+            query_params = params + [limit, offset]
+            cursor = conn.execute(
+                f"""
+                SELECT * FROM geozone_events
+                WHERE {where}
+                ORDER BY entered_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                query_params,
+            )
+            events = [dict(row) for row in cursor.fetchall()]
+
+            return events, total
+
     def check_stale_geozone_events(
         self, stale_timeout: int, reference_time: datetime
     ) -> int:

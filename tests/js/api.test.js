@@ -118,6 +118,44 @@ describe('API', () => {
     });
   });
 
+  describe('getAlertHistory', () => {
+    test('fetches alert history without filters', async () => {
+      global.fetch = mockFetch({ events: [], total: 0, limit: 50, offset: 0 });
+
+      await API.getAlertHistory({ limit: 50, offset: 0 });
+      const url = fetch.mock.calls[0][0];
+      expect(url).toContain('/api/alerts/history?');
+      expect(url).toContain('limit=50');
+      expect(url).toContain('offset=0');
+    });
+
+    test('fetches alert history with no params', async () => {
+      global.fetch = mockFetch({ events: [], total: 0, limit: 100, offset: 0 });
+
+      await API.getAlertHistory({});
+      const url = fetch.mock.calls[0][0];
+      expect(url).toBe('/api/alerts/history?');
+    });
+
+    test('includes filter params', async () => {
+      global.fetch = mockFetch({ events: [], total: 0, limit: 100, offset: 0 });
+
+      await API.getAlertHistory({
+        uas_id: 'drone-001',
+        geozone_name: 'ZoneA',
+        from: '2024-01-01T00:00:00Z',
+        to: '2024-01-02T00:00:00Z',
+        limit: 100,
+        offset: 0,
+      });
+      const url = fetch.mock.calls[0][0];
+      expect(url).toContain('uas_id=drone-001');
+      expect(url).toContain('geozone_name=ZoneA');
+      expect(url).toContain('from=');
+      expect(url).toContain('to=');
+    });
+  });
+
   describe('_post', () => {
     test('includes CSRF token header', async () => {
       API.csrfToken = 'csrf-abc';

@@ -20,6 +20,10 @@ const UIController = {
     showUnknownDrones: true,
     showGeozoneAlerts: false,
     alertEvents: [],
+    alertLogModalOpen: false,
+    alertLogPage: 0,
+    alertLogLimit: 50,
+    alertLogTotal: 0,
     expandedDates: new Set(),
     _suppressTimeChange: false,
 
@@ -141,7 +145,20 @@ const UIController = {
             waypointsDropdown: document.getElementById('waypointsDropdown'),
             waypointsList: document.getElementById('waypointsList'),
             geozoneAlertFilter: document.getElementById('geozoneAlertFilter'),
-            alertFilterCount: document.getElementById('alertFilterCount')
+            alertFilterCount: document.getElementById('alertFilterCount'),
+            openAlertLogBtn: document.getElementById('openAlertLog'),
+            alertLogModal: document.getElementById('alertLogModal'),
+            closeAlertLogBtn: document.getElementById('closeAlertLog'),
+            alertLogBody: document.getElementById('alertLogBody'),
+            alertLogTotal: document.getElementById('alertLogTotal'),
+            alertLogPageInfo: document.getElementById('alertLogPageInfo'),
+            alertLogPrev: document.getElementById('alertLogPrev'),
+            alertLogNext: document.getElementById('alertLogNext'),
+            alertLogSearchBtn: document.getElementById('alertLogSearchBtn'),
+            alertLogUasFilter: document.getElementById('alertLogUasFilter'),
+            alertLogGeozoneFilter: document.getElementById('alertLogGeozoneFilter'),
+            alertLogFromDate: document.getElementById('alertLogFromDate'),
+            alertLogToDate: document.getElementById('alertLogToDate'),
         };
 
     },
@@ -305,6 +322,56 @@ const UIController = {
         this.elements.geozoneAlertFilter.addEventListener('change', () => {
             this.showGeozoneAlerts = this.elements.geozoneAlertFilter.checked;
             this.refreshData();
+        });
+
+        // Alert log modal
+        this.elements.openAlertLogBtn.addEventListener('click', () => {
+            this._openAlertLog();
+        });
+
+        this.elements.closeAlertLogBtn.addEventListener('click', () => {
+            this.alertLogModalOpen = false;
+            this.elements.alertLogModal.style.display = 'none';
+        });
+
+        this.elements.alertLogModal.addEventListener('click', (e) => {
+            if (e.target === this.elements.alertLogModal) {
+                this.alertLogModalOpen = false;
+                this.elements.alertLogModal.style.display = 'none';
+            }
+        });
+
+        this.elements.alertLogSearchBtn.addEventListener('click', () => {
+            this.alertLogPage = 0;
+            this._loadAlertLog();
+        });
+
+        this.elements.alertLogPrev.addEventListener('click', () => {
+            if (this.alertLogPage > 0) {
+                this.alertLogPage--;
+                this._loadAlertLog();
+            }
+        });
+
+        this.elements.alertLogNext.addEventListener('click', () => {
+            if ((this.alertLogPage + 1) * this.alertLogLimit < this.alertLogTotal) {
+                this.alertLogPage++;
+                this._loadAlertLog();
+            }
+        });
+
+        // Enter key in filter inputs triggers search
+        this.elements.alertLogUasFilter.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                this.alertLogPage = 0;
+                this._loadAlertLog();
+            }
+        });
+        this.elements.alertLogGeozoneFilter.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                this.alertLogPage = 0;
+                this._loadAlertLog();
+            }
         });
 
     },
@@ -545,6 +612,142 @@ const UIController = {
             }
         }
         return bestMatch;
+    },
+
+    /**
+     * Open the alert log modal
+     */
+    _openAlertLog() {
+        this.alertLogModalOpen = true;
+        this.elements.alertLogModal.style.display = 'flex';
+        this.alertLogPage = 0;
+
+        // Initialize flatpickr on the date inputs if not already done
+        if (!this._alertLogFromFp) {
+            this._alertLogFromFp = flatpickr(this.elements.alertLogFromDate, {
+                enableTime: true,
+                dateFormat: 'Y-m-d H:i',
+                time_24hr: true,
+            });
+        }
+        if (!this._alertLogToFp) {
+            this._alertLogToFp = flatpickr(this.elements.alertLogToDate, {
+                enableTime: true,
+                dateFormat: 'Y-m-d H:i',
+                time_24hr: true,
+            });
+        }
+
+        this._loadAlertLog();
+    },
+
+    /**
+     * Fetch and render alert log from API
+     */
+    async _loadAlertLog() {
+        const filters = {};
+        const uasVal = this.elements.alertLogUasFilter.value.trim();
+        if (uasVal) filters.uas_id = uasVal;
+        const geoVal = this.elements.alertLogGeozoneFilter.value.trim();
+        if (geoVal) filters.geozone_name = geoVal;
+        if (this._alertLogFromFp && this._alertLogFromFp.selectedDates.length > 0) {
+            filters.from = this._alertLogFromFp.selectedDates[0].toISOString();
+        }
+        if (this._alertLogToFp && this._alertLogToFp.selectedDates.length > 0) {
+            filters.to = this._alertLogToFp.selectedDates[0].toISOString();
+        }
+        filters.limit = this.alertLogLimit;
+        filters.offset = this.alertLogPage * this.alertLogLimit;
+
+        try {
+            const data = await API.getAlertHistory(filters);
+            this.alertLogTotal = data.total || 0;
+            this._renderAlertLog(data.events || []);
+            this._updateAlertLogPagination();
+            if (this.elements.alertLogTotal) {
+                this.elements.alertLogTotal.textContent = this.alertLogTotal;
+            }
+        } catch (e) {
+            console.error('Failed to load alert history:', e);
+        }
+    },
+
+    /**
+     * Render alert events in the log table
+     */
+    _renderAlertLog(events) {
+        const esc = (v) => this.escapeHtml(v);
+        const tbody = this.elements.alertLogBody;
+        if (!tbody) return;
+
+        if (events.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="alert-log-empty">No events found</td></tr>';
+            return;
+        }
+
+        let html = '';
+        for (const ev of events) {
+            const entered = ev.entered_at ? ev.entered_at.replace('T', ' ').substring(0, 16) : '-';
+            const uasId = esc(ev.uas_id || '');
+            const geozone = esc(ev.geozone_name || '');
+
+            // Compute duration
+            let duration = '-';
+            if (ev.entered_at) {
+                const enteredTime = new Date(ev.entered_at).getTime();
+                const exitedTime = ev.exited_at ? new Date(ev.exited_at).getTime() : Date.now();
+                const diffMs = exitedTime - enteredTime;
+                if (diffMs >= 0) {
+                    const mins = Math.floor(diffMs / 60000);
+                    if (mins < 60) {
+                        duration = `${mins}m`;
+                    } else {
+                        const hrs = Math.floor(mins / 60);
+                        const remainMins = mins % 60;
+                        duration = remainMins > 0 ? `${hrs}h ${remainMins}m` : `${hrs}h`;
+                    }
+                }
+            }
+
+            // Status
+            let statusClass = 'active';
+            let statusLabel = 'Active';
+            if (ev.exited_at) {
+                if (ev.exited_reason === 'timeout') {
+                    statusClass = 'timeout';
+                    statusLabel = 'Timed Out';
+                } else {
+                    statusClass = 'exited';
+                    statusLabel = 'Exited';
+                }
+            }
+
+            html += `<tr>
+                <td>${esc(entered)}</td>
+                <td>${uasId}</td>
+                <td>${geozone}</td>
+                <td>${esc(duration)}</td>
+                <td><span class="alert-log-status ${statusClass}">${statusLabel}</span></td>
+            </tr>`;
+        }
+        tbody.innerHTML = html;
+    },
+
+    /**
+     * Update alert log pagination buttons and page info
+     */
+    _updateAlertLogPagination() {
+        const totalPages = Math.ceil(this.alertLogTotal / this.alertLogLimit) || 1;
+        const currentPage = this.alertLogPage + 1;
+        if (this.elements.alertLogPageInfo) {
+            this.elements.alertLogPageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+        }
+        if (this.elements.alertLogPrev) {
+            this.elements.alertLogPrev.disabled = this.alertLogPage <= 0;
+        }
+        if (this.elements.alertLogNext) {
+            this.elements.alertLogNext.disabled = currentPage >= totalPages;
+        }
     },
 
     /**

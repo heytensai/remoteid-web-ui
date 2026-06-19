@@ -273,3 +273,68 @@ def test_sanitize_record():
     assert sanitized["altitude"] is None
     assert sanitized["operator_latitude"] is None
     assert sanitized["timestamp"] == "2024-01-15T10:00:00"
+
+
+# --- Geozone event history tests ---
+
+def test_get_geozone_event_history_empty(db):
+    events, total = db.get_geozone_event_history()
+    assert events == []
+    assert total == 0
+
+
+def test_get_geozone_event_history_all(db):
+    now = datetime.now()
+    db.enter_geozone("drone-001", "ZoneA", now)
+    db.enter_geozone("drone-002", "ZoneB", now)
+    events, total = db.get_geozone_event_history()
+    assert total == 2
+    assert len(events) == 2
+
+
+def test_get_geozone_event_history_filter_uas(db):
+    now = datetime.now()
+    db.enter_geozone("drone-001", "ZoneA", now)
+    db.enter_geozone("drone-002", "ZoneB", now)
+    events, total = db.get_geozone_event_history(uas_id="drone-001")
+    assert total == 1
+    assert events[0]["uas_id"] == "drone-001"
+
+
+def test_get_geozone_event_history_filter_geozone(db):
+    now = datetime.now()
+    db.enter_geozone("drone-001", "ZoneA", now)
+    db.enter_geozone("drone-001", "ZoneB", now)
+    events, total = db.get_geozone_event_history(geozone_name="ZoneA")
+    assert total == 1
+    assert events[0]["geozone_name"] == "ZoneA"
+
+
+def test_get_geozone_event_history_filter_date(db):
+    now = datetime.now()
+    old = now - timedelta(days=10)
+    db.enter_geozone("drone-001", "ZoneA", old)
+    db.enter_geozone("drone-001", "ZoneB", now)
+    events, total = db.get_geozone_event_history(from_date=now - timedelta(days=1))
+    assert total == 1
+    assert events[0]["geozone_name"] == "ZoneB"
+
+
+def test_get_geozone_event_history_pagination(db):
+    now = datetime.now()
+    for i in range(10):
+        db.enter_geozone(f"drone-{i:03d}", f"Zone{i}", now)
+    events, total = db.get_geozone_event_history(limit=3, offset=0)
+    assert total == 10
+    assert len(events) == 3
+
+
+def test_get_geozone_event_history_orders_by_entered_desc(db):
+    now = datetime.now()
+    e1 = db.enter_geozone("drone-001", "ZoneA", now - timedelta(hours=2))
+    e2 = db.enter_geozone("drone-001", "ZoneB", now - timedelta(hours=1))
+    events, total = db.get_geozone_event_history(uas_id="drone-001")
+    assert total == 2
+    # Most recent first
+    assert events[0]["geozone_name"] == "ZoneB"
+    assert events[1]["geozone_name"] == "ZoneA"

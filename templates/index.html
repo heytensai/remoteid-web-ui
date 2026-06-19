@@ -157,6 +157,63 @@
                             Show Geozone Alerts Only <i class="fas fa-exclamation-triangle"></i> <span class="geozone-alert-count" id="alertFilterCount">0</span>
                         </label>
                     </div>
+                    <div class="settings-section">
+                        <h4 class="settings-section-title">Alert Log</h4>
+                        <button id="openAlertLog" class="alert-log-btn">
+                            <i class="fas fa-history"></i> Browse Event History
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Alert Log Modal -->
+            <div id="alertLogModal" class="modal-overlay" style="display: none;">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3><i class="fas fa-history"></i> Geozone Alert History</h3>
+                        <button id="closeAlertLog" class="close-btn">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="alert-log-filters">
+                            <input type="text" id="alertLogUasFilter" placeholder="Filter by UAS ID..." class="alert-log-input">
+                            <input type="text" id="alertLogGeozoneFilter" placeholder="Filter by geozone..." class="alert-log-input">
+                            <input type="text" id="alertLogFromDate" class="flatpickr alert-log-date" placeholder="From date">
+                            <input type="text" id="alertLogToDate" class="flatpickr alert-log-date" placeholder="To date">
+                            <button id="alertLogSearchBtn" class="alert-log-search-btn">
+                                <i class="fas fa-search"></i> Search
+                            </button>
+                        </div>
+                        <div class="alert-log-summary">
+                            <span id="alertLogTotal">0</span> events found
+                        </div>
+                        <div class="alert-log-table-wrap">
+                            <table class="alert-log-table">
+                                <thead>
+                                    <tr>
+                                        <th>Entered</th>
+                                        <th>UAS ID</th>
+                                        <th>Geozone</th>
+                                        <th>Duration</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="alertLogBody">
+                                    <tr><td colspan="5" class="alert-log-empty">No events found</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="alert-log-pagination">
+                            <button id="alertLogPrev" class="alert-log-page-btn" disabled>
+                                <i class="fas fa-chevron-left"></i> Previous
+                            </button>
+                            <span id="alertLogPageInfo">Page 1</span>
+                            <button id="alertLogNext" class="alert-log-page-btn">
+                                Next <i class="fas fa-chevron-right"></i>
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
 

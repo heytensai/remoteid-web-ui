@@ -61,6 +61,67 @@ class TestApiAlerts:
         assert data["active"][0]["uas_id"] == "drone-001"
 
 
+class TestApiAlertHistory:
+    def test_get_history_empty(self, client):
+        resp = client.get("/api/alerts/history")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["events"] == []
+        assert data["total"] == 0
+        assert data["limit"] == 100
+        assert data["offset"] == 0
+
+    def test_get_history_with_data(self, client, app):
+        import app as _app_module
+        db = _app_module.DATABASE
+        now = datetime.now()
+        db.enter_geozone("drone-001", "ZoneA", now)
+        db.enter_geozone("drone-002", "ZoneB", now)
+        resp = client.get("/api/alerts/history")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["total"] == 2
+        assert len(data["events"]) == 2
+
+    def test_get_history_filter_uas(self, client, app):
+        import app as _app_module
+        db = _app_module.DATABASE
+        now = datetime.now()
+        db.enter_geozone("drone-001", "ZoneA", now)
+        db.enter_geozone("drone-002", "ZoneB", now)
+        resp = client.get("/api/alerts/history?uas_id=drone-001")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["total"] == 1
+        assert data["events"][0]["uas_id"] == "drone-001"
+
+    def test_get_history_filter_geozone(self, client, app):
+        import app as _app_module
+        db = _app_module.DATABASE
+        now = datetime.now()
+        db.enter_geozone("drone-001", "ZoneA", now)
+        db.enter_geozone("drone-001", "ZoneB", now)
+        resp = client.get("/api/alerts/history?geozone_name=ZoneA")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["total"] == 1
+        assert data["events"][0]["geozone_name"] == "ZoneA"
+
+    def test_get_history_pagination(self, client, app):
+        import app as _app_module
+        db = _app_module.DATABASE
+        now = datetime.now()
+        for i in range(5):
+            db.enter_geozone(f"drone-{i:03d}", f"Zone{i}", now)
+        resp = client.get("/api/alerts/history?limit=2&offset=0")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["total"] == 5
+        assert len(data["events"]) == 2
+        assert data["limit"] == 2
+        assert data["offset"] == 0
+
+
 class TestApiDrones:
     def test_get_drones(self, client, db):
         resp = client.get("/api/drones")

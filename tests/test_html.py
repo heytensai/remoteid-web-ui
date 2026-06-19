@@ -121,3 +121,24 @@ class TestIndexTemplate:
         favicon = soup.find("link", rel="icon")
         assert favicon is not None
         assert "favicon.svg" in favicon.get("href", "")
+
+    def test_alert_log_modal(self, client):
+        resp = client.get("/")
+        soup = BeautifulSoup(resp.data, "html.parser")
+
+        # Alert log button in settings
+        assert soup.find(id="openAlertLog") is not None
+        assert soup.find(id="alertLogModal") is not None
+        assert soup.find(id="closeAlertLog") is not None
+        assert soup.find(id="alertLogBody") is not None
+        assert soup.find(id="alertLogTotal") is not None
+        assert soup.find(id="alertLogSearchBtn") is not None
+        assert soup.find(id="alertLogUasFilter") is not None
+        assert soup.find(id="alertLogGeozoneFilter") is not None
+
+    def test_alert_log_settings_section(self, client):
+        resp = client.get("/")
+        soup = BeautifulSoup(resp.data, "html.parser")
+        section_titles = soup.find_all("h4", class_="settings-section-title")
+        titles_text = [t.get_text(strip=True) for t in section_titles]
+        assert "Alert Log" in titles_text

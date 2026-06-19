@@ -116,6 +116,21 @@ const API = {
     },
 
     /**
+     * Get geozone alert event history with optional filtering
+     * @param {Object} [filters] - Optional filters {uas_id, geozone_name, from, to, limit, offset}
+     */
+    async getAlertHistory(filters = {}) {
+        const params = new URLSearchParams();
+        if (filters.uas_id) params.append('uas_id', filters.uas_id);
+        if (filters.geozone_name) params.append('geozone_name', filters.geozone_name);
+        if (filters.from) params.append('from', filters.from);
+        if (filters.to) params.append('to', filters.to);
+        if (filters.limit !== undefined) params.append('limit', String(filters.limit));
+        if (filters.offset !== undefined) params.append('offset', String(filters.offset));
+        return this._get(`/api/alerts/history?${params}`);
+    },
+
+    /**
      * Generic GET request with retry logic
      */
     async _get(url, retries = 2, delay = 500) {

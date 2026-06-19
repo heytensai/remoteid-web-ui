@@ -443,6 +443,51 @@ def get_alerts():
     })
 
 
+@app.route("/api/alerts/history", methods=["GET"])
+def get_alert_history():
+    """Get geozone event history with optional filtering."""
+    try:
+        uas_id = request.args.get("uas_id") or None
+        geozone_name = request.args.get("geozone_name") or None
+        limit = min(int(request.args.get("limit", 100)), 500)
+        offset = int(request.args.get("offset", 0))
+
+        from_str = request.args.get("from")
+        to_str = request.args.get("to")
+        from_date = None
+        to_date = None
+        if from_str:
+            from_date = datetime.fromisoformat(from_str.replace("Z", "+00:00"))
+        if to_str:
+            to_date = datetime.fromisoformat(to_str.replace("Z", "+00:00"))
+
+        events, total = DATABASE.get_geozone_event_history(
+            uas_id=uas_id,
+            geozone_name=geozone_name,
+            from_date=from_date,
+            to_date=to_date,
+            limit=limit,
+            offset=offset,
+        )
+
+        # Format datetime fields to ISO strings for JSON
+        for event in events:
+            for key in ("entered_at", "last_seen_at", "exited_at", "created_at"):
+                val = event.get(key)
+                if val and hasattr(val, "isoformat"):
+                    event[key] = val.isoformat()
+
+        return jsonify({
+            "events": events,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        })
+    except (ValueError, TypeError, sqlite3.Error):
+        logger.exception("Error getting alert history")
+        return jsonify({"error": "Internal server error"}), 500
+
+
 @app.route("/api/last-timestamp", methods=["GET"])
 def get_last_timestamp():
     """Get the most recent timestamp in the database.
