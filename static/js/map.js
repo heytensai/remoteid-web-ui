@@ -20,6 +20,20 @@ const MapController = {
     waypoints: [],
     waypointMarkers: {},
     loadedTrackSessions: new Set(),
+    sessionPositions: {},  // "uas_id:session_id" -> [{latitude, longitude, altitude, timestamp}, ...]
+    replayState: {
+        active: false,
+        playing: false,
+        speed: 4,
+        clusters: [],
+        totalDisplayDuration: 0,
+        animFrameId: null,
+        startWallTime: null,
+        currentDisplayTime: 0,
+        progressPolylines: {},
+        replayMarkers: {},
+        boundSessions: [], // [{uas_id, session_id}] in display order
+    },
     tileLayer: null,
     ready: false,
     staleTimeout: 300,
@@ -502,6 +516,7 @@ const MapController = {
         if (!this.ready || !this.layers.tracks) return;
         this.layers.tracks.clearLayers();
         this.tracks = {};
+        this.sessionPositions = {};
         this.loadedTrackSessions.clear();
     },
 
@@ -602,6 +617,17 @@ const MapController = {
                 this.layers.tracks.removeLayer(this.tracks[trackKey]);
             }
             delete this.tracks[trackKey];
+        }
+
+        // Clean up session positions
+        if (sessionKey) {
+            delete this.sessionPositions[sessionKey];
+        } else {
+            for (const key of Object.keys(this.sessionPositions)) {
+                if (key.startsWith(`${uasId}:`)) {
+                    delete this.sessionPositions[key];
+                }
+            }
         }
 
         // Also clear session operators for this specific session if sessionKey provided
@@ -707,6 +733,9 @@ const MapController = {
             this.tracks[sessionKey] = [];
         }
         this.tracks[sessionKey].push(polyline);
+
+        // Store raw positions for replay use
+        this.sessionPositions[sessionKey] = positions;
 
         // Add start and end markers for this session
         this._addSessionMarkers(uasId, sessionId, positions, color, sessionKey);
@@ -952,7 +981,338 @@ const MapController = {
      */
     highlightDrone(uasId) {
         this.panToDrone(uasId);
-    }
+    },
+
+    // ==============================
+    // Historical Track Replay Engine
+    // ==============================
+
+    _buildReplayTimeline(sessionKeys) {
+        const entries = [];
+        for (const key of sessionKeys) {
+            const positions = this.sessionPositions[key];
+            if (!positions || positions.length < 2) continue;
+            const [uasId, sessionId] = key.split(':');
+            const times = positions.map(p => new Date(p.timestamp).getTime());
+            entries.push({
+                key,
+                uas_id: uasId,
+                session_id: sessionId,
+                positions,
+                realStart: Math.min(...times),
+                realEnd: Math.max(...times),
+            });
+        }
+        if (entries.length === 0) return { clusters: [], totalDuration: 0, bound: [] };
+
+        entries.sort((a, b) => a.realStart - b.realStart);
+
+        const clusters = [];
+        let current = { sessions: [entries[0]], realStart: entries[0].realStart, realEnd: entries[0].realEnd };
+        for (let i = 1; i < entries.length; i++) {
+            const e = entries[i];
+            if (e.realStart <= current.realEnd) {
+                current.sessions.push(e);
+                current.realEnd = Math.max(current.realEnd, e.realEnd);
+            } else {
+                clusters.push(current);
+                current = { sessions: [e], realStart: e.realStart, realEnd: e.realEnd };
+            }
+        }
+        clusters.push(current);
+
+        let displayTime = 0;
+        for (const c of clusters) {
+            c.displayOffset = displayTime;
+            c.displayDuration = c.realEnd - c.realStart;
+            displayTime += c.displayDuration + 3000;
+        }
+
+        return { clusters, totalDuration: displayTime, bound: entries };
+    },
+
+    startReplay(sessionKeys) {
+        if (!this.ready || sessionKeys.length === 0) return;
+
+        this.stopReplay();
+
+        const { clusters, totalDuration, bound } = this._buildReplayTimeline(sessionKeys);
+        if (clusters.length === 0) return;
+
+        this.replayState.clusters = clusters;
+        this.replayState.totalDisplayDuration = totalDuration;
+        this.replayState.boundSessions = bound;
+        this.replayState.currentDisplayTime = 0;
+        this.replayState.active = true;
+        this.replayState.playing = true;
+        this.replayState.startWallTime = performance.now();
+
+        // Store original track styles and hide session markers for replay
+        for (const key of sessionKeys) {
+            const track = this.tracks[key];
+            if (track) {
+                track._savedOpacity = track.length > 0 ? track[0].options.opacity : 0.6;
+                // Keep the full track visible at reduced opacity as "future" preview
+                for (const seg of track) {
+                    seg.setStyle({ opacity: 0.15, weight: 2 });
+                }
+            }
+
+            // Create progress (past) polyline
+            this.replayState.progressPolylines[key] = null;
+
+            // Create moving marker
+            const [uasId] = key.split(':');
+            const color = this.getDroneColor(uasId);
+            const icon = L.divIcon({
+                className: 'replay-marker',
+                html: `<div style="width:14px;height:14px;background:${color};border:2px solid #fff;border-radius:50%;box-shadow:0 0 6px ${color};"></div>`,
+                iconSize: [14, 14],
+                iconAnchor: [7, 7],
+            });
+            const pos = this.sessionPositions[key];
+            const marker = L.marker([pos[0].latitude, pos[0].longitude], { icon });
+            marker.addTo(this.layers.tracks);
+            this.replayState.replayMarkers[key] = marker;
+        }
+
+        UIController._onReplayStart();
+        this._replayLoop();
+    },
+
+    stopReplay() {
+        this.replayState.playing = false;
+        this.replayState.active = false;
+        if (this.replayState.animFrameId) {
+            cancelAnimationFrame(this.replayState.animFrameId);
+            this.replayState.animFrameId = null;
+        }
+
+        // Restore original track styles and remove replay artifacts
+        for (const key of Object.keys(this.replayState.progressPolylines)) {
+            const pp = this.replayState.progressPolylines[key];
+            if (pp) {
+                this.layers.tracks.removeLayer(pp);
+            }
+            // Restore original track
+            const track = this.tracks[key];
+            if (track) {
+                const saved = track._savedOpacity || 0.6;
+                for (const seg of track) {
+                    seg.setStyle({ opacity: saved, weight: 3 });
+                }
+            }
+        }
+
+        for (const key of Object.keys(this.replayState.replayMarkers)) {
+            this.layers.tracks.removeLayer(this.replayState.replayMarkers[key]);
+        }
+
+        this.replayState.progressPolylines = {};
+        this.replayState.replayMarkers = {};
+        this.replayState.boundSessions = [];
+
+        UIController._onReplayStop();
+    },
+
+    pauseReplay() {
+        if (!this.replayState.active || !this.replayState.playing) return;
+        this.replayState.playing = false;
+        if (this.replayState.animFrameId) {
+            cancelAnimationFrame(this.replayState.animFrameId);
+            this.replayState.animFrameId = null;
+        }
+        UIController._onReplayPause();
+    },
+
+    resumeReplay() {
+        if (!this.replayState.active || this.replayState.playing) return;
+        this.replayState.playing = true;
+        this.replayState.startWallTime = performance.now();
+        this._replayLoop();
+        UIController._onReplayResume();
+    },
+
+    setReplaySpeed(speed) {
+        // Adjust startWallTime so currentDisplayTime stays the same
+        if (this.replayState.playing) {
+            const elapsed = performance.now() - this.replayState.startWallTime;
+            this.replayState.currentDisplayTime += elapsed * this.replayState.speed;
+            this.replayState.startWallTime = performance.now();
+        }
+        this.replayState.speed = speed;
+    },
+
+    seekReplay(displayTime) {
+        this.replayState.currentDisplayTime = Math.max(0, Math.min(displayTime, this.replayState.totalDisplayDuration));
+        this.replayState.startWallTime = performance.now();
+        if (!this.replayState.playing) {
+            this._updateReplayFrame();
+        }
+    },
+
+    _replayLoop() {
+        if (!this.replayState.active || !this.replayState.playing) return;
+
+        const now = performance.now();
+        const elapsed = now - this.replayState.startWallTime;
+        this.replayState.currentDisplayTime += elapsed * this.replayState.speed;
+        this.replayState.startWallTime = now;
+
+        if (this.replayState.currentDisplayTime >= this.replayState.totalDisplayDuration) {
+            this.stopReplay();
+            return;
+        }
+
+        this._updateReplayFrame();
+
+        this.replayState.animFrameId = requestAnimationFrame(() => this._replayLoop());
+    },
+
+    _updateReplayFrame() {
+        const dt = this.replayState.currentDisplayTime;
+
+        // Find which cluster we're in
+        let activeCluster = null;
+        let clusterRealTime = 0;
+        for (const c of this.replayState.clusters) {
+            if (dt >= c.displayOffset && dt < c.displayOffset + c.displayDuration) {
+                activeCluster = c;
+                clusterRealTime = c.realStart + (dt - c.displayOffset);
+                break;
+            }
+        }
+
+        // Collect latlngs of active drones for auto-pan
+        const activePositions = [];
+
+        // Update each session that has a replay marker
+        for (const entry of this.replayState.boundSessions) {
+            const key = entry.key;
+            const marker = this.replayState.replayMarkers[key];
+            if (!marker) continue;
+
+            const positions = entry.positions;
+            const pos = this._interpolatePosition(positions, clusterRealTime);
+
+            if (pos) {
+                marker.setLatLng([pos.latitude, pos.longitude]);
+                if (activeCluster && activeCluster.sessions.some(s => s.key === key)) {
+                    activePositions.push([pos.latitude, pos.longitude]);
+                }
+            }
+
+            // Update progress polyline (past portion)
+            this._updateProgressPolyline(key, positions, clusterRealTime);
+        }
+
+        // Auto-pan to keep active drones in viewport
+        if (activePositions.length > 0 && this.map) {
+            let needsPan = false;
+            const bounds = this.map.getBounds();
+            for (const ll of activePositions) {
+                if (!bounds.contains(ll)) {
+                    needsPan = true;
+                    break;
+                }
+            }
+            if (needsPan) {
+                if (activePositions.length === 1) {
+                    this.map.panTo(activePositions[0], { animate: true, duration: 0.3 });
+                } else {
+                    this.map.fitBounds(activePositions, { padding: [50, 50], animate: true, duration: 0.3 });
+                }
+            }
+        }
+
+        // Notify UI of active sessions
+        const activeKeys = activeCluster ? activeCluster.sessions.map(s => s.key) : [];
+        UIController._onReplayActiveSessions(activeKeys);
+
+        // Notify UI of time update
+        if (activeCluster) {
+            UIController._onReplayTime(clusterRealTime, dt, this.replayState.totalDisplayDuration);
+        } else {
+            // Between clusters - show the end of the previous or start of next
+            let boundaryTime = 0;
+            for (const c of this.replayState.clusters) {
+                if (dt >= c.displayOffset + c.displayDuration) {
+                    boundaryTime = c.realEnd;
+                } else if (dt < c.displayOffset) {
+                    boundaryTime = c.realStart;
+                    break;
+                }
+            }
+            UIController._onReplayTime(boundaryTime, dt, this.replayState.totalDisplayDuration);
+        }
+    },
+
+    _interpolatePosition(positions, targetTimeMs) {
+        if (!positions || positions.length === 0) return null;
+        if (positions.length === 1) return positions[0];
+
+        const target = targetTimeMs;
+
+        // Find the two bracketing positions
+        for (let i = 0; i < positions.length - 1; i++) {
+            const t1 = new Date(positions[i].timestamp).getTime();
+            const t2 = new Date(positions[i + 1].timestamp).getTime();
+
+            if (target >= t1 && target <= t2) {
+                const span = t2 - t1;
+                if (span === 0) return positions[i];
+                const frac = (target - t1) / span;
+                return {
+                    latitude: positions[i].latitude + (positions[i + 1].latitude - positions[i].latitude) * frac,
+                    longitude: positions[i].longitude + (positions[i + 1].longitude - positions[i].longitude) * frac,
+                    altitude: positions[i].altitude + (positions[i + 1].altitude - positions[i].altitude) * frac,
+                    timestamp: new Date(target).toISOString(),
+                };
+            }
+        }
+
+        // Before first or after last
+        if (target < new Date(positions[0].timestamp).getTime()) return positions[0];
+        return positions[positions.length - 1];
+    },
+
+    _updateProgressPolyline(key, positions, currentTimeMs) {
+        const pastPoints = [];
+        const target = currentTimeMs;
+        for (const p of positions) {
+            const t = new Date(p.timestamp).getTime();
+            if (t <= target) {
+                pastPoints.push([p.latitude, p.longitude]);
+            } else {
+                // Add interpolated point at current time
+                const interp = this._interpolatePosition(positions, target);
+                if (interp) {
+                    pastPoints.push([interp.latitude, interp.longitude]);
+                }
+                break;
+            }
+        }
+
+        if (pastPoints.length < 2) {
+            if (this.replayState.progressPolylines[key]) {
+                this.layers.tracks.removeLayer(this.replayState.progressPolylines[key]);
+                this.replayState.progressPolylines[key] = null;
+            }
+            return;
+        }
+
+        let pp = this.replayState.progressPolylines[key];
+        if (pp) {
+            pp.setLatLngs(pastPoints);
+        } else {
+            const [uasId] = key.split(':');
+            const color = this.getDroneColor(uasId);
+            pp = L.polyline(pastPoints, {
+                color, weight: 4, opacity: 0.95,
+            }).addTo(this.layers.tracks);
+            this.replayState.progressPolylines[key] = pp;
+        }
+    },
 };
 
 // Initialize map when DOM is ready

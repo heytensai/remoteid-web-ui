@@ -13,6 +13,9 @@ const UIController = {
     defaultHours: 24,
     droneMap: {},
     loadedTracks: new Set(),
+    replayActive: false,
+    replayPlaying: false,
+    replaySpeed: 4,
     selectedDrone: null,
     selectedDroneTrack: null,
     visibleSessions: new Set(), // Track which sessions are checked/visible
@@ -174,6 +177,13 @@ const UIController = {
             collectorSummary: document.getElementById('collectorSummary'),
             collectorDetail: document.getElementById('collectorDetail'),
             collectorDetailBody: document.getElementById('collectorDetailBody'),
+            replayPlayBtn: document.getElementById('replayPlayBtn'),
+            replayControls: document.getElementById('replayControls'),
+            replayPlayPauseBtn: document.getElementById('replayPlayPauseBtn'),
+            replayStopBtn: document.getElementById('replayStopBtn'),
+            replaySpeedBtns: document.querySelectorAll('.replay-speed-btn'),
+            replayTimeline: document.getElementById('replayTimeline'),
+            replayTimeDisplay: document.getElementById('replayTimeDisplay'),
         };
 
     },
@@ -214,6 +224,46 @@ const UIController = {
         // Close detail panel
         this.elements.closeDetailBtn.addEventListener('click', () => {
             this._closeDetailPanel();
+        });
+
+        // Replay play button (sidebar header)
+        this.elements.replayPlayBtn.addEventListener('click', () => {
+            this._startReplay();
+        });
+
+        // Replay play/pause button
+        this.elements.replayPlayPauseBtn.addEventListener('click', () => {
+            if (this.replayPlaying) {
+                MapController.pauseReplay();
+            } else {
+                MapController.resumeReplay();
+            }
+        });
+
+        // Replay stop button
+        this.elements.replayStopBtn.addEventListener('click', () => {
+            MapController.stopReplay();
+        });
+
+        // Replay speed buttons
+        this.elements.replaySpeedBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const speed = parseInt(e.currentTarget.dataset.speed);
+                this.elements.replaySpeedBtns.forEach(b => b.classList.remove('active'));
+                e.currentTarget.classList.add('active');
+                this.replaySpeed = speed;
+                MapController.setReplaySpeed(speed);
+            });
+        });
+
+        // Replay timeline seek
+        this.elements.replayTimeline.addEventListener('input', (e) => {
+            if (!this.replayActive) return;
+            const val = parseFloat(e.currentTarget.value);
+            const max = parseFloat(e.currentTarget.max);
+            if (max > 0) {
+                MapController.seekReplay(val);
+            }
         });
 
         // Time preset buttons (header)
@@ -1260,9 +1310,12 @@ const UIController = {
                         const key = `${s.uas_id}:${s.session_id}`;
                         if (!loadedSet.has(key)) this.loadedTracks.delete(key);
                     });
+                    this._updateReplayButtonState();
                 });
             }
         }
+
+        this._updateReplayButtonState();
 
         // Add date checkbox handlers
         list.querySelectorAll('.date-checkbox').forEach(checkbox => {
@@ -1287,7 +1340,7 @@ const UIController = {
                             if (sessionId) {
                                 this.loadedTracks.add(sessionKey);
                                 MapController.loadTrackSession(uasId, sessionId, this.currentStartTime, this.currentEndTime)
-                                    .then(success => { if (!success) this.loadedTracks.delete(sessionKey); });
+                                    .then(success => { if (!success) this.loadedTracks.delete(sessionKey); this._updateReplayButtonState(); });
                             }
                         }
                     } else {
@@ -1307,6 +1360,7 @@ const UIController = {
                 });
 
                 e.target.indeterminate = false;
+                this._updateReplayButtonState();
             });
         });
 
@@ -1356,7 +1410,7 @@ const UIController = {
                         if (sessionId) {
                             this.loadedTracks.add(sessionKey);
                             MapController.loadTrackSession(uasId, sessionId, this.currentStartTime, this.currentEndTime)
-                                .then(success => { if (!success) this.loadedTracks.delete(sessionKey); });
+                                .then(success => { if (!success) this.loadedTracks.delete(sessionKey); this._updateReplayButtonState(); });
                         }
                     }
                 } else {
@@ -1375,6 +1429,7 @@ const UIController = {
 
                 // Update date checkbox state
                 this._updateDateCheckboxState(group);
+                this._updateReplayButtonState();
             });
         });
 
@@ -1445,7 +1500,7 @@ const UIController = {
                 if (sessionId && !this.loadedTracks.has(sessionKey)) {
                     this.loadedTracks.add(sessionKey);
                     MapController.loadTrackSession(uasId, sessionId, this.currentStartTime, this.currentEndTime)
-                        .then(success => { if (!success) this.loadedTracks.delete(sessionKey); });
+                        .then(success => { if (!success) this.loadedTracks.delete(sessionKey); this._updateReplayButtonState(); });
                 }
 
                 // Close sidebar on mobile
@@ -1863,7 +1918,98 @@ const UIController = {
             this._exportMenu.remove();
             this._exportMenu = null;
         }
-    }
+    },
+
+    // ==============================
+    // Replay Controls
+    // ==============================
+
+    _startReplay() {
+        const checkedKeys = [];
+        this.visibleSessions.forEach(key => {
+            if (MapController.sessionPositions[key] && MapController.sessionPositions[key].length >= 2) {
+                checkedKeys.push(key);
+            }
+        });
+        if (checkedKeys.length === 0) return;
+        MapController.startReplay(checkedKeys);
+    },
+
+    _onReplayStart() {
+        this.replayActive = true;
+        this.replayPlaying = true;
+        this.elements.replayControls.style.display = 'flex';
+        this.elements.replayPlayBtn.querySelector('i').className = 'fas fa-pause';
+        this.elements.replayPlayPauseBtn.querySelector('i').className = 'fas fa-pause';
+    },
+
+    _onReplayStop() {
+        this.replayActive = false;
+        this.replayPlaying = false;
+        this.elements.replayControls.style.display = 'none';
+        const icon = this.elements.replayPlayBtn.querySelector('i');
+        if (icon) icon.className = 'fas fa-play';
+        // Clear replay-active indicators
+        this.elements.droneList.querySelectorAll('.drone-item.replay-active').forEach(el => {
+            el.classList.remove('replay-active');
+        });
+        this._updateReplayButtonState();
+    },
+
+    _onReplayActiveSessions(activeKeys) {
+        const list = this.elements.droneList;
+        list.querySelectorAll('.drone-item.replay-active').forEach(el => {
+            el.classList.remove('replay-active');
+        });
+        const activeSet = new Set(activeKeys);
+        list.querySelectorAll('.drone-item').forEach(el => {
+            const key = el.dataset.sessionKey;
+            if (key && activeSet.has(key)) {
+                el.classList.add('replay-active');
+            }
+        });
+    },
+
+    _onReplayPause() {
+        this.replayPlaying = false;
+        this.elements.replayPlayPauseBtn.querySelector('i').className = 'fas fa-play';
+    },
+
+    _onReplayResume() {
+        this.replayPlaying = true;
+        this.elements.replayPlayPauseBtn.querySelector('i').className = 'fas fa-pause';
+    },
+
+    _onReplayTime(realTimeMs, displayTimeMs, totalDurationMs) {
+        // Update time display
+        const d = new Date(realTimeMs);
+        const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+        this.elements.replayTimeDisplay.textContent = timeStr;
+
+        // Update timeline slider
+        if (totalDurationMs > 0) {
+            this.elements.replayTimeline.max = totalDurationMs;
+            this.elements.replayTimeline.value = displayTimeMs;
+        }
+    },
+
+    _onReplayEnd() {
+        // Replay naturally ended
+        this._onReplayStop();
+    },
+
+    /**
+     * Update the play button enabled state based on checked sessions
+     */
+    _updateReplayButtonState() {
+        let hasData = false;
+        this.visibleSessions.forEach(key => {
+            if (MapController.sessionPositions[key] && MapController.sessionPositions[key].length >= 2) {
+                hasData = true;
+            }
+        });
+        this.elements.replayPlayBtn.disabled = !hasData || this.replayActive;
+    },
 };
 
 // Initialize when DOM is ready

@@ -24,6 +24,9 @@ module.exports = [
         AbortController: 'readonly',
         URLSearchParams: 'readonly',
         localStorage: 'readonly',
+        performance: 'readonly',
+        requestAnimationFrame: 'readonly',
+        cancelAnimationFrame: 'readonly',
       },
     },
     rules: {
