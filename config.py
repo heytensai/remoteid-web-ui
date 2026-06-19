@@ -354,7 +354,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         }
 
     def reload_hot_config(self):
-        """Re-read config file and update hot-reloadable fields (drone_aliases, waypoints, session_detection)"""
+        """Re-read config file and update hot-reloadable fields (api_keys, drone_aliases, waypoints, session_detection)"""
         try:
             with open(self.config_path, encoding="utf-8") as fh:
                 data = yaml.safe_load(fh)
@@ -365,6 +365,12 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
             if new_aliases != self.drone_aliases:
                 self.drone_aliases = new_aliases
                 logger.info("Reloaded drone_aliases from %s", self.config_path)
+
+            # Reload API keys
+            new_api_keys = web_data.get("api_keys") or {}
+            if new_api_keys != self.api_keys:
+                self.api_keys = new_api_keys
+                logger.info("Reloaded api_keys from %s", self.config_path)
 
             # Reload manufacturer prefixes
             new_prefixes = web_data.get("manufacturer_prefixes") or {}

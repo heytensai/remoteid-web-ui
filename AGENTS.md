@@ -37,7 +37,7 @@
 - `default_hours` - Default time window for queries
 - `max_positions_per_query` - Limit to prevent browser lag
 - `use_metric` - Display units: true=metric (meters), false=imperial (feet)
-- `api_keys` - API keys for remote data submission
+- `api_keys` - API keys for remote data submission (hot-reloadable)
 - `drone_aliases` - Map UAS IDs to friendly names
 - `waypoints` - Custom map markers (name, lat, lon, icon, color, description, enabled, category)
 - `session_detection` - Background session detection settings (enabled, interval, gap_threshold, log_level)

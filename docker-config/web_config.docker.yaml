@@ -33,6 +33,10 @@ web_interface:
   # Limit to prevent browser lag
   max_positions_per_query: 5000
 
+  # API keys for remote node data submission
+  # See default.web_config.yaml for documentation
+  api_keys: {}
+
   # Manufacturer prefixes: serial prefix -> manufacturer name
   # ICAO-assigned 4-char manufacturer codes per ANSI/CTA-2063-A
   manufacturer_prefixes:

@@ -611,3 +611,73 @@ class TestYamlErrors:
         path = _write_raw("web_interface:\n  port: [5000\n")
         with pytest.raises(ValueError, match="Failed to parse config"):
             WebConfig(path)
+
+
+class TestApiKeysHotReload:
+    """Tests for api_keys hot reload in reload_hot_config"""
+
+    def test_api_keys_reloadable(self, sample_config_yaml):
+        """Changing api_keys in the YAML is picked up by reload_hot_config"""
+        config_path, _ = sample_config_yaml
+
+        cfg = WebConfig(config_path)
+        assert cfg.api_keys == {"test-api-key-123": "test-source"}
+
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        data["web_interface"]["api_keys"] = {
+            "new-key": "new-source",
+            "another-key": "another-source",
+        }
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f)
+
+        cfg.reload_hot_config()
+        assert cfg.api_keys == {
+            "new-key": "new-source",
+            "another-key": "another-source",
+        }
+
+    def test_api_keys_reload_removes_keys(self, sample_config_yaml):
+        """Removing keys from YAML is reflected after reload"""
+        config_path, _ = sample_config_yaml
+
+        cfg = WebConfig(config_path)
+        assert cfg.api_keys == {"test-api-key-123": "test-source"}
+
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        data["web_interface"]["api_keys"] = {}
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f)
+
+        cfg.reload_hot_config()
+        assert cfg.api_keys == {}
+
+    def test_api_keys_hot_reload_logs_change(self, sample_config_yaml, caplog):
+        """reload_hot_config logs when api_keys change"""
+        config_path, _ = sample_config_yaml
+
+        cfg = WebConfig(config_path)
+
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        data["web_interface"]["api_keys"] = {"new-key": "new-source"}
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f)
+
+        with caplog.at_level("INFO"):
+            cfg.reload_hot_config()
+
+        assert any("Reloaded api_keys" in msg for msg in caplog.messages)
+
+    def test_api_keys_no_log_when_unchanged(self, sample_config_yaml, caplog):
+        """reload_hot_config does not log when api_keys haven't changed"""
+        config_path, _ = sample_config_yaml
+
+        cfg = WebConfig(config_path)
+
+        with caplog.at_level("INFO"):
+            cfg.reload_hot_config()
+
+        assert not any("Reloaded api_keys" in msg for msg in caplog.messages)

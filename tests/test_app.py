@@ -357,6 +357,50 @@ class TestApiSubmit:
         )
         assert resp.status_code == 401
 
+    def test_submit_after_hot_reload_new_key(self, client, sample_config_yaml):
+        """A newly added API key works after hot reload"""
+        config_path, _ = sample_config_yaml
+
+        import yaml
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        data["web_interface"]["api_keys"]["hot-reloaded-key"] = "hot-source"
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f)
+
+        import app as _app_module
+        _app_module.CONFIG.reload_hot_config()
+
+        resp = client.post(
+            "/api/submit",
+            data=json.dumps([]),
+            content_type="application/json",
+            headers={"Authorization": "Bearer hot-reloaded-key"},
+        )
+        assert resp.status_code == 200
+
+    def test_submit_after_hot_reload_removed_key(self, client, sample_config_yaml):
+        """A removed API key is rejected after hot reload"""
+        config_path, _ = sample_config_yaml
+
+        import yaml
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        data["web_interface"]["api_keys"] = {}
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f)
+
+        import app as _app_module
+        _app_module.CONFIG.reload_hot_config()
+
+        resp = client.post(
+            "/api/submit",
+            data=json.dumps([]),
+            content_type="application/json",
+            headers={"Authorization": "Bearer test-api-key-123"},
+        )
+        assert resp.status_code == 401
+
 
 class TestApiLastTimestamp:
     def test_last_timestamp(self, client, db):
