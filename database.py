@@ -1,4 +1,5 @@
 """Database layer for web interface"""
+# pylint: disable=too-many-lines
 
 import sqlite3
 import uuid
