@@ -32,6 +32,8 @@ const UIController = {
     remotes: [],
     remoteDetailOpen: false,
     _suppressTimeChange: false,
+    wakeLock: null,
+    keepScreenOn: false,
 
     // Adaptive polling
     pollTimer: null,
@@ -58,7 +60,19 @@ const UIController = {
         this._initEventListeners();
         await this._loadConfig();
         this._restoreSettings();
+
+        // Explicitly ensure keepScreenOn is off on every page load
+        this.keepScreenOn = false;
+        this.elements.keepScreenOnCheckbox.checked = false;
+        this._releaseWakeLock();
+
         await this._initTimePicker();
+
+        // Handle visibility change for wake lock re-acquisition
+        document.addEventListener('visibilitychange', () => this._handleVisibilityChange());
+
+        // Release wake lock on page unload
+        window.addEventListener('beforeunload', () => this._releaseWakeLock());
 
         // Wait for MapController to be ready
         await this._waitForMapController();
@@ -201,6 +215,7 @@ const UIController = {
             showKnownDrones: document.getElementById('showKnownDrones'),
             showUnknownDrones: document.getElementById('showUnknownDrones'),
             darkModeCheckbox: document.getElementById('darkMode'),
+            keepScreenOnCheckbox: document.getElementById('keepScreenOn'),
             startTimeMInput: document.getElementById('startTimeM'),
             endTimeMInput: document.getElementById('endTimeM'),
             settingsTimePresets: document.querySelectorAll('.settings-time-presets button'),
@@ -396,6 +411,12 @@ const UIController = {
         // Dark mode toggle
         this.elements.darkModeCheckbox.addEventListener('change', (e) => {
             this._toggleDarkMode(e.target.checked);
+            this._saveSettings();
+        });
+
+        // Keep screen on toggle
+        this.elements.keepScreenOnCheckbox.addEventListener('change', (e) => {
+            this._toggleKeepScreenOn(e.target.checked);
             this._saveSettings();
         });
 
@@ -663,6 +684,52 @@ const UIController = {
         }
     },
 
+    _toggleKeepScreenOn(enabled) {
+        this.keepScreenOn = enabled;
+        if (enabled) {
+            this._requestWakeLock();
+        } else {
+            this._releaseWakeLock();
+        }
+    },
+
+    async _requestWakeLock() {
+        if (!('wakeLock' in navigator)) {
+            console.warn('Wake Lock API not supported');
+            this.elements.keepScreenOnCheckbox.checked = false;
+            this.keepScreenOn = false;
+            return;
+        }
+        try {
+            this.wakeLock = await navigator.wakeLock.request('screen');
+            this.wakeLock.addEventListener('release', () => {
+                console.log('Wake lock released');
+            });
+            console.log('Wake lock acquired');
+        } catch (err) {
+            console.error('Failed to acquire wake lock:', err);
+            this.elements.keepScreenOnCheckbox.checked = false;
+            this.keepScreenOn = false;
+        }
+    },
+
+    _releaseWakeLock() {
+        if (this.wakeLock) {
+            this.wakeLock.release().then(() => {
+                this.wakeLock = null;
+                console.log('Wake lock released');
+            }).catch(err => {
+                console.error('Failed to release wake lock:', err);
+            });
+        }
+    },
+
+    _handleVisibilityChange() {
+        if (this.keepScreenOn && !document.hidden && 'wakeLock' in navigator) {
+            this._requestWakeLock();
+        }
+    },
+
     _saveSettings() {
         try {
             const settings = {
@@ -709,6 +776,7 @@ const UIController = {
                 this.elements.darkModeCheckbox.checked = saved.darkMode;
                 // Defer tile switching to pending settings (needs MapController)
             }
+            // keepScreenOn is intentionally NOT restored - always starts off
 
             // Defer MapController-applied settings until after map is ready
             this._pendingSettings = {};

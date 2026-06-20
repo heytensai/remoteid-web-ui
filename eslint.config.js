@@ -15,6 +15,7 @@ module.exports = [
         UIController: 'writable',
         window: 'readonly',
         document: 'readonly',
+        navigator: 'readonly',
         console: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',
