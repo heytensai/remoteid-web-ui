@@ -33,6 +33,13 @@ const UIController = {
     remoteDetailOpen: false,
     _suppressTimeChange: false,
 
+    // Adaptive polling
+    pollTimer: null,
+    pollFastMs: 2000,
+    pollSlowMs: 10000,
+    pollActivityThresholdMs: 300000,
+    lastActivityTime: null,
+
     // DOM Elements
     elements: {},
 
@@ -86,6 +93,58 @@ const UIController = {
         MapController.clearAllTracks();
         MapController.clearAllOperators();
         await this.refreshData();
+        this._startPolling();
+    },
+
+    /**
+     * Start adaptive polling for data refreshes
+     */
+    _startPolling() {
+        if (this.pollTimer) return;
+        this.pollTimer = setInterval(() => this.refreshData(), this.pollSlowMs);
+    },
+
+    /**
+     * Stop adaptive polling
+     */
+    _stopPolling() {
+        if (this.pollTimer) {
+            clearInterval(this.pollTimer);
+            this.pollTimer = null;
+        }
+    },
+
+    /**
+     * Switch to fast (2s) polling interval
+     */
+    _switchToFastPoll() {
+        if (!this.pollTimer) return;
+        clearInterval(this.pollTimer);
+        this.pollTimer = setInterval(() => this.refreshData(), this.pollFastMs);
+    },
+
+    /**
+     * Switch to slow (10s) polling interval
+     */
+    _switchToSlowPoll() {
+        if (!this.pollTimer) return;
+        clearInterval(this.pollTimer);
+        this.pollTimer = setInterval(() => this.refreshData(), this.pollSlowMs);
+    },
+
+    /**
+     * Adjust poll timer based on recent activity:
+     * fast (2s) if activity within threshold, slow (10s) otherwise
+     */
+    _adjustPollTimer() {
+        if (!this.pollTimer) return;
+        const now = Date.now();
+        const idle = !this.lastActivityTime || (now - this.lastActivityTime > this.pollActivityThresholdMs);
+        if (idle) {
+            this._switchToSlowPoll();
+        } else {
+            this._switchToFastPoll();
+        }
     },
 
     /**
@@ -1052,6 +1111,9 @@ const UIController = {
                 this._renderRemoteDetail();
             }
             let drones = dronesResponse.drones || [];
+            if (drones.length > 0) {
+                this.lastActivityTime = Date.now();
+            }
             this.alertEvents = alertsResponse.active || [];
             this._renderStats(statsResponse);
 
@@ -1120,6 +1182,7 @@ const UIController = {
         } finally {
             this.isLoading = false;
             this.elements.refreshBtn.classList.remove('spinning');
+            this._adjustPollTimer();
         }
     },
 
