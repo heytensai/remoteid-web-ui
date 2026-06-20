@@ -1,7 +1,0 @@
-78	FIXED	session detect logs are too noisy. print 1 line at most	enhancement	2026-06-20T01:09:00Z
-80	FIXED	refresh calls 4 APIs every time, which is wasteful	enhancement	2026-06-20T06:13:21Z
-74	OPEN	Rate limiting and backpressure	enhancement	2026-06-19T22:48:26Z
-62	OPEN	Geozone proximity indicator in drone detail	enhancement	2026-06-20T01:13:21Z
-59	OPEN	Webhook on alert — POST to external URL		2026-06-18T21:03:08Z
-58	OPEN	Sound/push notification on geozone entry		2026-06-18T21:03:07Z
-53	OPEN	create API for dynamic waypoints from collectors	enhancement	2026-06-18T02:20:44Z
