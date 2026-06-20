@@ -108,7 +108,6 @@ const UIController = {
         this._populateWaypointsLists();
 
         // Clear any existing markers before loading data
-        MapController.clearAllDroneMarkers();
         MapController.clearAllTracks();
         MapController.clearAllOperators();
         await this.refreshData(false, false);
@@ -1259,7 +1258,7 @@ const UIController = {
                 const allUasIds = new Set(drones.map(d => d.uas_id));
                 MapController.filterOperatorsByUasIds(allUasIds);
             } else {
-                MapController.clearAllDroneMarkers();
+                MapController.dronePositions = {};
                 MapController.clearAllTracks();
                 MapController.clearAllOperators();
             }

@@ -81,12 +81,10 @@ const MapController = {
 
         // Create layer groups
         this.layers.tracks = L.layerGroup().addTo(this.map);
-        this.layers.drones = L.layerGroup().addTo(this.map);
         this.layers.operators = L.layerGroup().addTo(this.map);
         this.layers.waypoints = L.layerGroup().addTo(this.map);
 
         // Reset marker tracking objects
-        this.markers = {};
         this.dronePositions = {};
         this.tracks = {};
         this.operatorMarkers = {};
@@ -497,16 +495,6 @@ const MapController = {
                 <span class="popup-value">${locationNote}</span>
             </div>
         `;
-    },
-
-    /**
-     * Clear all drone markers
-     */
-    clearAllDroneMarkers() {
-        if (!this.ready || !this.layers.drones) return;
-        this.layers.drones.clearLayers();
-        this.markers = {};
-        this.dronePositions = {};
     },
 
     /**

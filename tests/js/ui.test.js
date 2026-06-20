@@ -51,7 +51,6 @@ global.MapController = {
     tracks: { clearLayers: jest.fn(), addTo: jest.fn() },
     operators: { clearLayers: jest.fn(), addTo: jest.fn() },
   },
-  clearAllDroneMarkers: jest.fn(),
   clearAllTracks: jest.fn(),
   clearAllOperators: jest.fn(),
   getDroneColor: jest.fn().mockReturnValue('hsl(120, 70%, 50%)'),
