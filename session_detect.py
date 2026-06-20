@@ -218,12 +218,12 @@ def process_database(
 
     if not db_path.exists():
         logger.error("Database not found: %s", db_path)
-        return
+        return "database not found"
 
-    logger.info("Processing database: %s", db_path)
-    logger.info("Gap threshold: %i seconds", gap_threshold)
+    logger.debug("Processing database: %s", db_path)
+    logger.debug("Gap threshold: %i seconds", gap_threshold)
     if since is not None:
-        logger.info("Incremental mode: only UAS with activity since %s", since)
+        logger.debug("Incremental mode: only UAS with activity since %s", since)
 
     # Ensure schema is up to date
     if not dry_run:
@@ -231,7 +231,7 @@ def process_database(
 
     # Get relevant UAS IDs (filtered by activity window when since is set)
     uas_list = get_uas_list(str(db_path), since=since)
-    logger.info("Found %i unique UAS IDs", len(uas_list))
+    logger.debug("Found %i unique UAS IDs", len(uas_list))
 
     total_sessions = 0
     total_records = 0
@@ -254,13 +254,6 @@ def process_database(
             total_sessions += session_count
             total_records += len(sessions)
 
-            logger.info(
-                "UAS %s: %i records, %i sessions detected",
-                uas_id,
-                len(positions),
-                session_count,
-            )
-
             if not dry_run:
                 # Batch update
                 updates = [
@@ -269,12 +262,15 @@ def process_database(
                 ]
                 update_session_ids(str(db_path), updates)
 
-    logger.info("Total UAS: %i", len(uas_list))
-    logger.info("Total records processed: %i", total_records)
-    logger.info("Total sessions detected: %i", total_sessions)
+    logger.debug(
+        "Session detection: %i UAS, %i records, %i sessions detected",
+        len(uas_list), total_records, total_sessions,
+    )
 
     if dry_run:
-        logger.info("\n(Dry run - no changes made)")
+        logger.debug("(Dry run - no changes made)")
+
+    return f"{len(uas_list)} UAS, {total_records} records, {total_sessions} sessions detected"
 
 
 def main():

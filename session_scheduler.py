@@ -83,16 +83,16 @@ class SessionScheduler:
 
             if sd.enabled:
                 try:
-                    logger.info(
-                        "Session detection run starting (gap=%ds)", sd.gap_threshold
-                    )
-                    process_database(
+                    summary = process_database(
                         self._db_path,
                         sd.gap_threshold,
                         dry_run=False,
                         since=self.last_run,
                     )
-                    logger.info("Session detection run complete")
+                    logger.info(
+                        "Session detection complete (gap=%ds): %s",
+                        sd.gap_threshold, summary,
+                    )
                 except Exception:  # pylint: disable=broad-exception-caught
                     logger.exception("Session detection run failed")
             else:
