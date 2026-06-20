@@ -37,6 +37,7 @@ ALERT_ENGINE: Optional[AlertEngine] = None
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24).hex())
 csrf = CSRFProtect(app)
+logging.getLogger("flask_wtf.csrf").setLevel(logging.WARNING)
 # CORS intentionally not set globally — API is same-origin via the Flask server.
 # Only /api/submit allows cross-origin (uses Bearer token auth).
 
@@ -128,14 +129,14 @@ def get_refresh():
 
         try:
             active = DATABASE.get_active_geozone_events()
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught
             logger.exception("Error getting alerts in refresh")
             active = []
         uas_ids = list(set(e["uas_id"] for e in active))
 
         try:
             stats = DATABASE.get_stats(start, end)
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught
             logger.exception("Error getting stats in refresh")
             stats = {}
 
@@ -154,7 +155,7 @@ def get_refresh():
                         last_data.strftime("%Y-%m-%d %H:%M:%S") if last_data else "Never"
                     ),
                 })
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught
             logger.exception("Error getting sources in refresh")
             sources = []
 
