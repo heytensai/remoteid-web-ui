@@ -36,11 +36,16 @@ const UIController = {
     keepScreenOn: false,
 
     // Adaptive polling
+    _initialized: false,
     pollTimer: null,
     pollFastMs: 2000,
     pollSlowMs: 10000,
     pollActivityThresholdMs: 300000,
+    _pollMode: 'slow',
     lastActivityTime: null,
+
+    // Incremental update tracking
+    droneTimestamps: {}, // Map of "uas_id:session_id" -> last known timestamp
 
     // DOM Elements
     elements: {},
@@ -106,7 +111,8 @@ const UIController = {
         MapController.clearAllDroneMarkers();
         MapController.clearAllTracks();
         MapController.clearAllOperators();
-        await this.refreshData();
+        await this.refreshData(false, false);
+        this._initialized = true;
         this._startPolling();
     },
 
@@ -115,7 +121,7 @@ const UIController = {
      */
     _startPolling() {
         if (this.pollTimer) return;
-        this.pollTimer = setInterval(() => this.refreshData(), this.pollSlowMs);
+        this.pollTimer = setInterval(() => this.refreshData(false, false), this.pollSlowMs);
     },
 
     /**
@@ -132,18 +138,22 @@ const UIController = {
      * Switch to fast (2s) polling interval
      */
     _switchToFastPoll() {
-        if (!this.pollTimer) return;
+        if (!this.pollTimer || this._pollMode === 'fast') return;
+        console.log(`[Poll] Switching to FAST (${this.pollFastMs}ms)`);
+        this._pollMode = 'fast';
         clearInterval(this.pollTimer);
-        this.pollTimer = setInterval(() => this.refreshData(), this.pollFastMs);
+        this.pollTimer = setInterval(() => this.refreshData(false, false), this.pollFastMs);
     },
 
     /**
      * Switch to slow (10s) polling interval
      */
     _switchToSlowPoll() {
-        if (!this.pollTimer) return;
+        if (!this.pollTimer || this._pollMode === 'slow') return;
+        console.log(`[Poll] Switching to SLOW (${this.pollSlowMs}ms)`);
+        this._pollMode = 'slow';
         clearInterval(this.pollTimer);
-        this.pollTimer = setInterval(() => this.refreshData(), this.pollSlowMs);
+        this.pollTimer = setInterval(() => this.refreshData(false, false), this.pollSlowMs);
     },
 
     /**
@@ -339,7 +349,8 @@ const UIController = {
                 const hours = parseInt(e.currentTarget.dataset.hours);
                 this._setStoredPreset(hours);
                 this._setTimeRange(hours);
-                this.refreshData();
+                this.droneTimestamps = {}; // Clear timestamps for new time window
+                this.refreshData(true);
             });
         });
 
@@ -350,7 +361,8 @@ const UIController = {
                     const hours = parseInt(e.currentTarget.dataset.hours);
                     this._setStoredPreset(hours);
                     this._setTimeRange(hours);
-                    this.refreshData();
+                    this.droneTimestamps = {}; // Clear timestamps for new time window
+                    this.refreshData(true);
                 });
             });
         }
@@ -565,7 +577,8 @@ const UIController = {
                 } else {
                     this.currentEndTime = selectedDates[0];
                 }
-                this.refreshData();
+                this.droneTimestamps = {};
+                this.refreshData(true);
             }
         };
 
@@ -1150,23 +1163,32 @@ const UIController = {
     },
 
     /**
-     * Refresh all data
+     * Refresh all data - uses incremental updates to preserve the detail panel
+     * and existing DOM state.
      */
-    async refreshData() {
+    async refreshData(isFullRefresh, showSpinner = true) {
         if (this.isLoading) return;
 
         this.isLoading = true;
-        this.elements.refreshBtn.classList.add('spinning');
+        if (showSpinner) {
+            this.elements.refreshBtn.classList.add('spinning');
+        }
 
         try {
-            // Close detail panel on refresh and clear drone markers/operators
-            this._closeDetailPanel();
-            MapController.clearAllDroneMarkers();
-            MapController.clearAllOperators();
+            const hasKnownTimestamps = Object.keys(this.droneTimestamps).length > 0;
 
-            // Fetch drones, alerts, stats, and remote status in parallel
-            const [dronesResponse, alertsResponse, statsResponse, remotesResponse] = await Promise.all([
-                API.getDrones(this.currentStartTime, this.currentEndTime),
+            // Use incremental fetch when we have known timestamps and not doing a full refresh
+            let dronesResponse;
+            if (hasKnownTimestamps && !isFullRefresh) {
+                dronesResponse = await API.getDronesIncremental(
+                    this.currentStartTime, this.currentEndTime, this.droneTimestamps
+                );
+            } else {
+                dronesResponse = await API.getDrones(this.currentStartTime, this.currentEndTime);
+            }
+
+            // Fetch alerts, stats, and remote status in parallel
+            const [alertsResponse, statsResponse, remotesResponse] = await Promise.all([
                 API.getAlerts(),
                 API.getStats(this.currentStartTime, this.currentEndTime),
                 API.getSources().catch(() => ({ sources: [] })),
@@ -1178,9 +1200,13 @@ const UIController = {
             if (this.remoteDetailOpen) {
                 this._renderRemoteDetail();
             }
-            let drones = dronesResponse.drones || [];
-            if (drones.length > 0) {
-                this.lastActivityTime = Date.now();
+            const newDrones = dronesResponse.drones || [];
+            if (newDrones.length > 0 && this._initialized) {
+                const existingUasIds = new Set(Object.keys(this.droneMap).map(k => k.split(':')[0]));
+                const hasNewUas = newDrones.some(d => !existingUasIds.has(d.uas_id));
+                if (hasNewUas) {
+                    this.lastActivityTime = Date.now();
+                }
             }
             this.alertEvents = alertsResponse.active || [];
             this._renderStats(statsResponse);
@@ -1193,6 +1219,15 @@ const UIController = {
                 this.elements.alertFilterCount.textContent = this.alertEvents.length;
                 this.elements.alertFilterCount.style.display = this.alertEvents.length > 0 ? '' : 'none';
             }
+
+            // Merge new drones with existing droneMap
+            this._mergeDrones(newDrones);
+
+            // Update drone timestamps for all merged drones so next poll is accurate
+            this._updateDroneTimestamps(newDrones);
+
+            // Get all current drones from the merged map
+            let drones = Object.values(this.droneMap);
 
             // Filter by known/unknown drone visibility
             drones = drones.filter(d => {
@@ -1215,14 +1250,10 @@ const UIController = {
             this.visibleSessions = new Set([...this.visibleSessions].filter(k => currentSessionKeys.has(k)));
             this.dismissedSessionKeys = new Set([...this.dismissedSessionKeys].filter(k => currentSessionKeys.has(k)));
 
-            // Update drone list (controls checkbox state, tracks loadedTracks)
+            // Update drone list incrementally
             this._updateDroneList(drones);
 
-            // Store drone data for lazy track loading
-            this.droneMap = {};
-            drones.forEach(d => { this.droneMap[d.uas_id] = d; });
-
-            // Map shows ALL filtered drones directly (not filtered by visibleSessions)
+            // Update markers on the map for changed drones only
             if (drones.length > 0) {
                 MapController.updateDrones(drones);
                 const allUasIds = new Set(drones.map(d => d.uas_id));
@@ -1254,11 +1285,35 @@ const UIController = {
         }
     },
 
+    _mergeDrones(newDrones) {
+        for (const d of newDrones) {
+            const key = `${d.uas_id}:${d.computed_session_id || 'unknown'}`;
+            this.droneMap[key] = d;
+        }
+    },
+
+    _updateDroneTimestamps(drones) {
+        for (const d of drones) {
+            const key = `${d.uas_id}:${d.computed_session_id || 'unknown'}`;
+            this.droneTimestamps[key] = d.timestamp;
+        }
+    },
+
     /**
-     * Update the drone list in sidebar - shows sessions as independent entries with checkboxes
+     * Update the drone list in sidebar - uses caching to skip DOM updates
+     * when data hasn't changed, preserving existing state (expanded dates, detail panel, etc.)
      */
     _updateDroneList(drones) {
         const list = this.elements.droneList;
+
+        // Build a cache key from the drone data to detect changes
+        const cacheKey = JSON.stringify(drones.map(d =>
+            `${d.uas_id}:${d.computed_session_id || 'unknown'}:${d.timestamp}:${d.latitude}:${d.longitude}:${d.altitude}`
+        ));
+        if (cacheKey === this._droneListCacheKey) {
+            return; // No changes, skip DOM update
+        }
+        this._droneListCacheKey = cacheKey;
 
         if (drones.length === 0) {
             list.innerHTML = `
@@ -1395,7 +1450,6 @@ const UIController = {
             }
             if (pending.length > 0) {
                 MapController.loadTracksBatch(pending).then(loaded => {
-                    // Remove any sessions that failed to load
                     const loadedSet = new Set(loaded);
                     pending.forEach(s => {
                         const key = `${s.uas_id}:${s.session_id}`;
@@ -1415,7 +1469,6 @@ const UIController = {
                 const droneCheckboxes = group.querySelectorAll('.drone-checkbox');
                 const isChecked = e.target.checked;
 
-                // Update all drone checkboxes in this group
                 droneCheckboxes.forEach(dc => {
                     dc.checked = isChecked;
                     const sessionKey = dc.dataset.sessionKey;
@@ -1424,7 +1477,6 @@ const UIController = {
                     if (isChecked) {
                         this.visibleSessions.add(sessionKey);
                         droneItem.classList.remove('dimmed');
-                        // Load track if not already loaded
                         if (!this.loadedTracks.has(sessionKey)) {
                             const uasId = droneItem.dataset.uasId;
                             const sessionId = droneItem.dataset.sessionId;
@@ -1437,13 +1489,10 @@ const UIController = {
                     } else {
                         this.visibleSessions.delete(sessionKey);
                         droneItem.classList.add('dimmed');
-                        // Remove track
                         const uasId = droneItem.dataset.uasId;
                         MapController.removeTrack(uasId, sessionKey);
                         this.loadedTracks.delete(sessionKey);
                         this.dismissedSessionKeys.add(sessionKey);
-
-                        // Close detail panel if this session is currently selected
                         if (this.selectedSession === droneItem.dataset.sessionId) {
                             this._closeDetailPanel();
                         }
@@ -1455,10 +1504,9 @@ const UIController = {
             });
         });
 
-        // Add date header click handlers (toggle expand/collapse only, no checkbox change)
+        // Add date header click handlers (toggle expand/collapse only)
         list.querySelectorAll('.date-header').forEach(header => {
             header.addEventListener('click', async (e) => {
-                // Don't toggle if clicking the checkbox
                 if (e.target.classList.contains('date-checkbox')) {
                     return;
                 }
@@ -1496,7 +1544,6 @@ const UIController = {
                 if (isChecked) {
                     this.visibleSessions.add(sessionKey);
                     droneItem.classList.remove('dimmed');
-                    // Load track
                     if (!this.loadedTracks.has(sessionKey)) {
                         if (sessionId) {
                             this.loadedTracks.add(sessionKey);
@@ -1507,18 +1554,14 @@ const UIController = {
                 } else {
                     this.visibleSessions.delete(sessionKey);
                     droneItem.classList.add('dimmed');
-                    // Remove track
                     MapController.removeTrack(uasId, sessionKey);
                     this.loadedTracks.delete(sessionKey);
                     this.dismissedSessionKeys.add(sessionKey);
-
-                    // Close detail panel if this session is currently selected
                     if (this.selectedSession === sessionId) {
                         this._closeDetailPanel();
                     }
                 }
 
-                // Update date checkbox state
                 this._updateDateCheckboxState(group);
                 this._updateReplayButtonState();
             });
@@ -1527,7 +1570,6 @@ const UIController = {
         // Add click handlers for drone items (open detail panel only if visible)
         list.querySelectorAll('.drone-item').forEach(item => {
             item.addEventListener('click', (e) => {
-                // Don't open detail if clicking checkbox or focus button
                 if (e.target.classList.contains('drone-checkbox') ||
                     e.target.closest('.focus-btn')) {
                     return;
@@ -1537,12 +1579,10 @@ const UIController = {
                 const sessionKey = item.dataset.sessionKey;
                 const sessionId = item.dataset.sessionId;
 
-                // Only open detail if this session is visible (checked)
                 if (!this.visibleSessions.has(sessionKey)) {
                     return;
                 }
 
-                // Toggle selection
                 if (this.selectedDrones.has(sessionKey)) {
                     this.selectedDrones.delete(sessionKey);
                     item.classList.remove('active');
@@ -1553,18 +1593,15 @@ const UIController = {
                     item.classList.add('active');
                 }
 
-                // Focus on map
                 MapController.highlightDrone(uasId);
 
-                // Toggle detail panel - close if same session clicked, open otherwise
                 const isSameSession = this.selectedDrone === uasId && this.selectedSession === sessionId;
                 if (isSameSession) {
                     this._closeDetailPanel();
                 } else {
                     this._openDetailPanel(uasId, sessionId);
-}
+                }
 
-                // Close sidebar on mobile
                 if (window.innerWidth < 768) {
                     this.elements.sidebar.classList.remove('open');
                 }
@@ -1580,21 +1617,18 @@ const UIController = {
                 const sessionKey = item.dataset.sessionKey;
                 const sessionId = item.dataset.sessionId;
 
-                // Only focus if visible
                 if (!this.visibleSessions.has(sessionKey)) {
                     return;
                 }
 
                 MapController.panToDrone(uasId);
 
-                // Also load the track for this session if not loaded
                 if (sessionId && !this.loadedTracks.has(sessionKey)) {
                     this.loadedTracks.add(sessionKey);
                     MapController.loadTrackSession(uasId, sessionId, this.currentStartTime, this.currentEndTime)
                         .then(success => { if (!success) this.loadedTracks.delete(sessionKey); this._updateReplayButtonState(); });
                 }
 
-                // Close sidebar on mobile
                 if (window.innerWidth < 768) {
                     this.elements.sidebar.classList.remove('open');
                 }
@@ -1616,6 +1650,8 @@ const UIController = {
             }
         });
     },
+
+
 
     /**
      * Update the date checkbox state based on its sessions

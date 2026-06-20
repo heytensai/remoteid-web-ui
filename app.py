@@ -102,6 +102,20 @@ def get_drones():
         return jsonify({"error": "Internal server error"}), 500
 
 
+@app.route("/api/drones/incremental", methods=["POST"])
+def get_drones_incremental():
+    """Get drones with newer data than client's known timestamps"""
+    try:
+        start, end = _parse_time_range(request.args)
+        data = request.get_json() or {}
+        known_timestamps = data.get("known_timestamps", {})
+        drones = DATABASE.get_drones_incremental(start, end, known_timestamps)
+        return jsonify({"drones": drones})
+    except (ValueError, TypeError, sqlite3.Error):
+        logger.exception("Error getting incremental drones")
+        return jsonify({"error": "Internal server error"}), 500
+
+
 @app.route("/api/positions")
 def get_positions():
     """Get positions in time window"""

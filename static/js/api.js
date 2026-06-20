@@ -33,6 +33,19 @@ const API = {
     },
 
     /**
+     * Get drones with newer data than known timestamps (incremental update)
+     * @param {Date} start - Start time
+     * @param {Date} end - End time
+     * @param {Object} knownTimestamps - Map of "uas_id:session_id" -> last known timestamp ISO string
+     */
+    async getDronesIncremental(start, end, knownTimestamps) {
+        const params = new URLSearchParams();
+        if (start) params.append('start', start.toISOString());
+        if (end) params.append('end', end.toISOString());
+        return this._post(`/api/drones/incremental?${params}`, { known_timestamps: knownTimestamps });
+    },
+
+    /**
      * Get positions in time window
      */
     async getPositions(start, end, uasId = null) {

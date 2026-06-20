@@ -536,18 +536,16 @@ class WebDatabase:
 
             return sorted(source_map.values(), key=lambda s: s["source"])
 
-    def get_drones(self, start_time: datetime, end_time: datetime) -> List[Dict]:
-        """Get list of unique drones seen in time window with latest positions
-
-        Returns drones grouped by session if session data is available.
-        Drones without session data are returned as single entries.
-        """
+    def _get_drones_query(
+        self, start_time: datetime, end_time: datetime
+    ) -> List[Dict]:
+        """Execute the base get_drones query returning all drones in the time window."""
         with sqlite3.connect(
             self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
         ) as conn:
             conn.row_factory = sqlite3.Row
+            results = []
 
-            # Get drones with session data - one entry per session
             cursor = conn.execute(
                 """
                 SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
@@ -567,9 +565,8 @@ class WebDatabase:
             """,
                 (start_time, end_time),
             )
-            results = cursor.fetchall()
+            results.extend(cursor.fetchall())
 
-            # Get drones without session data - one entry per UAS
             cursor = conn.execute(
                 """
                 SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
@@ -588,6 +585,163 @@ class WebDatabase:
                 (start_time, end_time),
             )
             results.extend(cursor.fetchall())
+
+            return [self._sanitize_record(dict(row)) for row in results]
+
+    def get_drones(self, start_time: datetime, end_time: datetime) -> List[Dict]:
+        """Get list of unique drones seen in time window with latest positions"""
+        return self._get_drones_query(start_time, end_time)
+
+    def get_drones_incremental(
+        self,
+        start_time: datetime,
+        end_time: datetime,
+        known_timestamps: Dict[str, str],
+    ) -> List[Dict]:
+        """Get drones that have newer data than the client's known timestamps.
+
+        Args:
+            start_time: Start of time window
+            end_time: End of time window
+            known_timestamps: Map of "uas_id:session_id" -> last known timestamp ISO string
+
+        Returns:
+            List of drones with data newer than known_timestamps, or all drones if known_timestamps is empty
+        """
+        with sqlite3.connect(
+            self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
+        ) as conn:
+            conn.row_factory = sqlite3.Row
+
+            # If no known timestamps, return all drones (full refresh)
+            if not known_timestamps:
+                return self._get_drones_query(start_time, end_time)
+
+            # Build WHERE conditions for known timestamps
+            session_conditions = []
+            session_params = [start_time, end_time]
+            no_session_conditions = []
+            no_session_params = [start_time, end_time]
+
+            for key, ts in known_timestamps.items():
+                if ':' in key:
+                    uas_id, session_id = key.split(':', 1)
+                    if session_id != 'unknown':
+                        session_conditions.append(
+                            "(uas_id = ? AND computed_session_id = ? AND timestamp > ?)"
+                        )
+                        session_params.extend([uas_id, session_id, ts])
+                    else:
+                        no_session_conditions.append(
+                            "(uas_id = ? AND computed_session_id IS NULL AND timestamp > ?)"
+                        )
+                        no_session_params.extend([uas_id, ts])
+                else:
+                    no_session_conditions.append(
+                        "(uas_id = ? AND computed_session_id IS NULL AND timestamp > ?)"
+                    )
+                    no_session_params.extend([key, ts])
+
+            results = []
+
+            # Query drones with sessions that have newer data
+            if session_conditions:
+                where_clause = " OR ".join(session_conditions)
+                cursor = conn.execute(
+                    f"""
+                    SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
+                           r1.timestamp, r1.operator_id, r1.operator_latitude, r1.operator_longitude,
+                           r1.source, r1.computed_session_id
+                    FROM remoteid r1
+                    INNER JOIN (
+                        SELECT uas_id, computed_session_id, MAX(timestamp) as max_ts
+                        FROM remoteid
+                        WHERE timestamp BETWEEN ? AND ?
+                        AND computed_session_id IS NOT NULL
+                        AND ({where_clause})
+                        GROUP BY uas_id, computed_session_id
+                    ) r2 ON r1.uas_id = r2.uas_id
+                        AND r1.computed_session_id = r2.computed_session_id
+                        AND r1.timestamp = r2.max_ts
+                    ORDER BY r1.uas_id, r1.computed_session_id
+                """,
+                    tuple(session_params),
+                )
+                results.extend(cursor.fetchall())
+
+            # Query drones without sessions that have newer data
+            if no_session_conditions:
+                where_clause = " OR ".join(no_session_conditions)
+                cursor = conn.execute(
+                    f"""
+                    SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
+                           r1.timestamp, r1.operator_id, r1.operator_latitude, r1.operator_longitude,
+                           r1.source, r1.computed_session_id
+                    FROM remoteid r1
+                    INNER JOIN (
+                        SELECT uas_id, MAX(timestamp) as max_ts
+                        FROM remoteid
+                        WHERE timestamp BETWEEN ? AND ?
+                        AND computed_session_id IS NULL
+                        AND ({where_clause})
+                        GROUP BY uas_id
+                    ) r2 ON r1.uas_id = r2.uas_id AND r1.timestamp = r2.max_ts
+                    ORDER BY r1.uas_id
+                """,
+                    tuple(no_session_params),
+                )
+                results.extend(cursor.fetchall())
+
+            # Also include drones that are NEW (not in known_timestamps at all)
+            # We need to find drones in the time window that aren't in known_timestamps
+            known_uas_sessions = set(known_timestamps.keys())
+
+            # Get all drones in time window, then filter out known ones
+            cursor = conn.execute(
+                """
+                SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
+                       r1.timestamp, r1.operator_id, r1.operator_latitude, r1.operator_longitude,
+                       r1.source, r1.computed_session_id
+                FROM remoteid r1
+                INNER JOIN (
+                    SELECT uas_id, computed_session_id, MAX(timestamp) as max_ts
+                    FROM remoteid
+                    WHERE timestamp BETWEEN ? AND ?
+                    AND computed_session_id IS NOT NULL
+                    GROUP BY uas_id, computed_session_id
+                ) r2 ON r1.uas_id = r2.uas_id
+                    AND r1.computed_session_id = r2.computed_session_id
+                    AND r1.timestamp = r2.max_ts
+                ORDER BY r1.uas_id, r1.computed_session_id
+            """,
+                (start_time, end_time),
+            )
+            for row in cursor.fetchall():
+                key = f"{row['uas_id']}:{row['computed_session_id']}"
+                if key not in known_uas_sessions:
+                    results.append(row)
+
+            cursor = conn.execute(
+                """
+                SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
+                       r1.timestamp, r1.operator_id, r1.operator_latitude, r1.operator_longitude,
+                       r1.source, r1.computed_session_id
+                FROM remoteid r1
+                INNER JOIN (
+                    SELECT uas_id, MAX(timestamp) as max_ts
+                    FROM remoteid
+                    WHERE timestamp BETWEEN ? AND ?
+                    AND computed_session_id IS NULL
+                    GROUP BY uas_id
+                ) r2 ON r1.uas_id = r2.uas_id AND r1.timestamp = r2.max_ts
+                ORDER BY r1.uas_id
+            """,
+                (start_time, end_time),
+            )
+            for row in cursor.fetchall():
+                key = f"{row['uas_id']}:unknown"
+                if key not in known_uas_sessions:
+                    results.append(row)
 
             return [self._sanitize_record(dict(row)) for row in results]
 
