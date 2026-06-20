@@ -1088,7 +1088,7 @@ const UIController = {
             ? 'remote-status-ok'
             : connected > 0 ? 'remote-status-partial' : 'remote-status-none';
         const latestStr = latestDataTs > 0
-            ? new Date(latestDataTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+            ? new Date(latestDataTs).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
             : 'never';
         el.innerHTML = `Connected: <span class="${statusClass}">${connected}/${total}</span> &middot; Last Data: ${latestStr}`;
     },
@@ -1680,7 +1680,7 @@ const UIController = {
      */
     _updateLastUpdateTime() {
         const now = new Date();
-        this.elements.lastUpdateSpan.textContent = `Last updated: ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}`;
+        this.elements.lastUpdateSpan.textContent = `Last updated: ${now.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}`;
     },
 
     /**
