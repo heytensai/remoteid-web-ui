@@ -46,6 +46,19 @@ const API = {
     },
 
     /**
+     * Consolidated refresh: returns drones, alerts, stats, and sources in one call
+     * @param {Date} start - Start time
+     * @param {Date} end - End time
+     * @param {Object} knownTimestamps - Map of "uas_id:session_id" -> last known timestamp ISO string
+     */
+    async getRefresh(start, end, knownTimestamps) {
+        const params = new URLSearchParams();
+        if (start) params.append('start', start.toISOString());
+        if (end) params.append('end', end.toISOString());
+        return this._post(`/api/refresh?${params}`, { known_timestamps: knownTimestamps || {} });
+    },
+
+    /**
      * Get positions in time window
      */
     async getPositions(start, end, uasId = null) {

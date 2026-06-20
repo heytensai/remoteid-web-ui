@@ -110,7 +110,7 @@ const UIController = {
         // Clear any existing markers before loading data
         MapController.clearAllTracks();
         MapController.clearAllOperators();
-        await this.refreshData(false, false);
+        await this.refreshData(false);
         this._initialized = true;
         this._startPolling();
     },
@@ -120,7 +120,7 @@ const UIController = {
      */
     _startPolling() {
         if (this.pollTimer) return;
-        this.pollTimer = setInterval(() => this.refreshData(false, false), this.pollSlowMs);
+        this.pollTimer = setInterval(() => this.refreshData(false), this.pollSlowMs);
     },
 
     /**
@@ -141,7 +141,7 @@ const UIController = {
         console.log(`[Poll] Switching to FAST (${this.pollFastMs}ms)`);
         this._pollMode = 'fast';
         clearInterval(this.pollTimer);
-        this.pollTimer = setInterval(() => this.refreshData(false, false), this.pollFastMs);
+        this.pollTimer = setInterval(() => this.refreshData(false), this.pollFastMs);
     },
 
     /**
@@ -149,10 +149,9 @@ const UIController = {
      */
     _switchToSlowPoll() {
         if (!this.pollTimer || this._pollMode === 'slow') return;
-        console.log(`[Poll] Switching to SLOW (${this.pollSlowMs}ms)`);
+        console.log('[Poll] Switching to SLOW (10s)');
         this._pollMode = 'slow';
-        clearInterval(this.pollTimer);
-        this.pollTimer = setInterval(() => this.refreshData(false, false), this.pollSlowMs);
+        this.pollTimer = setInterval(() => this.refreshData(false), this.pollSlowMs);
     },
 
     /**
@@ -349,7 +348,7 @@ const UIController = {
                 this._setStoredPreset(hours);
                 this._setTimeRange(hours);
                 this.droneTimestamps = {}; // Clear timestamps for new time window
-                this.refreshData(true);
+                this.refreshData();
             });
         });
 
@@ -361,11 +360,11 @@ const UIController = {
                     this._setStoredPreset(hours);
                     this._setTimeRange(hours);
                     this.droneTimestamps = {}; // Clear timestamps for new time window
-                    this.refreshData(true);
+                    this.refreshData();
                 });
             });
         }
-
+    
         // Show/hide operators
         this.elements.showOperatorsCheckbox.addEventListener('change', (e) => {
             MapController.toggleOperators(e.target.checked);
@@ -577,7 +576,7 @@ const UIController = {
                     this.currentEndTime = selectedDates[0];
                 }
                 this.droneTimestamps = {};
-                this.refreshData(true);
+                this.refreshData();
             }
         };
 
@@ -1165,7 +1164,7 @@ const UIController = {
      * Refresh all data - uses incremental updates to preserve the detail panel
      * and existing DOM state.
      */
-    async refreshData(isFullRefresh, showSpinner = true) {
+    async refreshData(showSpinner = true) {
         if (this.isLoading) return;
 
         this.isLoading = true;
@@ -1174,32 +1173,18 @@ const UIController = {
         }
 
         try {
-            const hasKnownTimestamps = Object.keys(this.droneTimestamps).length > 0;
-
-            // Use incremental fetch when we have known timestamps and not doing a full refresh
-            let dronesResponse;
-            if (hasKnownTimestamps && !isFullRefresh) {
-                dronesResponse = await API.getDronesIncremental(
-                    this.currentStartTime, this.currentEndTime, this.droneTimestamps
-                );
-            } else {
-                dronesResponse = await API.getDrones(this.currentStartTime, this.currentEndTime);
-            }
-
-            // Fetch alerts, stats, and remote status in parallel
-            const [alertsResponse, statsResponse, remotesResponse] = await Promise.all([
-                API.getAlerts(),
-                API.getStats(this.currentStartTime, this.currentEndTime),
-                API.getSources().catch(() => ({ sources: [] })),
-            ]);
+            // Consolidated refresh: returns drones, alerts, stats, and sources
+            const data = await API.getRefresh(
+                this.currentStartTime, this.currentEndTime, this.droneTimestamps
+            );
 
             // Update remote status
-            this.remotes = remotesResponse.sources || [];
+            this.remotes = data.sources || [];
             this._updateRemoteSummary();
             if (this.remoteDetailOpen) {
                 this._renderRemoteDetail();
             }
-            const newDrones = dronesResponse.drones || [];
+            const newDrones = data.drones || [];
             if (newDrones.length > 0 && this._initialized) {
                 const existingUasIds = new Set(Object.keys(this.droneMap).map(k => k.split(':')[0]));
                 const hasNewUas = newDrones.some(d => !existingUasIds.has(d.uas_id));
@@ -1207,8 +1192,8 @@ const UIController = {
                     this.lastActivityTime = Date.now();
                 }
             }
-            this.alertEvents = alertsResponse.active || [];
-            this._renderStats(statsResponse);
+            this.alertEvents = data.alerts ? data.alerts.active || [] : [];
+            this._renderStats(data.stats || {});
 
             // Update map alert state
             MapController.updateAlertState(this.alertEvents);

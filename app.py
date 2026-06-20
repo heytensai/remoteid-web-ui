@@ -116,6 +116,59 @@ def get_drones_incremental():
         return jsonify({"error": "Internal server error"}), 500
 
 
+@app.route("/api/refresh", methods=["POST"])
+def get_refresh():
+    """Consolidated refresh: returns drones, alerts, stats, and sources in one call."""
+    try:
+        start, end = _parse_time_range(request.args)
+        data = request.get_json() or {}
+        known_timestamps = data.get("known_timestamps", {})
+
+        drones = DATABASE.get_drones_incremental(start, end, known_timestamps)
+
+        try:
+            active = DATABASE.get_active_geozone_events()
+        except Exception:
+            logger.exception("Error getting alerts in refresh")
+            active = []
+        uas_ids = list(set(e["uas_id"] for e in active))
+
+        try:
+            stats = DATABASE.get_stats(start, end)
+        except Exception:
+            logger.exception("Error getting stats in refresh")
+            stats = {}
+
+        try:
+            sources = []
+            for source_info in DATABASE.get_all_sources():
+                name = source_info["source"]
+                last_data = DATABASE.get_most_recent_timestamp(source=name)
+                last_sync = source_info["last_sync"]
+                sources.append({
+                    "name": name,
+                    "last_sync": (
+                        last_sync.strftime("%Y-%m-%d %H:%M") if last_sync else "Never"
+                    ),
+                    "last_data": (
+                        last_data.strftime("%Y-%m-%d %H:%M:%S") if last_data else "Never"
+                    ),
+                })
+        except Exception:
+            logger.exception("Error getting sources in refresh")
+            sources = []
+
+        return jsonify({
+            "drones": drones,
+            "alerts": {"active": active, "uas_ids": uas_ids, "count": len(active)},
+            "stats": stats,
+            "sources": sources,
+        })
+    except (ValueError, TypeError, sqlite3.Error):
+        logger.exception("Error in refresh endpoint")
+        return jsonify({"error": "Internal server error"}), 500
+
+
 @app.route("/api/positions")
 def get_positions():
     """Get positions in time window"""
