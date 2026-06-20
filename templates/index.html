@@ -6,8 +6,12 @@
     <title>Drone Tracker</title>
 
     <meta http-equiv="Content-Security-Policy"
-          content="default-src 'self'; script-src 'self' https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; font-src 'self' https://cdnjs.cloudflare.com; img-src 'self' https://*.tile.openstreetmap.org https://*.basemaps.cartocdn.com data:; connect-src 'self';">
+          content="default-src 'self'; manifest-src 'self'; script-src 'self' https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; font-src 'self' https://cdnjs.cloudflare.com; img-src 'self' https://*.tile.openstreetmap.org https://*.basemaps.cartocdn.com data:; connect-src 'self'; worker-src 'self';">
 
+    <link rel="manifest" href="{{ url_prefix }}/manifest.json">
+    <meta name="theme-color" content="#2c3e50">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="icon" type="image/svg+xml" href="{{ url_prefix }}{{ url_for('static', filename='favicon.svg') }}">
     <link rel="apple-touch-icon" href="{{ url_prefix }}{{ url_for('static', filename='favicon.svg') }}">
 
@@ -364,5 +368,11 @@
     <script src="{{ url_prefix }}{{ url_for('static', filename='js/api.js') }}"></script>
     <script src="{{ url_prefix }}{{ url_for('static', filename='js/map.js') }}"></script>
     <script src="{{ url_prefix }}{{ url_for('static', filename='js/ui.js') }}"></script>
+
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('{{ url_prefix }}/sw.js');
+        }
+    </script>
 </body>
 </html>

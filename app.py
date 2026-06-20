@@ -9,10 +9,11 @@ import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 from xml.sax.saxutils import escape
 
-from flask import Flask, jsonify, request, render_template, Response
+from flask import Flask, jsonify, make_response, request, render_template, Response
 from flask_cors import cross_origin
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 
@@ -46,6 +47,68 @@ logging.getLogger("flask_wtf.csrf").setLevel(logging.WARNING)
 def index():
     """Main page"""
     return render_template("index.html", url_prefix=CONFIG.url_prefix)
+
+
+@app.route("/manifest.json")
+def pwa_manifest():
+    """PWA web app manifest"""
+    manifest = _build_manifest()
+    resp = jsonify(manifest)
+    resp.headers["Content-Type"] = "application/json"
+    return resp
+
+
+def _build_manifest():
+    """Build the PWA manifest dict"""
+    return {
+        "name": "Drone Tracker",
+        "short_name": "Drones",
+        "description": "Real-time Remote ID drone tracking and visualization",
+        "start_url": CONFIG.url_prefix + "/",
+        "display": "standalone",
+        "background_color": "#1a1a2e",
+        "theme_color": "#2c3e50",
+        "icons": [
+            {
+                "src": CONFIG.url_prefix + "/icons/icon-192x192.png",
+                "sizes": "192x192",
+                "type": "image/png",
+            },
+            {
+                "src": CONFIG.url_prefix + "/icons/icon-512x512.png",
+                "sizes": "512x512",
+                "type": "image/png",
+            },
+        ],
+    }
+
+
+BASE_DIR = Path(__file__).parent
+
+
+@app.route("/icons/<path:filename>")
+def pwa_icon(filename):
+    """Serve PWA icons via Flask route"""
+    icon_path = BASE_DIR / "static" / "icons" / filename
+    if not icon_path.exists() or not icon_path.is_file():
+        return "Not found", 404
+    body = icon_path.read_bytes()
+    resp = make_response(body)
+    resp.headers["Content-Type"] = "image/png"
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
+
+
+@app.route("/sw.js")
+def service_worker():
+    """PWA service worker"""
+    sw_path = BASE_DIR / "static" / "sw.js"
+    body = sw_path.read_text()
+    resp = make_response(body)
+    resp.headers["Content-Type"] = "application/javascript"
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["Service-Worker-Allowed"] = CONFIG.url_prefix + "/"
+    return resp
 
 
 @app.route("/api/config")
