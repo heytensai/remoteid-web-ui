@@ -447,11 +447,8 @@ html, body {
     background: rgba(255, 255, 255, 0.1);
     border: none;
     color: white;
-    font-size: 1.1rem;
     cursor: pointer;
-    padding: 8px 16px;
-    min-width: 44px;
-    min-height: 44px;
+    padding: 6px 12px;
     border-radius: 4px;
     display: flex;
     align-items: center;
@@ -479,6 +476,10 @@ html, body {
 
 .refresh-btn.spinning i {
     animation: spin 1s linear infinite;
+}
+
+.refresh-btn i {
+    font-size: 0.9rem;
 }
 
 .header-time-controls {
