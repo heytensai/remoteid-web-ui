@@ -50,6 +50,21 @@ class WaypointConfig:
     alert_enabled: bool = False
 
 
+@dataclass
+class CollectorConfig:
+    """A position-reporting entity on the map.
+
+    type: "mobile" — reports position via API (requires api_key)
+          "fixed"  — static position from config (requires lat, lon)
+    """
+
+    name: str
+    api_key: str = ""
+    color: str = "#e67e22"
+    type: str = "mobile"
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+
 
 VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 
@@ -102,6 +117,8 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
     use_metric: bool = True
     session_detection: SessionDetectionConfig = field(default_factory=SessionDetectionConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
+    collectors: List[CollectorConfig] = field(default_factory=list)
+    position_stale_minutes: int = 30
 
     def __init__(self, yaml_file: str):
         self.config_path = yaml_file
@@ -191,6 +208,21 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         # Alerts configuration
         alerts_data = web_data.get("alerts") or {}
         self.alerts = AlertsConfig(alerts_data)
+
+        # Collector configuration
+        self.position_stale_minutes = web_data.get("position_stale_minutes", 30)
+        self.collectors = []
+        for c_data in web_data.get("collectors") or []:
+            c_type = c_data.get("type", "mobile")
+            self.collectors.append(CollectorConfig(
+                name=c_data["name"],
+                api_key=c_data.get("api_key", ""),
+                color=c_data.get("color", "#e67e22"),
+                type=c_type,
+                lat=c_data.get("lat"),
+                lon=c_data.get("lon"),
+            ))
+        self.collectors_by_key = {c.api_key: c.name for c in self.collectors if c.api_key}
 
         self._validate()
 
@@ -312,6 +344,17 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 "stale_timeout": self.alerts.stale_timeout,
                 "skip_known_drones": self.alerts.skip_known_drones,
             },
+            "collectors": [
+                {
+                    "name": c.name,
+                    "color": c.color,
+                    "type": c.type,
+                    "lat": c.lat,
+                    "lon": c.lon,
+                }
+                for c in self.collectors
+            ],
+            "position_stale_minutes": self.position_stale_minutes,
         }
 
     def reload_hot_config(self):
@@ -409,5 +452,30 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                     self.config_path, new_alerts.stale_timeout,
                     new_alerts.skip_known_drones,
                 )
+
+            # Reload position_stale_minutes
+            new_stale = web_data.get("position_stale_minutes", 30)
+            if new_stale != self.position_stale_minutes:
+                self.position_stale_minutes = new_stale
+                logger.info("Reloaded position_stale_minutes from %s", self.config_path)
+
+            # Reload collectors
+            new_collectors = []
+            for c_data in web_data.get("collectors") or []:
+                c_type = c_data.get("type", "mobile")
+                new_collectors.append(CollectorConfig(
+                    name=c_data["name"],
+                    api_key=c_data.get("api_key", ""),
+                    color=c_data.get("color", "#e67e22"),
+                    type=c_type,
+                    lat=c_data.get("lat"),
+                    lon=c_data.get("lon"),
+                ))
+            old_by_name = {c.name: c for c in self.collectors}
+            new_by_name = {c.name: c for c in new_collectors}
+            if old_by_name != new_by_name:
+                self.collectors = new_collectors
+                self.collectors_by_key = {c.api_key: c.name for c in self.collectors if c.api_key}
+                logger.info("Reloaded collectors from %s", self.config_path)
         except Exception:  # pylint: disable=broad-exception-caught
             logger.exception("Failed to reload hot config from %s", self.config_path)

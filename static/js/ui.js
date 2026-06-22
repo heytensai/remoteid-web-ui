@@ -90,6 +90,12 @@ const UIController = {
             if (this._pendingSettings.showTracks !== undefined) {
                 MapController.toggleTracks(this._pendingSettings.showTracks);
             }
+            if (this._pendingSettings.showFixedCollectors !== undefined) {
+                MapController.toggleFixedCollectors(this._pendingSettings.showFixedCollectors);
+            }
+            if (this._pendingSettings.showMobileCollectors !== undefined) {
+                MapController.toggleMobileCollectors(this._pendingSettings.showMobileCollectors);
+            }
             if (this._pendingSettings.trackOpacity !== undefined) {
                 MapController.setTrackOpacity(this._pendingSettings.trackOpacity);
             }
@@ -213,6 +219,8 @@ const UIController = {
             lastUpdateSpan: document.getElementById('lastUpdate'),
             showOperatorsCheckbox: document.getElementById('showOperators'),
             showTracksCheckbox: document.getElementById('showTracks'),
+            showFixedCollectorsCheckbox: document.getElementById('showFixedCollectors'),
+            showMobileCollectorsCheckbox: document.getElementById('showMobileCollectors'),
             trackOpacitySlider: document.getElementById('trackOpacity'),
             timePresets: document.querySelectorAll('.header-time-presets button'),
             settingsPanel: document.getElementById('settingsPanel'),
@@ -374,6 +382,18 @@ const UIController = {
         // Show/hide tracks
         this.elements.showTracksCheckbox.addEventListener('change', (e) => {
             MapController.toggleTracks(e.target.checked);
+            this._saveSettings();
+        });
+
+        // Show/hide fixed collectors
+        this.elements.showFixedCollectorsCheckbox.addEventListener('change', (e) => {
+            MapController.toggleFixedCollectors(e.target.checked);
+            this._saveSettings();
+        });
+
+        // Show/hide mobile collectors
+        this.elements.showMobileCollectorsCheckbox.addEventListener('change', (e) => {
+            MapController.toggleMobileCollectors(e.target.checked);
             this._saveSettings();
         });
 
@@ -614,6 +634,7 @@ const UIController = {
             this.defaultHours = config.default_hours || 24;
             this.droneAliases = config.drone_aliases || {};
             this.manufacturerPrefixes = config.manufacturer_prefixes || {};
+            this.positionStaleMinutes = config.position_stale_minutes || 30;
 
             // Override default with stored preset if available
             const stored = this._getStoredPreset();
@@ -746,6 +767,8 @@ const UIController = {
             const settings = {
                 showOperators: this.elements.showOperatorsCheckbox.checked,
                 showTracks: this.elements.showTracksCheckbox.checked,
+                showFixedCollectors: this.elements.showFixedCollectorsCheckbox.checked,
+                showMobileCollectors: this.elements.showMobileCollectorsCheckbox.checked,
                 trackOpacity: parseInt(this.elements.trackOpacitySlider.value, 10),
                 showKnownDrones: this.elements.showKnownDrones.checked,
                 showUnknownDrones: this.elements.showUnknownDrones.checked,
@@ -768,6 +791,12 @@ const UIController = {
             }
             if (saved.showTracks !== undefined) {
                 this.elements.showTracksCheckbox.checked = saved.showTracks;
+            }
+            if (saved.showFixedCollectors !== undefined) {
+                this.elements.showFixedCollectorsCheckbox.checked = saved.showFixedCollectors;
+            }
+            if (saved.showMobileCollectors !== undefined) {
+                this.elements.showMobileCollectorsCheckbox.checked = saved.showMobileCollectors;
             }
             if (saved.trackOpacity !== undefined) {
                 this.elements.trackOpacitySlider.value = saved.trackOpacity;
@@ -796,6 +825,12 @@ const UIController = {
             }
             if (saved.showTracks !== undefined) {
                 this._pendingSettings.showTracks = saved.showTracks;
+            }
+            if (saved.showFixedCollectors !== undefined) {
+                this._pendingSettings.showFixedCollectors = saved.showFixedCollectors;
+            }
+            if (saved.showMobileCollectors !== undefined) {
+                this._pendingSettings.showMobileCollectors = saved.showMobileCollectors;
             }
             if (saved.trackOpacity !== undefined) {
                 this._pendingSettings.trackOpacity = saved.trackOpacity;
@@ -1070,12 +1105,14 @@ const UIController = {
         }
         const now = Date.now();
         const twentyMin = 20 * 60 * 1000;
+        const staleMs = (this.positionStaleMinutes || 30) * 60 * 1000;
         let connected = 0;
         let latestDataTs = 0;
         for (const r of this.remotes) {
             if (r.last_sync && r.last_sync !== 'Never') {
                 const ts = new Date(r.last_sync).getTime();
-                if (now - ts < twentyMin) connected++;
+                const threshold = r.type === 'collector' ? staleMs : twentyMin;
+                if (now - ts < threshold) connected++;
             }
             if (r.last_data && r.last_data !== 'Never') {
                 const ts = new Date(r.last_data).getTime();
@@ -1106,6 +1143,7 @@ const UIController = {
         if (header) header.textContent = 'Remote Sources';
         const now = Date.now();
         const twentyMin = 20 * 60 * 1000;
+        const staleMs = (this.positionStaleMinutes || 30) * 60 * 1000;
         const esc = (v) => this.escapeHtml(v);
 
         const fmt = (v) => {
@@ -1117,15 +1155,19 @@ const UIController = {
         let html = '';
         for (const r of this.remotes) {
             const syncTs = r.last_sync && r.last_sync !== 'Never' ? new Date(r.last_sync) : null;
-            const isActive = syncTs && (now - syncTs.getTime() < twentyMin);
+            const threshold = r.type === 'collector' ? staleMs : twentyMin;
+            const isActive = syncTs && (now - syncTs.getTime() < threshold);
             const iconHtml = isActive
-                ? '<i class="fas fa-check-circle remote-icon active" title="Active in last 20 min"></i>'
+                ? '<i class="fas fa-check-circle remote-icon active" title="Active"></i>'
                 : '<i class="fas fa-clock remote-icon stale" title="No recent activity"></i>';
+            const badgeIcon = r.type === 'collector'
+                ? '<i class="fas fa-satellite-dish"></i> Collector'
+                : '<i class="fas fa-cloud-upload-alt"></i> API';
             html += `<div class="remote-row">
                 <div class="remote-row-left">
                     ${iconHtml}
                     <span class="remote-name">${esc(r.name)}</span>
-                    <span class="remote-type-badge"><i class="fas fa-cloud-upload-alt"></i> API</span>
+                    <span class="remote-type-badge">${badgeIcon}</span>
                 </div>
                 <div class="remote-row-right">
                     <div class="remote-time"><span class="remote-time-label">Data:</span> ${esc(fmt(r.last_data))}</div>
@@ -1255,6 +1297,9 @@ const UIController = {
                     MapController.fitBounds(boundsResponse.bounds);
                 }
             }
+
+            // Update mobile collector positions
+            await MapController._updateCollectors();
 
             // Update last update time
             this._updateLastUpdateTime();

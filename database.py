@@ -106,6 +106,18 @@ class WebDatabase:
             """
             )
 
+            # Create collector positions table
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS collector_positions(
+                    name TEXT PRIMARY KEY,
+                    latitude REAL NOT NULL,
+                    longitude REAL NOT NULL,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """
+            )
+
             # Create indexes
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_uas_time ON remoteid(uas_id, timestamp)"
@@ -1319,3 +1331,29 @@ class WebDatabase:
             )
             conn.commit()
             return cursor.rowcount
+
+    def update_collector_position(self, name: str, lat: float, lon: float):
+        """Insert or replace a collector's current position"""
+        with sqlite3.connect(
+            self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
+        ) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO collector_positions
+                (name, latitude, longitude, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (name, lat, lon),
+            )
+            conn.commit()
+
+    def get_collector_positions(self) -> List[Dict]:
+        """Get all current collector positions"""
+        with sqlite3.connect(
+            self.db_path, detect_types=sqlite3.PARSE_DECLTYPES
+        ) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                "SELECT name, latitude, longitude, updated_at FROM collector_positions ORDER BY name"
+            )
+            return [dict(row) for row in cursor.fetchall()]

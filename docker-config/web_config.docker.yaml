@@ -81,3 +81,12 @@ web_interface:
   alerts:
     stale_timeout: 300
     skip_known_drones: false
+
+  # Collector positions
+  collectors:
+    - name: "Dev Car"
+      type: "mobile"
+      api_key: "dev-car-key"
+      color: "#e67e22"
+
+  position_stale_minutes: 30

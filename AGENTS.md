@@ -39,6 +39,8 @@
 - `drone_aliases` - Map UAS IDs to friendly names
 - `waypoints` - Custom map markers (name, lat, lon, icon, color, description, enabled, category)
 - `session_detection` - Background session detection settings (enabled, interval, gap_threshold, log_level)
+- `collectors` - Collector positions (name, api_key, color, type, lat, lon); use GET /api/submit/ping?lat=&lon= for position reporting
+- `position_stale_minutes` - Minutes without ping before collector marker turns gray (hot-reloadable)
 
 ## Code Style Guidelines
 

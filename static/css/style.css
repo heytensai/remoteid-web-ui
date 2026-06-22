@@ -1285,6 +1285,24 @@ body.dark-mode .replay-time-display {
     border-style: dashed;
 }
 
+/* Collector Position Icon (FA icon in colored circle) */
+.collector-position-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    background: white;
+    border: 2px solid;
+    border-radius: 50%;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    font-size: 13px;
+}
+
+.collector-position-icon.stale {
+    opacity: 0.6;
+}
+
 /* Empty State */
 .empty-state {
     text-align: center;
@@ -1433,6 +1451,10 @@ body.dark-mode .replay-time-display {
     margin-right: 10px;
     width: 18px;
     height: 18px;
+}
+
+.settings-item i {
+    margin-left: 6px;
 }
 
 .settings-item.opacity-control {

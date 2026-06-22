@@ -12,13 +12,19 @@ const MapController = {
         drones: null,
         tracks: null,
         operators: null,
-        waypoints: null
+        waypoints: null,
+        fixedCollectors: null,
+        mobileCollectors: null
     },
     config: null,
     bounds: null,
     droneAliases: {},
     waypoints: [],
     waypointMarkers: {},
+    collectorConfigs: [],
+    collectorMarkers: {},
+    _fixedMarkerNames: new Set(),
+    _mobileMarkerNames: new Set(),
     loadedTrackSessions: new Set(),
     sessionPositions: {},  // "uas_id:session_id" -> [{latitude, longitude, altitude, timestamp}, ...]
     replayState: {
@@ -57,6 +63,7 @@ const MapController = {
             this.droneAliases = response.drone_aliases || {};
             this.waypoints = response.waypoints || [];
             this.staleTimeout = response.stale_timeout || 300;
+            this.collectorConfigs = response.collectors || [];
         } catch (e) {
             console.error('Failed to load config:', e);
             this.config = {};
@@ -83,6 +90,8 @@ const MapController = {
         this.layers.tracks = L.layerGroup().addTo(this.map);
         this.layers.operators = L.layerGroup().addTo(this.map);
         this.layers.waypoints = L.layerGroup().addTo(this.map);
+        this.layers.fixedCollectors = L.layerGroup().addTo(this.map);
+        this.layers.mobileCollectors = L.layerGroup().addTo(this.map);
 
         // Reset marker tracking objects
         this.dronePositions = {};
@@ -172,6 +181,22 @@ const MapController = {
         return L.divIcon({
             className: 'custom-div-icon',
             html: `<div class="waypoint-icon" style="border: 2px solid ${color}; color: ${color};">
+                     <i class="fas ${icon}"></i>
+                   </div>`,
+            iconSize: [28, 28],
+            iconAnchor: [14, 14],
+            popupAnchor: [0, -14]
+        });
+    },
+
+    /**
+     * Create collector position icon (FA icon in a colored circle)
+     */
+    createCollectorIcon(color, stale, icon) {
+        const bg = stale ? '#999' : color;
+        return L.divIcon({
+            className: 'custom-div-icon',
+            html: `<div class="collector-position-icon${stale ? ' stale' : ''}" style="border-color: ${bg}; color: ${bg};">
                      <i class="fas ${icon}"></i>
                    </div>`,
             iconSize: [28, 28],
@@ -455,6 +480,18 @@ const MapController = {
         this._clearAllSessionOperators();
     },
 
+    /**
+     * Clear all collector position markers
+     */
+    clearCollectors() {
+        if (!this.ready) return;
+        if (this.layers.fixedCollectors) this.layers.fixedCollectors.clearLayers();
+        if (this.layers.mobileCollectors) this.layers.mobileCollectors.clearLayers();
+        this.collectorMarkers = {};
+        this._fixedMarkerNames.clear();
+        this._mobileMarkerNames.clear();
+    },
+
     _calculateDistance(lat1, lon1, lat2, lon2) {
         return Units.haversineDistance(lat1, lon1, lat2, lon2);
     },
@@ -538,14 +575,79 @@ const MapController = {
     },
 
     /**
-     * Filter operators to only show specific UAS IDs
-     * Removes operators for UAS IDs not in the visible set
-     */
-    /**
      * Update the set of UAS IDs that have active geozone alerts
      */
     updateAlertState(alerts) {
         this.alertUasIds = new Set((alerts || []).map(a => a.uas_id));
+    },
+
+    /**
+     * Fetch and update all collector positions on the map
+     */
+    async _updateCollectors() {
+        if (!this.ready) return;
+        try {
+            const data = await API.getCollectors();
+            // Remove all previous collector markers
+            for (const [name, marker] of Object.entries(this.collectorMarkers)) {
+                if (this._fixedMarkerNames.has(name)) {
+                    this.layers.fixedCollectors?.removeLayer(marker);
+                }
+                if (this._mobileMarkerNames.has(name)) {
+                    this.layers.mobileCollectors?.removeLayer(marker);
+                }
+            }
+            this._fixedMarkerNames = new Set();
+            this._mobileMarkerNames = new Set();
+            const esc = (v) => this.escapeHtml(v);
+            for (const c of data) {
+                if (c.latitude == null || c.longitude == null) continue;
+                const center = [c.latitude, c.longitude];
+                const layer = c.type === 'fixed' ? this.layers.fixedCollectors : this.layers.mobileCollectors;
+                if (!layer) continue;
+                const iconClass = c.type === 'fixed' ? 'fa-broadcast-tower' : 'fa-walkie-talkie';
+                const marker = L.marker(center, {
+                    icon: this.createCollectorIcon(c.color, c.stale, iconClass),
+                }).addTo(layer);
+                const age = c.updated_at
+                    ? Math.round((Date.now() - new Date(c.updated_at).getTime()) / 1000)
+                    : null;
+                const ageText = age != null
+                    ? (age < 120 ? `${age}s ago` : `${Math.round(age / 60)}m ago`)
+                    : 'never';
+                const typeLabel = c.type === 'fixed' ? 'fixed' : 'mobile';
+                let popup = `
+                    <div class="popup-title" style="color: ${c.stale ? '#999' : c.color};">
+                        <i class="fas ${iconClass}"></i> ${esc(c.name)}
+                        <span style="font-size:0.8em;opacity:0.6;margin-left:4px;">(${typeLabel})</span>
+                    </div>
+                    <div class="popup-row">
+                        <span class="popup-label">Position:</span>
+                        <span class="popup-value">${c.latitude.toFixed(6)}, ${c.longitude.toFixed(6)}</span>
+                    </div>
+                    <div class="popup-row">
+                        <span class="popup-label">Last Seen:</span>
+                        <span class="popup-value">${ageText}</span>
+                    </div>`;
+                if (c.stale) {
+                    popup += `
+                    <div class="popup-row" style="color:#999;">
+                        <span class="popup-label">Status:</span>
+                        <span class="popup-value">Stale — no recent check-in</span>
+                    </div>`;
+                }
+                popup += '</div>';
+                marker.bindPopup(popup);
+                this.collectorMarkers[c.name] = marker;
+                if (c.type === 'fixed') {
+                    this._fixedMarkerNames.add(c.name);
+                } else {
+                    this._mobileMarkerNames.add(c.name);
+                }
+            }
+        } catch (e) {
+            console.error('Failed to update collectors:', e);
+        }
     },
 
     /**
@@ -949,6 +1051,28 @@ const MapController = {
         }
     },
 
+    /**
+     * Show/hide collectors (both fixed and mobile)
+     */
+    toggleFixedCollectors(show) {
+        if (show) {
+            this.map.addLayer(this.layers.fixedCollectors);
+        } else {
+            this.map.removeLayer(this.layers.fixedCollectors);
+        }
+    },
+
+    toggleMobileCollectors(show) {
+        if (show) {
+            this.map.addLayer(this.layers.mobileCollectors);
+        } else {
+            this.map.removeLayer(this.layers.mobileCollectors);
+        }
+    },
+
+    /**
+     * Add fixed collectors from config (no API call needed)
+     */
     /**
      * Update track opacity
      */

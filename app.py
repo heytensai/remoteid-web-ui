@@ -128,6 +128,8 @@ def get_config():
             "waypoints": CONFIG.to_dict().get("waypoints", []),
             "use_metric": CONFIG.use_metric,
             "stale_timeout": CONFIG.alerts.stale_timeout,
+            "collectors": CONFIG.to_dict().get("collectors", []),
+            "position_stale_minutes": CONFIG.position_stale_minutes,
             "csrf_token": generate_csrf(),
         }
     )
@@ -135,12 +137,13 @@ def get_config():
 
 @app.route("/api/sources")
 def get_sources():
-    """Get status of all data sources (API submitters)"""
+    """Get status of all data sources (API submitters and collectors)"""
     sources = []
     for source_info in DATABASE.get_all_sources():
         name = source_info["source"]
         last_data = DATABASE.get_most_recent_timestamp(source=name)
         last_sync = source_info["last_sync"]
+        is_collector = name in {c.name for c in CONFIG.collectors}
         sources.append({
             "name": name,
             "last_sync": (
@@ -149,6 +152,7 @@ def get_sources():
             "last_data": (
                 last_data.strftime("%Y-%m-%d %H:%M:%S") if last_data else "Never"
             ),
+            "type": "collector" if is_collector else "api",
         })
 
     return jsonify({"sources": sources})
@@ -205,6 +209,7 @@ def get_refresh():
 
         try:
             sources = []
+            collector_names = {c.name for c in CONFIG.collectors}
             for source_info in DATABASE.get_all_sources():
                 name = source_info["source"]
                 last_data = DATABASE.get_most_recent_timestamp(source=name)
@@ -217,6 +222,7 @@ def get_refresh():
                     "last_data": (
                         last_data.strftime("%Y-%m-%d %H:%M:%S") if last_data else "Never"
                     ),
+                    "type": "collector" if name in collector_names else "api",
                 })
         except Exception:  # pylint: disable=broad-exception-caught
             logger.exception("Error getting sources in refresh")
@@ -494,6 +500,7 @@ def export_data(fmt, uas_id):
 
 def _get_api_key_source():
     """Extract source name from Authorization header.
+    Checks api_keys first, then collectors_by_key.
     Returns source name or None if invalid/missing.
     """
     auth_header = request.headers.get("Authorization", "")
@@ -501,7 +508,10 @@ def _get_api_key_source():
         return None
 
     api_key = auth_header[7:]  # Remove "Bearer " prefix
-    return CONFIG.api_keys.get(api_key)
+    source = CONFIG.api_keys.get(api_key)
+    if source:
+        return source
+    return CONFIG.collectors_by_key.get(api_key)
 
 
 @app.route("/api/submit", methods=["POST"])
@@ -571,11 +581,14 @@ def submit_data():
 @csrf.exempt
 @cross_origin()
 def submit_ping():
-    """Heartbeat endpoint for API key submitters.
+    """Heartbeat endpoint for API key submitters and collectors.
 
     Requires Authorization: Bearer <api_key> header.
     Logs a check-in to sync_log so the sources status panel
     shows the source as recently connected.
+
+    For collectors: optional lat= & lon= query params update
+    the collector's position on the map.
     """
     source = _get_api_key_source()
     if source is None:
@@ -583,11 +596,65 @@ def submit_ping():
 
     try:
         DATABASE.log_submission(source, 0)
+        lat = request.args.get("lat")
+        lon = request.args.get("lon")
+        if lat is not None and lon is not None:
+            try:
+                lat_f = float(lat)
+                lon_f = float(lon)
+                if -90 <= lat_f <= 90 and -180 <= lon_f <= 180:
+                    DATABASE.update_collector_position(source, lat_f, lon_f)
+            except (ValueError, TypeError):
+                pass
         logger.info("Heartbeat from %s", source)
         return jsonify({"success": True, "source": source})
     except sqlite3.Error as e:
         logger.exception("Error logging heartbeat from %s", source)
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/collectors")
+def get_collectors():
+    """Get current positions and status for all configured collectors"""
+    positions = DATABASE.get_collector_positions()
+    pos_by_name = {p["name"]: p for p in positions}
+    sources = DATABASE.get_all_sources()
+    last_sync_by_name = {s["source"]: s["last_sync"] for s in sources}
+    stale_seconds = CONFIG.position_stale_minutes * 60
+    now = datetime.now()
+    result = []
+    for c in CONFIG.collectors:
+        last_sync = last_sync_by_name.get(c.name)
+        updated = None
+        is_stale = True
+        if last_sync and isinstance(last_sync, datetime):
+            updated = last_sync
+            if (now - last_sync).total_seconds() <= stale_seconds:
+                is_stale = False
+        if c.type == "fixed":
+            result.append({
+                "name": c.name,
+                "color": c.color,
+                "type": "fixed",
+                "latitude": c.lat,
+                "longitude": c.lon,
+                "updated_at": updated,
+                "stale": is_stale,
+            })
+        else:
+            pos = pos_by_name.get(c.name, {})
+            lat = pos.get("latitude")
+            lon = pos.get("longitude")
+            result.append({
+                "name": c.name,
+                "color": c.color,
+                "type": "mobile",
+                "latitude": lat,
+                "longitude": lon,
+                "updated_at": updated,
+                "stale": is_stale,
+            })
+    return jsonify(result)
 
 
 @app.route("/api/sessions/redetect", methods=["POST"])
