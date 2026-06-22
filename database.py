@@ -473,7 +473,7 @@ class WebDatabase:
         for key, value in record.items():
             if key in coord_keys:
                 sanitized[key] = WebDatabase._sanitize_float(value, key)
-            elif key == "timestamp":
+            elif key in ("timestamp", "session_start"):
                 sanitized[key] = WebDatabase._sanitize_timestamp(value)
             else:
                 sanitized[key] = value
@@ -509,7 +509,16 @@ class WebDatabase:
             if value.tzinfo is None:
                 return value.isoformat() + "Z"
             return value.isoformat()
-        return str(value)
+        # Handle string values from SQL aggregates - add Z if it looks like a naive datetime
+        s = str(value)
+        if s and len(s) >= 19:
+            # Check if it matches ISO datetime pattern YYYY-MM-DDTHH:MM:SS
+            is_datetime = (s[4] == '-' and s[7] == '-' and s[10] == 'T'
+                        and s[13] == ':' and s[16] == ':')
+            has_tz = s.endswith("Z") or "+" in s[-6:]
+            if is_datetime and not has_tz:
+                return s + "Z"
+        return s
 
     def _get_last_sync(self, source_name: str) -> Optional[datetime]:
         """Get the last sync time for a source"""
@@ -602,10 +611,11 @@ class WebDatabase:
             SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
                    r1.timestamp, r1.operator_id, r1.operator_latitude, r1.operator_longitude,
                    r1.source, r1.computed_session_id,
-                   r1.collector_latitude, r1.collector_longitude
+                   r1.collector_latitude, r1.collector_longitude,
+                   r2.min_ts as session_start
             FROM remoteid r1
             INNER JOIN (
-                SELECT uas_id, computed_session_id, MAX(timestamp) as max_ts
+                SELECT uas_id, computed_session_id, MAX(timestamp) as max_ts, MIN(timestamp) as min_ts
                 FROM remoteid
                 WHERE timestamp BETWEEN ? AND ?
                 AND computed_session_id IS NOT NULL
@@ -624,10 +634,11 @@ class WebDatabase:
             SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
                    r1.timestamp, r1.operator_id, r1.operator_latitude, r1.operator_longitude,
                    r1.source, r1.computed_session_id,
-                   r1.collector_latitude, r1.collector_longitude
+                   r1.collector_latitude, r1.collector_longitude,
+                   r2.min_ts as session_start
             FROM remoteid r1
             INNER JOIN (
-                SELECT uas_id, MAX(timestamp) as max_ts
+                SELECT uas_id, MAX(timestamp) as max_ts, MIN(timestamp) as min_ts
                 FROM remoteid
                 WHERE timestamp BETWEEN ? AND ?
                 AND computed_session_id IS NULL

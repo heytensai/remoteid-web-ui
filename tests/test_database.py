@@ -79,7 +79,13 @@ def test_sanitize_float_valid():
 def test_sanitize_timestamp():
     mc = WebDatabase
     assert mc._sanitize_timestamp(None) is None
-    assert mc._sanitize_timestamp("2024-01-15T10:00:00") == "2024-01-15T10:00:00"
+    # Naive datetime strings get Z suffix
+    assert mc._sanitize_timestamp("2024-01-15T10:00:00") == "2024-01-15T10:00:00Z"
+    # Already has Z suffix, stays the same
+    assert mc._sanitize_timestamp("2024-01-15T10:00:00Z") == "2024-01-15T10:00:00Z"
+    # Has timezone offset, stays the same
+    assert mc._sanitize_timestamp("2024-01-15T10:00:00+05:00") == "2024-01-15T10:00:00+05:00"
+    # Non-datetime strings pass through
     assert mc._sanitize_timestamp(12345) == "12345"
 
 
@@ -293,7 +299,8 @@ def test_sanitize_record():
     assert sanitized["latitude"] == 37.7749
     assert sanitized["altitude"] is None
     assert sanitized["operator_latitude"] is None
-    assert sanitized["timestamp"] == "2024-01-15T10:00:00"
+    # Naive timestamp strings get Z suffix
+    assert sanitized["timestamp"] == "2024-01-15T10:00:00Z"
 
 
 # --- Geozone event history tests ---

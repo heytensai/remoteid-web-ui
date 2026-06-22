@@ -851,6 +851,24 @@ const UIController = {
     },
 
     /**
+     * Format duration in HH:MM:SS format
+     */
+    formatDuration(seconds) {
+        if (seconds === null || seconds === undefined || isNaN(seconds)) {
+            return 'N/A';
+        }
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = Math.floor(seconds % 60);
+
+        if (hours > 0) {
+            return `${hours}h ${minutes}m`;
+        } else {
+            return `${minutes}m ${secs}s`;
+        }
+    },
+
+    /**
      * Get manufacturer name from UAS ID using serial prefix matching.
      * Returns null if unknown.
      */
@@ -1431,6 +1449,15 @@ const UIController = {
 
                             const hasAlert = alertedUasIds.has(drone.uas_id);
 
+                            // Calculate flight duration for this session
+                            let durationStr = 'N/A';
+                            if (drone.session_start) {
+                                const startTime = new Date(drone.session_start);
+                                const endTime = new Date(drone.timestamp);
+                                const durationSeconds = (endTime - startTime) / 1000;
+                                durationStr = this.formatDuration(durationSeconds);
+                            }
+
                             return `
                                 <div class="drone-item ${isSelected ? 'active' : ''} ${isVisible ? '' : 'dimmed'} ${hasAlert ? 'has-geozone-alert' : ''}" data-uas-id="${esc(drone.uas_id)}" data-session-key="${esc(rawSessionKey)}" data-session-id="${esc(drone.computed_session_id || '')}">
                                     <input type="checkbox" class="drone-checkbox" data-session-key="${esc(rawSessionKey)}" ${isVisible ? 'checked' : ''}>
@@ -1440,7 +1467,7 @@ const UIController = {
                                         <div class="drone-meta-row">
                                             ${this._getManufacturerBadgeHtml(drone.uas_id)}
                                             <div class="session-id">${esc(sessionId)}</div>
-                                            <div class="drone-meta">Alt: ${altitude} | ${timeStr}</div>
+                                            <div class="drone-meta">Alt: ${altitude} | ${timeStr} | ${durationStr}</div>
                                         </div>
                                     </div>
                                     <div class="drone-actions">
