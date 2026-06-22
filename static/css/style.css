@@ -1612,7 +1612,8 @@ body.dark-mode .replay-time-display {
     }
 
     .waypoints-btn .wp-label,
-    .analytics-btn .analytics-label {
+    .analytics-btn .analytics-label,
+    .brand-label {
         display: none;
     }
 
