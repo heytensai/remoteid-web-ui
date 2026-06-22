@@ -89,10 +89,13 @@ BASE_DIR = Path(__file__).parent
 @app.route("/icons/<path:filename>")
 def pwa_icon(filename):
     """Serve PWA icons via Flask route"""
-    icon_path = BASE_DIR / "static" / "icons" / filename
-    if not icon_path.exists() or not icon_path.is_file():
+    icons_dir = (BASE_DIR / "static" / "icons").resolve()
+    requested = (icons_dir / filename).resolve()
+    if not str(requested).startswith(str(icons_dir)):
         return "Not found", 404
-    body = icon_path.read_bytes()
+    if not requested.exists() or not requested.is_file():
+        return "Not found", 404
+    body = requested.read_bytes()
     resp = make_response(body)
     resp.headers["Content-Type"] = "image/png"
     resp.headers["Cache-Control"] = "public, max-age=86400"
@@ -359,6 +362,14 @@ def get_bounds():
         return jsonify({"error": "Internal server error"}), 500
 
 
+def _safe_csv_val(val):
+    """Sanitize a CSV cell value to prevent formula injection."""
+    s = str(val) if val is not None else ""
+    if s and s[0] in ("=", "+", "-", "@", "\t", "\n", "\r"):
+        return "'" + s
+    return s
+
+
 def _export_csv(positions, filename):
     """Generate CSV export from position data"""
     output = io.StringIO()
@@ -378,8 +389,8 @@ def _export_csv(positions, filename):
             pos.get("longitude", ""),
             alt_m if alt_m is not None else "",
             alt_ft,
-            pos.get("operator_id", "") or "",
-            pos.get("computed_session_id", "") or "",
+            _safe_csv_val(pos.get("operator_id", "")),
+            _safe_csv_val(pos.get("computed_session_id", "")),
         ])
 
     return Response(
@@ -766,12 +777,12 @@ def _export_alert_csv(events):
             return str(val) if val else ""
 
         writer.writerow([
-            ev.get("uas_id", ""),
-            ev.get("geozone_name", ""),
+            _safe_csv_val(ev.get("uas_id", "")),
+            _safe_csv_val(ev.get("geozone_name", "")),
             fmt_dt(entered),
             fmt_dt(last_seen),
             fmt_dt(exited),
-            ev.get("exited_reason", "") or "",
+            _safe_csv_val(ev.get("exited_reason", "")),
             duration if duration is not None else "",
         ])
 
