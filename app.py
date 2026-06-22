@@ -14,7 +14,6 @@ from typing import Optional
 from xml.sax.saxutils import escape
 
 from flask import Flask, jsonify, make_response, request, render_template, Response
-from flask_cors import cross_origin
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 
 from config import WebConfig
@@ -527,7 +526,6 @@ def _get_api_key_source():
 
 @app.route("/api/submit", methods=["POST"])
 @csrf.exempt
-@cross_origin()
 def submit_data():
     """Submit remote ID data from remote nodes.
 
@@ -590,7 +588,6 @@ def submit_data():
 
 @app.route("/api/submit/ping", methods=["GET"])
 @csrf.exempt
-@cross_origin()
 def submit_ping():
     """Heartbeat endpoint for API key submitters and collectors.
 
@@ -670,7 +667,6 @@ def get_collectors():
 
 @app.route("/api/sessions/redetect", methods=["POST"])
 @csrf.exempt
-@cross_origin()
 def redetect():
     """Force full session re-detection for all UAS.
 
