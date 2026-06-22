@@ -622,14 +622,23 @@ def submit_data():
         )
 
     try:
-        # Look up collector-specific timezone for this source
+        # Look up collector-specific timezone and fixed position for this source
         source_tz = None
+        collector_lat = None
+        collector_lon = None
         for c in _get_config().collectors:
-            if c.name == source and c.timezone:
-                source_tz = c.timezone
+            if c.name == source:
+                if c.timezone:
+                    source_tz = c.timezone
+                if c.lat is not None and c.lon is not None:
+                    collector_lat = c.lat
+                    collector_lon = c.lon
                 break
         # Insert records
-        inserted, errors, _ = DATABASE.insert_remoteid_records(source, data, source_tz=source_tz)
+        inserted, errors, _ = DATABASE.insert_remoteid_records(
+            source, data, source_tz=source_tz,
+            collector_lat=collector_lat, collector_lon=collector_lon,
+        )
 
         # Log the submission to sync_log
         DATABASE.log_submission(source, inserted)

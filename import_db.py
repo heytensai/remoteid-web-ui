@@ -40,6 +40,18 @@ def main():
         default=None,
         help="IANA timezone (e.g. America/Denver) for naive timestamps in source DB",
     )
+    parser.add_argument(
+        "--collector-lat",
+        type=float,
+        default=None,
+        help="Collector latitude to stamp on imported records",
+    )
+    parser.add_argument(
+        "--collector-lon",
+        type=float,
+        default=None,
+        help="Collector longitude to stamp on imported records",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -49,7 +61,8 @@ def main():
 
     db = WebDatabase(args.web_db)
     count = db.import_from_collector(
-        args.source, args.name, args.gap_threshold, args.timezone
+        args.source, args.name, args.gap_threshold, args.timezone,
+        args.collector_lat, args.collector_lon,
     )
     logger.info("Imported %d records from %s into %s", count, args.name, args.web_db)
     return 0 if count >= 0 else 1

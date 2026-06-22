@@ -61,10 +61,19 @@ class WebDatabase:
             operator_latitude REAL,
             operator_longitude REAL,
             computed_session_id TEXT,
-            session_detected_at DATETIME
+            session_detected_at DATETIME,
+            collector_latitude REAL,
+            collector_longitude REAL
         )
         """
         )
+
+        # Migration: add collector position columns to existing databases
+        for col in ("collector_latitude", "collector_longitude"):
+            try:
+                conn.execute(f"ALTER TABLE remoteid ADD COLUMN {col} REAL")
+            except sqlite3.OperationalError:
+                pass
 
         # Create sync log table
         conn.execute(
@@ -253,6 +262,8 @@ class WebDatabase:
         self, source_db_path: str, source_name: str,
         session_gap_threshold: int = 600,
         source_tz: Optional[str] = None,
+        collector_lat: Optional[float] = None,
+        collector_lon: Optional[float] = None,
     ) -> int:
         # pylint: disable=too-many-locals
         """Import new records from a collector's database with session detection
@@ -264,6 +275,8 @@ class WebDatabase:
             source_tz: IANA timezone name (e.g. "America/Denver") to interpret
                        naive timestamps from this source. If None, naive
                        timestamps are assumed to be UTC.
+            collector_lat: Collector latitude to stamp on each record (optional)
+            collector_lon: Collector longitude to stamp on each record (optional)
         """
         count = 0
         skipped = 0
@@ -332,11 +345,13 @@ class WebDatabase:
                             (source, timestamp, mac_address, uas_id, session_id,
                              latitude, longitude, altitude, operator_id,
                              operator_latitude, operator_longitude,
-                             computed_session_id, session_detected_at)
+                             computed_session_id, session_detected_at,
+                             collector_latitude, collector_longitude)
                             VALUES (:source, :timestamp, :mac_address, :uas_id, :session_id,
                                     :latitude, :longitude, :altitude, :operator_id,
                                     :operator_latitude, :operator_longitude,
-                                    :computed_session_id, :session_detected_at)
+                                    :computed_session_id, :session_detected_at,
+                                    :collector_latitude, :collector_longitude)
                         """,
                             {
                                 "source": source_name,
@@ -352,6 +367,8 @@ class WebDatabase:
                                 "operator_longitude": validated[9],
                                 "computed_session_id": computed_session_id,
                                 "session_detected_at": datetime.now(timezone.utc),
+                                "collector_latitude": collector_lat,
+                                "collector_longitude": collector_lon,
                             },
                         )
                         count += 1
@@ -584,7 +601,8 @@ class WebDatabase:
             """
             SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
                    r1.timestamp, r1.operator_id, r1.operator_latitude, r1.operator_longitude,
-                   r1.source, r1.computed_session_id
+                   r1.source, r1.computed_session_id,
+                   r1.collector_latitude, r1.collector_longitude
             FROM remoteid r1
             INNER JOIN (
                 SELECT uas_id, computed_session_id, MAX(timestamp) as max_ts
@@ -605,7 +623,8 @@ class WebDatabase:
             """
             SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
                    r1.timestamp, r1.operator_id, r1.operator_latitude, r1.operator_longitude,
-                   r1.source, r1.computed_session_id
+                   r1.source, r1.computed_session_id,
+                   r1.collector_latitude, r1.collector_longitude
             FROM remoteid r1
             INNER JOIN (
                 SELECT uas_id, MAX(timestamp) as max_ts
@@ -847,7 +866,7 @@ class WebDatabase:
             """
             SELECT latitude, longitude, altitude, timestamp,
                    operator_id, operator_latitude, operator_longitude,
-                   computed_session_id
+                   computed_session_id, collector_latitude, collector_longitude
             FROM remoteid
             WHERE uas_id = ? AND computed_session_id = ?
             ORDER BY timestamp ASC
@@ -948,6 +967,8 @@ class WebDatabase:
         records: List[Dict],
         session_gap_threshold: int = 600,
         source_tz: Optional[str] = None,
+        collector_lat: Optional[float] = None,
+        collector_lon: Optional[float] = None,
     ) -> Tuple[int, List[Dict], Optional[datetime]]:
         # pylint: disable=too-many-locals
         """Insert multiple records into remoteid table with session detection.
@@ -962,6 +983,8 @@ class WebDatabase:
             source_tz: IANA timezone name (e.g. "America/Denver") to interpret
                        naive timestamps from this source. If None, naive
                        timestamps are assumed to be UTC.
+            collector_lat: Collector latitude to stamp on each record (optional)
+            collector_lon: Collector longitude to stamp on each record (optional)
 
         Returns:
             Tuple of (inserted_count, errors, most_recent_timestamp)
@@ -1024,7 +1047,9 @@ class WebDatabase:
                     "operator_id": record.get("operator_id"),
                     "operator_latitude": op_lat,
                     "operator_longitude": op_lon,
-                    "session_detected_at": datetime.now(),
+                    "session_detected_at": datetime.now(timezone.utc),
+                    "collector_latitude": collector_lat,
+                    "collector_longitude": collector_lon,
                 })
 
                 if most_recent is None or timestamp > most_recent:
@@ -1054,6 +1079,7 @@ class WebDatabase:
                 rec["longitude"], rec["altitude"], rec["operator_id"],
                 rec["operator_latitude"], rec["operator_longitude"],
                 rec["computed_session_id"], rec["session_detected_at"],
+                rec["collector_latitude"], rec["collector_longitude"],
             ))
             uas_sessions[uas_id] = (timestamp, computed_session_id)
 
@@ -1063,8 +1089,9 @@ class WebDatabase:
             (source, timestamp, mac_address, uas_id, session_id,
              latitude, longitude, altitude, operator_id,
              operator_latitude, operator_longitude,
-             computed_session_id, session_detected_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             computed_session_id, session_detected_at,
+             collector_latitude, collector_longitude)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
