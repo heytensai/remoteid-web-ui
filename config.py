@@ -56,6 +56,10 @@ class CollectorConfig:
 
     type: "mobile" — reports position via API (requires api_key)
           "fixed"  — static position from config (requires lat, lon)
+
+    timezone: IANA timezone name (e.g. "America/Denver") for incoming
+              timestamps. If set, naive timestamps are converted from
+              this timezone to UTC before storing.
     """
 
     name: str
@@ -64,6 +68,7 @@ class CollectorConfig:
     type: str = "mobile"
     lat: Optional[float] = None
     lon: Optional[float] = None
+    timezone: Optional[str] = None
 
 
 VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
@@ -221,6 +226,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 type=c_type,
                 lat=c_data.get("lat"),
                 lon=c_data.get("lon"),
+                timezone=c_data.get("timezone") or None,
             ))
         self.collectors_by_key = {c.api_key: c.name for c in self.collectors if c.api_key}
 
@@ -358,124 +364,76 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         }
 
     def reload_hot_config(self):
-        """Re-read config file and update hot-reloadable fields (api_keys, drone_aliases, waypoints, session_detection)"""
+        """Re-read config file and return a new WebConfig with updated hot-reloadable fields.
+
+        Returns the new :class:`WebConfig` if any hot-reloadable field changed,
+        or ``None`` if nothing changed or the file could not be read.
+
+        .. note::
+
+            The original object is **never** mutated — thread-safe for readers
+            holding a reference to the previous snapshot.
+        """
         try:
-            with open(self.config_path, encoding="utf-8") as fh:
-                data = yaml.safe_load(fh)
-            web_data = data.get("web_interface", {})
-
-            # Reload drone aliases
-            new_aliases = web_data.get("drone_aliases") or {}
-            if new_aliases != self.drone_aliases:
-                self.drone_aliases = new_aliases
-                logger.info("Reloaded drone_aliases from %s", self.config_path)
-
-            # Reload API keys
-            new_api_keys = web_data.get("api_keys") or {}
-            if new_api_keys != self.api_keys:
-                self.api_keys = new_api_keys
-                logger.info("Reloaded api_keys from %s", self.config_path)
-
-            # Reload manufacturer prefixes
-            new_prefixes = web_data.get("manufacturer_prefixes") or {}
-            if new_prefixes != self.manufacturer_prefixes:
-                self.manufacturer_prefixes = new_prefixes
-                logger.info("Reloaded manufacturer_prefixes from %s", self.config_path)
-
-            # Reload waypoints
-            use_metric = web_data.get("use_metric", self.use_metric)
-            new_waypoints = []
-            for wp_data in web_data.get("waypoints") or []:
-                wp_type = wp_data.get("type", "point")
-                fill_opacity = wp_data.get("fill_opacity", 0.1)
-                if wp_type == "circle":
-                    radius = wp_data.get("radius", 0)
-                    if not use_metric:
-                        radius /= FEET_PER_METER
-                else:
-                    radius = 0.0
-                if wp_type == "rectangle":
-                    width = wp_data.get("width", 0)
-                    height = wp_data.get("height", 0)
-                    if not use_metric:
-                        width /= FEET_PER_METER
-                        height /= FEET_PER_METER
-                else:
-                    width = 0.0
-                    height = 0.0
-                new_waypoints.append(
-                    WaypointConfig(
-                        name=wp_data["name"],
-                        lat=wp_data["lat"],
-                        lon=wp_data["lon"],
-                        type=wp_type,
-                        icon=wp_data.get("icon", "fa-map-pin"),
-                        color=wp_data.get("color", "#007bff"),
-                        description=wp_data.get("description", ""),
-                        enabled=wp_data.get("enabled", True),
-                        category=wp_data.get("category", ""),
-                        radius=radius,
-                        width=width,
-                        height=height,
-                        fill_opacity=fill_opacity,
-                        alert_enabled=wp_data.get("alert_enabled", False),
-                    )
-                )
-            old_dict = {w.name: w for w in self.waypoints}
-            new_dict = {w.name: w for w in new_waypoints}
-            if old_dict != new_dict:
-                self.waypoints = new_waypoints
-                logger.info("Reloaded waypoints from %s", self.config_path)
-
-            # Reload session detection config
-            sd_data = web_data.get("session_detection") or {}
-            new_sd = SessionDetectionConfig(sd_data)
-            if (new_sd.enabled != self.session_detection.enabled
-                    or new_sd.interval != self.session_detection.interval
-                    or new_sd.gap_threshold != self.session_detection.gap_threshold
-                    or new_sd.log_level != self.session_detection.log_level):
-                self.session_detection = new_sd
-                logger.info(
-                    "Reloaded session_detection from %s (enabled=%s, interval=%s, gap=%s, log_level=%s)",
-                    self.config_path, new_sd.enabled, new_sd.interval,
-                    new_sd.gap_threshold, new_sd.log_level,
-                )
-
-            # Reload alerts config
-            alerts_data = web_data.get("alerts") or {}
-            new_alerts = AlertsConfig(alerts_data)
-            if (new_alerts.stale_timeout != self.alerts.stale_timeout
-                    or new_alerts.skip_known_drones != self.alerts.skip_known_drones):
-                self.alerts = new_alerts
-                logger.info(
-                    "Reloaded alerts from %s (stale_timeout=%s, skip_known_drones=%s)",
-                    self.config_path, new_alerts.stale_timeout,
-                    new_alerts.skip_known_drones,
-                )
-
-            # Reload position_stale_minutes
-            new_stale = web_data.get("position_stale_minutes", 30)
-            if new_stale != self.position_stale_minutes:
-                self.position_stale_minutes = new_stale
-                logger.info("Reloaded position_stale_minutes from %s", self.config_path)
-
-            # Reload collectors
-            new_collectors = []
-            for c_data in web_data.get("collectors") or []:
-                c_type = c_data.get("type", "mobile")
-                new_collectors.append(CollectorConfig(
-                    name=c_data["name"],
-                    api_key=c_data.get("api_key", ""),
-                    color=c_data.get("color", "#e67e22"),
-                    type=c_type,
-                    lat=c_data.get("lat"),
-                    lon=c_data.get("lon"),
-                ))
-            old_by_name = {c.name: c for c in self.collectors}
-            new_by_name = {c.name: c for c in new_collectors}
-            if old_by_name != new_by_name:
-                self.collectors = new_collectors
-                self.collectors_by_key = {c.api_key: c.name for c in self.collectors if c.api_key}
-                logger.info("Reloaded collectors from %s", self.config_path)
+            new_config = WebConfig(self.config_path)
         except Exception:  # pylint: disable=broad-exception-caught
             logger.exception("Failed to reload hot config from %s", self.config_path)
+            return None
+
+        # Detect changes and log them (side-effect-free comparison only)
+        changed = False
+
+        if new_config.drone_aliases != self.drone_aliases:
+            logger.info("Reloaded drone_aliases from %s", self.config_path)
+            changed = True
+
+        if new_config.api_keys != self.api_keys:
+            logger.info("Reloaded api_keys from %s", self.config_path)
+            changed = True
+
+        if new_config.manufacturer_prefixes != self.manufacturer_prefixes:
+            logger.info("Reloaded manufacturer_prefixes from %s", self.config_path)
+            changed = True
+
+        old_wp = {w.name: w for w in self.waypoints}
+        new_wp = {w.name: w for w in new_config.waypoints}
+        if old_wp != new_wp:
+            logger.info("Reloaded waypoints from %s", self.config_path)
+            changed = True
+
+        if (new_config.session_detection.enabled != self.session_detection.enabled
+                or new_config.session_detection.interval != self.session_detection.interval
+                or new_config.session_detection.gap_threshold != self.session_detection.gap_threshold
+                or new_config.session_detection.log_level != self.session_detection.log_level):
+            logger.info(
+                "Reloaded session_detection from %s (enabled=%s, interval=%s, gap=%s, log_level=%s)",
+                self.config_path, new_config.session_detection.enabled,
+                new_config.session_detection.interval,
+                new_config.session_detection.gap_threshold,
+                new_config.session_detection.log_level,
+            )
+            changed = True
+
+        if (new_config.alerts.stale_timeout != self.alerts.stale_timeout
+                or new_config.alerts.skip_known_drones != self.alerts.skip_known_drones):
+            logger.info(
+                "Reloaded alerts from %s (stale_timeout=%s, skip_known_drones=%s)",
+                self.config_path, new_config.alerts.stale_timeout,
+                new_config.alerts.skip_known_drones,
+            )
+            changed = True
+
+        if new_config.position_stale_minutes != self.position_stale_minutes:
+            logger.info("Reloaded position_stale_minutes from %s", self.config_path)
+            changed = True
+
+        old_col = {c.name: c for c in self.collectors}
+        new_col = {c.name: c for c in new_config.collectors}
+        if old_col != new_col:
+            logger.info("Reloaded collectors from %s", self.config_path)
+            changed = True
+
+        if not changed:
+            return None
+
+        return new_config

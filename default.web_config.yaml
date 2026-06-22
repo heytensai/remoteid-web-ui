@@ -137,12 +137,14 @@ web_interface:
     #   type: "mobile"           # "mobile" or "fixed"
     #   api_key: "collector-car-1-api-key"  # Required for ping auth
     #   color: "#e67e22"         # CSS color for map marker
+    #   timezone: "America/Denver"  # IANA timezone; naive timestamps converted to UTC
     # - name: "Base Station"
     #   type: "fixed"
     #   api_key: "collector-base-key"   # optional, needed for ping auth
     #   lat: 37.7749
     #   lon: -122.4194
     #   color: "#3498db"
+    #   timezone: "America/New_York"
 
   # Minutes after which a collector's marker turns gray on the map
   # when it hasn't pinged via /api/submit/ping. (hot-reloadable)

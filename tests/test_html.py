@@ -21,10 +21,11 @@ class TestIndexTemplate:
         meta_viewport = soup.find("meta", attrs={"name": "viewport"})
         assert meta_viewport is not None
 
-        # CSP
+        # CSP is set as HTTP response header, not meta tag
         meta_csp = soup.find("meta", attrs={"http-equiv": "Content-Security-Policy"})
-        assert meta_csp is not None
-        assert "default-src 'self'" in meta_csp["content"]
+        assert meta_csp is None
+        assert "Content-Security-Policy" in resp.headers
+        assert "default-src 'self'" in resp.headers["Content-Security-Policy"]
 
     def test_key_elements_present(self, client):
         resp = client.get("/")

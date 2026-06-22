@@ -586,7 +586,7 @@ class TestApiKeysHotReload:
         with open(config_path, "w", encoding="utf-8") as f:
             yaml.dump(data, f)
 
-        cfg.reload_hot_config()
+        cfg = cfg.reload_hot_config() or cfg
         assert cfg.api_keys == {
             "new-key": "new-source",
             "another-key": "another-source",
@@ -605,7 +605,7 @@ class TestApiKeysHotReload:
         with open(config_path, "w", encoding="utf-8") as f:
             yaml.dump(data, f)
 
-        cfg.reload_hot_config()
+        cfg = cfg.reload_hot_config() or cfg
         assert cfg.api_keys == {}
 
     def test_api_keys_hot_reload_logs_change(self, sample_config_yaml, caplog):

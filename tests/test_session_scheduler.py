@@ -248,7 +248,7 @@ class TestConfigHotReload:
         with open(config_path, "w", encoding="utf-8") as f:
             yaml.dump(data, f)
 
-        cfg.reload_hot_config()
+        cfg = cfg.reload_hot_config() or cfg
         assert cfg.session_detection.enabled is True
         assert cfg.session_detection.interval == 60
         assert cfg.session_detection.gap_threshold == 300

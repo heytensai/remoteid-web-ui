@@ -35,6 +35,11 @@ def main():
         default=600,
         help="Session gap threshold in seconds (default: 600)",
     )
+    parser.add_argument(
+        "--timezone",
+        default=None,
+        help="IANA timezone (e.g. America/Denver) for naive timestamps in source DB",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -43,7 +48,9 @@ def main():
     )
 
     db = WebDatabase(args.web_db)
-    count = db.import_from_collector(args.source, args.name, args.gap_threshold)
+    count = db.import_from_collector(
+        args.source, args.name, args.gap_threshold, args.timezone
+    )
     logger.info("Imported %d records from %s into %s", count, args.name, args.web_db)
     return 0 if count >= 0 else 1
 

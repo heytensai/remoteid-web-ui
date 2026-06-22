@@ -14,6 +14,8 @@ from typing import Optional
 from xml.sax.saxutils import escape
 
 from flask import Flask, jsonify, make_response, request, render_template, Response
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 
 from config import WebConfig
@@ -28,16 +30,78 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global instances
+# Global instances (initialized in _init_app)
 CONFIG: WebConfig = None
 DATABASE: WebDatabase = None
 SESSION_SCHEDULER: Optional[SessionScheduler] = None
 ALERT_ENGINE: Optional[AlertEngine] = None
 
+# Thread-safe config snapshot — swapped atomically on hot reload.
+# Readers should always call get_config() instead of accessing CONFIG directly.
+_config_lock = threading.Lock()
+_config_snapshot: Optional[WebConfig] = None
+
+
+def _get_config() -> WebConfig:
+    """Return the current immutable config snapshot (thread-safe)."""
+    return _config_snapshot
+
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24).hex())
+app.secret_key = os.environ.get("FLASK_SECRET_KEY")
+if not app.secret_key:
+    if os.environ.get("FLASK_ENV") == "production":
+        raise RuntimeError(
+            "FLASK_SECRET_KEY environment variable must be set in production. "
+            "Generate one with: python -c 'import os; print(os.urandom(24).hex())'"
+        )
+    app.secret_key = os.urandom(24).hex()
+    logger.warning(
+        "Using ephemeral FLASK_SECRET_KEY — CSRF tokens will be invalidated "
+        "on restart. Set FLASK_SECRET_KEY env var for a persistent key."
+    )
 csrf = CSRFProtect(app)
 logging.getLogger("flask_wtf.csrf").setLevel(logging.WARNING)
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB limit
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=None,  # per-route only
+)
+
+
+@app.errorhandler(413)
+def request_entity_too_large(error):  # pylint: disable=unused-argument
+    return jsonify({"success": False, "error": "Payload too large"}), 413
+
+
+@app.errorhandler(429)
+def rate_limit_exceeded(error):  # pylint: disable=unused-argument
+    return jsonify({"success": False, "error": "Rate limit exceeded"}), 429
+
+
+_CSP = (
+    "default-src 'self';"
+    " manifest-src 'self';"
+    " script-src 'self' https://unpkg.com https://cdn.jsdelivr.net;"
+    " style-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com;"
+    " font-src 'self' https://cdnjs.cloudflare.com;"
+    " img-src 'self' https://*.tile.openstreetmap.org https://*.basemaps.cartocdn.com data:;"
+    " connect-src 'self';"
+    " worker-src 'self';"
+)
+
+
+@app.after_request
+def add_security_headers(response):
+    response.headers["Content-Security-Policy"] = _CSP
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    if request.is_secure:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
 # CORS intentionally not set globally — API is same-origin via the Flask server.
 # Only /api/submit allows cross-origin (uses Bearer token auth).
 
@@ -45,7 +109,7 @@ logging.getLogger("flask_wtf.csrf").setLevel(logging.WARNING)
 @app.route("/")
 def index():
     """Main page"""
-    return render_template("index.html", url_prefix=CONFIG.url_prefix)
+    return render_template("index.html", url_prefix=_get_config().url_prefix)
 
 
 @app.route("/manifest.json")
@@ -63,18 +127,18 @@ def _build_manifest():
         "name": "Drone Tracker",
         "short_name": "Drones",
         "description": "Real-time Remote ID drone tracking and visualization",
-        "start_url": CONFIG.url_prefix + "/",
+        "start_url": _get_config().url_prefix + "/",
         "display": "standalone",
         "background_color": "#1a1a2e",
         "theme_color": "#2c3e50",
         "icons": [
             {
-                "src": CONFIG.url_prefix + "/icons/icon-192x192.png",
+                "src": _get_config().url_prefix + "/icons/icon-192x192.png",
                 "sizes": "192x192",
                 "type": "image/png",
             },
             {
-                "src": CONFIG.url_prefix + "/icons/icon-512x512.png",
+                "src": _get_config().url_prefix + "/icons/icon-512x512.png",
                 "sizes": "512x512",
                 "type": "image/png",
             },
@@ -109,32 +173,46 @@ def service_worker():
     resp = make_response(body)
     resp.headers["Content-Type"] = "application/javascript"
     resp.headers["Cache-Control"] = "no-cache"
-    resp.headers["Service-Worker-Allowed"] = CONFIG.url_prefix + "/"
+    resp.headers["Service-Worker-Allowed"] = _get_config().url_prefix + "/"
     return resp
 
 
 @app.route("/api/config")
-def get_config():
+def api_config():
     """Get map configuration"""
+    cfg = _get_config()
     return jsonify(
         {
             "map": {
-                "center_lat": CONFIG.map.center_lat,
-                "center_lon": CONFIG.map.center_lon,
-                "default_zoom": CONFIG.map.default_zoom,
-                "tile_provider": CONFIG.map.tile_provider,
+                "center_lat": cfg.map.center_lat,
+                "center_lon": cfg.map.center_lon,
+                "default_zoom": cfg.map.default_zoom,
+                "tile_provider": cfg.map.tile_provider,
             },
-            "default_hours": CONFIG.default_hours,
-            "drone_aliases": CONFIG.drone_aliases,
-            "manufacturer_prefixes": CONFIG.manufacturer_prefixes,
-            "waypoints": CONFIG.to_dict().get("waypoints", []),
-            "use_metric": CONFIG.use_metric,
-            "stale_timeout": CONFIG.alerts.stale_timeout,
-            "collectors": CONFIG.to_dict().get("collectors", []),
-            "position_stale_minutes": CONFIG.position_stale_minutes,
+            "default_hours": cfg.default_hours,
+            "drone_aliases": cfg.drone_aliases,
+            "manufacturer_prefixes": cfg.manufacturer_prefixes,
+            "waypoints": cfg.to_dict().get("waypoints", []),
+            "use_metric": cfg.use_metric,
+            "stale_timeout": cfg.alerts.stale_timeout,
+            "collectors": cfg.to_dict().get("collectors", []),
+            "position_stale_minutes": cfg.position_stale_minutes,
             "csrf_token": generate_csrf(),
         }
     )
+
+
+def _format_utc_ts(dt):
+    """Format a datetime as an ISO 8601 UTC string with Z suffix.
+
+    Naive datetimes are assumed to be UTC (legacy data stored
+    without timezone info but representing UTC).
+    """
+    if dt is None:
+        return "Never"
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc)
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @app.route("/api/sources")
@@ -145,15 +223,11 @@ def get_sources():
         name = source_info["source"]
         last_data = DATABASE.get_most_recent_timestamp(source=name)
         last_sync = source_info["last_sync"]
-        is_collector = name in {c.name for c in CONFIG.collectors}
+        is_collector = name in {c.name for c in _get_config().collectors}
         sources.append({
             "name": name,
-            "last_sync": (
-                last_sync.strftime("%Y-%m-%d %H:%M") if last_sync else "Never"
-            ),
-            "last_data": (
-                last_data.strftime("%Y-%m-%d %H:%M:%S") if last_data else "Never"
-            ),
+            "last_sync": _format_utc_ts(last_sync),
+            "last_data": _format_utc_ts(last_data),
             "type": "collector" if is_collector else "api",
         })
 
@@ -211,19 +285,15 @@ def get_refresh():
 
         try:
             sources = []
-            collector_names = {c.name for c in CONFIG.collectors}
+            collector_names = {c.name for c in _get_config().collectors}
             for source_info in DATABASE.get_all_sources():
                 name = source_info["source"]
                 last_data = DATABASE.get_most_recent_timestamp(source=name)
                 last_sync = source_info["last_sync"]
                 sources.append({
                     "name": name,
-                    "last_sync": (
-                        last_sync.strftime("%Y-%m-%d %H:%M") if last_sync else "Never"
-                    ),
-                    "last_data": (
-                        last_data.strftime("%Y-%m-%d %H:%M:%S") if last_data else "Never"
-                    ),
+                    "last_sync": _format_utc_ts(last_sync),
+                    "last_data": _format_utc_ts(last_data),
                     "type": "collector" if name in collector_names else "api",
                 })
         except Exception:  # pylint: disable=broad-exception-caught
@@ -248,8 +318,8 @@ def get_positions():
         start, end = _parse_time_range(request.args)
         uas_id = request.args.get("uas_id")
         limit = min(
-            int(request.args.get("limit", CONFIG.max_positions_per_query)),
-            CONFIG.max_positions_per_query,
+            int(request.args.get("limit", _get_config().max_positions_per_query)),
+            _get_config().max_positions_per_query,
         )
 
         positions = DATABASE.get_positions(start, end, uas_id, limit)
@@ -518,14 +588,15 @@ def _get_api_key_source():
         return None
 
     api_key = auth_header[7:]  # Remove "Bearer " prefix
-    source = CONFIG.api_keys.get(api_key)
+    source = _get_config().api_keys.get(api_key)
     if source:
         return source
-    return CONFIG.collectors_by_key.get(api_key)
+    return _get_config().collectors_by_key.get(api_key)
 
 
 @app.route("/api/submit", methods=["POST"])
 @csrf.exempt
+@limiter.limit("30/minute")
 def submit_data():
     """Submit remote ID data from remote nodes.
 
@@ -551,8 +622,14 @@ def submit_data():
         )
 
     try:
+        # Look up collector-specific timezone for this source
+        source_tz = None
+        for c in _get_config().collectors:
+            if c.name == source and c.timezone:
+                source_tz = c.timezone
+                break
         # Insert records
-        inserted, errors, _ = DATABASE.insert_remoteid_records(source, data)
+        inserted, errors, _ = DATABASE.insert_remoteid_records(source, data, source_tz=source_tz)
 
         # Log the submission to sync_log
         DATABASE.log_submission(source, inserted)
@@ -581,13 +658,14 @@ def submit_data():
                 "last_timestamp": last_ts_str,
             }
         )
-    except (sqlite3.Error, ValueError, TypeError) as e:
+    except (sqlite3.Error, ValueError, TypeError):
         logger.exception("Error submitting data from %s", source)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": "Internal server error"}), 500
 
 
 @app.route("/api/submit/ping", methods=["GET"])
 @csrf.exempt
+@limiter.limit("30/minute")
 def submit_ping():
     """Heartbeat endpoint for API key submitters and collectors.
 
@@ -616,9 +694,9 @@ def submit_ping():
                 pass
         logger.info("Heartbeat from %s", source)
         return jsonify({"success": True, "source": source})
-    except sqlite3.Error as e:
+    except sqlite3.Error:
         logger.exception("Error logging heartbeat from %s", source)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": "Internal server error"}), 500
 
 
 @app.route("/api/collectors")
@@ -628,14 +706,17 @@ def get_collectors():
     pos_by_name = {p["name"]: p for p in positions}
     sources = DATABASE.get_all_sources()
     last_sync_by_name = {s["source"]: s["last_sync"] for s in sources}
-    stale_seconds = CONFIG.position_stale_minutes * 60
-    now = datetime.now()
+    stale_seconds = _get_config().position_stale_minutes * 60
+    now = datetime.now(timezone.utc)
     result = []
-    for c in CONFIG.collectors:
+    for c in _get_config().collectors:
         last_sync = last_sync_by_name.get(c.name)
         updated = None
         is_stale = True
         if last_sync and isinstance(last_sync, datetime):
+            if last_sync.tzinfo is None:
+                local_tz = datetime.now(timezone.utc).astimezone().tzinfo
+                last_sync = last_sync.replace(tzinfo=local_tz).astimezone(timezone.utc)
             updated = last_sync
             if (now - last_sync).total_seconds() <= stale_seconds:
                 is_stale = False
@@ -667,6 +748,7 @@ def get_collectors():
 
 @app.route("/api/sessions/redetect", methods=["POST"])
 @csrf.exempt
+@limiter.limit("10/minute")
 def redetect():
     """Force full session re-detection for all UAS.
 
@@ -679,8 +761,8 @@ def redetect():
 
     try:
         redetect_sessions(
-            CONFIG.database_path,
-            CONFIG.session_detection.gap_threshold,
+            _get_config().database_path,
+            _get_config().session_detection.gap_threshold,
             dry_run=False,
             force=True,
         )
@@ -763,7 +845,7 @@ def _export_alert_csv(events):
         exited = ev.get("exited_at")
         duration = None
         if entered:
-            end = exited or datetime.now()
+            end = exited or datetime.now(timezone.utc)
             if hasattr(entered, "timestamp"):
                 duration = int(end.timestamp() - entered.timestamp())
 
@@ -849,9 +931,9 @@ def get_last_timestamp():
         last_ts_str = last_timestamp.isoformat() if hasattr(last_timestamp, 'isoformat') else last_timestamp
 
         return jsonify({"last_timestamp": last_ts_str})
-    except (sqlite3.Error, AttributeError, TypeError) as e:
+    except (sqlite3.Error, AttributeError, TypeError):
         logger.exception("Error getting last timestamp")
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": "Internal server error"}), 500
 
 
 def _to_naive_utc(dt: datetime) -> datetime:
@@ -883,7 +965,7 @@ def _parse_time_range(args):
         )
     else:
         # Default to default_hours before end
-        start_time = end_time - timedelta(hours=CONFIG.default_hours)
+        start_time = end_time - timedelta(hours=_get_config().default_hours)
 
     return start_time, end_time
 
@@ -892,14 +974,25 @@ def _watch_config():
     """Background thread: periodically reload hot-reloadable config fields."""
     logger.info(
         "Config file watcher started for %s",
-        os.path.abspath(CONFIG.config_path),
+        os.path.abspath(_get_config().config_path),
     )
     while True:
         time.sleep(10)
         try:
-            CONFIG.reload_hot_config()
+            _hot_reload_config()
         except Exception:  # pylint: disable=broad-exception-caught
             logger.exception("Error reloading hot config")
+
+
+def _hot_reload_config():
+    """Try to reload config from file and atomically swap the snapshot."""
+    global CONFIG  # noqa: PLW0603  # pylint: disable=global-statement
+    new_config = CONFIG.reload_hot_config()
+    if new_config is not None:
+        with _config_lock:
+            CONFIG = new_config
+            global _config_snapshot  # noqa: PLW0603  # pylint: disable=global-statement
+            _config_snapshot = new_config
 
 
 def _init_app(config_path: str):
@@ -923,6 +1016,9 @@ def _init_app(config_path: str):
 
     SESSION_SCHEDULER = SessionScheduler(CONFIG, CONFIG.database_path, alert_engine=ALERT_ENGINE)
 
+    global _config_snapshot  # noqa: PLW0603  # pylint: disable=global-statement
+    _config_snapshot = CONFIG
+
     return app
 
 
@@ -945,7 +1041,7 @@ def start_config_watcher():
     watcher.start()
     logger.info(
         "Config file watcher started for %s",
-        os.path.abspath(CONFIG.config_path),
+        os.path.abspath(_get_config().config_path),
     )
 
 
@@ -961,12 +1057,12 @@ def main():
     start_background_services()
 
     try:
-        logger.info("Starting web server on %s:%d", CONFIG.host, CONFIG.port)
-        if CONFIG.url_prefix:
-            logger.info("URL prefix: %s", CONFIG.url_prefix)
+        logger.info("Starting web server on %s:%d", _get_config().host, _get_config().port)
+        if _get_config().url_prefix:
+            logger.info("URL prefix: %s", _get_config().url_prefix)
         else:
             logger.info("URL prefix: (none)")
-        app.run(host=CONFIG.host, port=CONFIG.port, debug=False, threaded=True)
+        app.run(host=_get_config().host, port=_get_config().port, debug=False, threaded=True)
     finally:
         if SESSION_SCHEDULER:
             SESSION_SCHEDULER.stop()

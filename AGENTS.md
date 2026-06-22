@@ -39,7 +39,8 @@
 - `drone_aliases` - Map UAS IDs to friendly names
 - `waypoints` - Custom map markers (name, lat, lon, icon, color, description, enabled, category)
 - `session_detection` - Background session detection settings (enabled, interval, gap_threshold, log_level)
-- `collectors` - Collector positions (name, api_key, color, type, lat, lon); use GET /api/submit/ping?lat=&lon= for position reporting
+- `collectors` - Collector positions (name, api_key, color, type, lat, lon, timezone); use GET /api/submit/ping?lat=&lon= for position reporting
+- `timezone` (per-collector) - IANA timezone name (e.g. "America/Denver"). If set, naive timestamps from that collector are converted from this timezone to UTC before storing. (default: None — naive assumed UTC)
 - `position_stale_minutes` - Minutes without ping before collector marker turns gray (hot-reloadable)
 
 ## Code Style Guidelines
@@ -101,7 +102,7 @@ All POST endpoints in `app.py` are protected by `flask_wtf.csrf.CSRFProtect` (ex
 
 ### Config Options
 
-- `FLASK_SECRET_KEY` — env var for a persistent secret key (optional; a random key is generated at startup if not set)
+- `FLASK_SECRET_KEY` — env var for a persistent secret key. **Required in production** (set `FLASK_ENV=production` to enforce). In dev, a random key is auto-generated with a warning.
 
 ## Testing Strategy
 

@@ -419,7 +419,10 @@ class TestApiSubmit:
             yaml.dump(data, f)
 
         import app as _app_module
-        _app_module.CONFIG.reload_hot_config()
+        res = _app_module.CONFIG.reload_hot_config()
+        if res is not None:
+            _app_module.CONFIG = res
+            _app_module._config_snapshot = res
 
         resp = client.post(
             "/api/submit",
@@ -441,7 +444,10 @@ class TestApiSubmit:
             yaml.dump(data, f)
 
         import app as _app_module
-        _app_module.CONFIG.reload_hot_config()
+        res = _app_module.CONFIG.reload_hot_config()
+        if res is not None:
+            _app_module.CONFIG = res
+            _app_module._config_snapshot = res
 
         resp = client.post(
             "/api/submit",
