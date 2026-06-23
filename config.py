@@ -31,7 +31,7 @@ FEET_PER_METER = 3.28084
 
 
 @dataclass
-class WaypointConfig:
+class WaypointConfig: # pylint: disable=too-many-instance-attributes
     """Custom waypoint displayed on the map"""
 
     name: str
@@ -248,7 +248,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
             ))
         return collectors
 
-    def _validate(self):
+    def _validate(self): # pylint: disable=too-many-branches
         """Validate configuration values, raising ValueError on invalid input."""
         errors = []
 

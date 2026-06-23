@@ -266,7 +266,7 @@ class WebDatabase:
         collector_lat: Optional[float] = None,
         collector_lon: Optional[float] = None,
     ) -> int:
-        # pylint: disable=too-many-locals
+        # pylint: disable=too-many-locals,too-many-positional-arguments
         """Import new records from a collector's database with session detection
 
         Args:
@@ -983,7 +983,7 @@ class WebDatabase:
         collector_lat: Optional[float] = None,
         collector_lon: Optional[float] = None,
     ) -> Tuple[int, List[Dict], Optional[datetime]]:
-        # pylint: disable=too-many-locals
+        # pylint: disable=too-many-locals,too-many-positional-arguments
         """Insert multiple records into remoteid table with session detection.
 
         Uses INSERT OR IGNORE with a UNIQUE index on (uas_id, timestamp)
@@ -1302,6 +1302,7 @@ class WebDatabase:
         limit: int = 100,
         offset: int = 0,
     ) -> Tuple[List[Dict], int]:
+        # pylint: disable=too-many-positional-arguments
         """Get geozone event history with filtering and pagination.
 
         Returns (events, total_count) tuple.

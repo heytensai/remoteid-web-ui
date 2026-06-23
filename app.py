@@ -39,7 +39,7 @@ ALERT_ENGINE: Optional[AlertEngine] = None
 # Thread-safe config snapshot — swapped atomically on hot reload.
 # Readers should always call get_config() instead of accessing CONFIG directly.
 _config_lock = threading.Lock()
-_config_snapshot: Optional[WebConfig] = None
+_config_snapshot: Optional[WebConfig] = None # pylint: disable=invalid-name
 
 
 def _get_config() -> WebConfig:

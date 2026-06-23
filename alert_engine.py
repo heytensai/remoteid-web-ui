@@ -33,7 +33,7 @@ def point_in_circle(
     return distance <= radius_m
 
 
-def point_in_rectangle(
+def point_in_rectangle( # pylint: disable=too-many-positional-arguments
     lat: float, lon: float,
     center_lat: float, center_lon: float,
     width_m: float, height_m: float,

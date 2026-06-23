@@ -27,12 +27,6 @@ max-line-length=120
 max-module-lines=1200
 indent-string='    '
 
-[MESSAGES CONTROL]
-disable=too-many-positional-arguments,
-        too-many-branches,
-        too-many-instance-attributes,
-		  invalid-name
-
 [TYPECHECK]
 ignored-classes=optparse.Values,thread._local,_thread._local,argparse.Namespace
 
