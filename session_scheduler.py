@@ -95,7 +95,7 @@ class SessionScheduler:
                         "Session detection complete (gap=%ds): %s",
                         sd.gap_threshold, summary,
                     )
-                except Exception:  # pylint: disable=broad-exception-caught
+                except sqlite3.Error:
                     logger.exception("Session detection run failed")
             else:
                 logger.debug("Session detection disabled, skipping")
@@ -105,7 +105,7 @@ class SessionScheduler:
                 try:
                     self._alert_engine.evaluate_all(since=self.last_run)
                     self._alert_engine.check_stale()
-                except Exception:  # pylint: disable=broad-exception-caught
+                except sqlite3.Error:
                     logger.exception("Alert engine check failed")
 
             self.last_run = datetime.now(timezone.utc)

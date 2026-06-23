@@ -295,14 +295,14 @@ def get_refresh():
 
         try:
             active = DATABASE.get_active_geozone_events()
-        except Exception:  # pylint: disable=broad-exception-caught
+        except sqlite3.Error:
             logger.exception("Error getting alerts in refresh")
             active = []
         uas_ids = list(set(e["uas_id"] for e in active))
 
         try:
             stats = DATABASE.get_stats(start, end)
-        except Exception:  # pylint: disable=broad-exception-caught
+        except sqlite3.Error:
             logger.exception("Error getting stats in refresh")
             stats = {}
 
@@ -319,7 +319,7 @@ def get_refresh():
                     "last_data": _format_utc_ts(last_data),
                     "type": "collector" if name in collector_names else "api",
                 })
-        except Exception:  # pylint: disable=broad-exception-caught
+        except sqlite3.Error:
             logger.exception("Error getting sources in refresh")
             sources = []
 
@@ -413,7 +413,7 @@ def get_tracks_batch():
             }
 
         return jsonify({"tracks": results})
-    except Exception:  # pylint: disable=broad-exception-caught
+    except sqlite3.Error:
         logger.exception("Error in batch track fetch")
         return jsonify({"error": "Internal server error"}), 500
 
@@ -800,7 +800,7 @@ def redetect():
         )
         logger.info("Full session re-detection triggered by %s", source)
         return jsonify({"success": True})
-    except Exception:  # pylint: disable=broad-exception-caught
+    except sqlite3.Error:
         logger.exception("Session re-detection failed")
         return jsonify({"success": False, "error": "Re-detection failed"}), 500
 
@@ -1013,7 +1013,7 @@ def _watch_config():
         time.sleep(10)
         try:
             _hot_reload_config()
-        except Exception:  # pylint: disable=broad-exception-caught
+        except (FileNotFoundError, PermissionError, OSError, ValueError, KeyError):
             logger.exception("Error reloading hot config")
 
 

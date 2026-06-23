@@ -392,7 +392,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         """
         try:
             new_config = WebConfig(self.config_path)
-        except Exception:  # pylint: disable=broad-exception-caught
+        except (FileNotFoundError, PermissionError, OSError, ValueError, KeyError):
             logger.exception("Failed to reload hot config from %s", self.config_path)
             return None
 
