@@ -62,6 +62,14 @@ if not app.secret_key:
 csrf = CSRFProtect(app)
 logging.getLogger("flask_wtf.csrf").setLevel(logging.WARNING)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB limit
+
+# Session cookie security settings
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=False,  # Set to True if serving over HTTPS
+)
+
 limiter = Limiter(
     app=app,
     key_func=get_remote_address,
