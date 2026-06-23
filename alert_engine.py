@@ -5,7 +5,7 @@ import math
 from datetime import datetime, timezone
 from typing import List, Dict, Optional
 
-from config import WaypointConfig
+from config import WaypointConfig, M_PER_DEG_LAT
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +43,8 @@ def point_in_rectangle( # pylint: disable=too-many-positional-arguments
     Converts meter dimensions to lat/lng offsets at the center latitude.
     """
     lat_rad = math.radians(center_lat)
-    m_per_deg_lat = 111320
-    m_per_deg_lon = 111320 * math.cos(lat_rad)
-    half_h = height_m / 2 / m_per_deg_lat
+    m_per_deg_lon = M_PER_DEG_LAT * math.cos(lat_rad)
+    half_h = height_m / 2 / M_PER_DEG_LAT
     half_w = width_m / 2 / m_per_deg_lon
     return (
         center_lat - half_h <= lat <= center_lat + half_h

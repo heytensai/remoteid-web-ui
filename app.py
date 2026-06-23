@@ -18,7 +18,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 
-from config import WebConfig
+from config import WebConfig, M_PER_DEG_LAT
 from database import WebDatabase
 from session_detect import process_database as redetect_sessions
 from session_scheduler import SessionScheduler
@@ -220,6 +220,7 @@ def api_config():
             "stale_timeout": cfg.alerts.stale_timeout,
             "collectors": cfg.to_dict().get("collectors", []),
             "position_stale_minutes": cfg.position_stale_minutes,
+            "m_per_deg_lat": M_PER_DEG_LAT,
             "csrf_token": generate_csrf(),
         }
     )

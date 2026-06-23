@@ -64,6 +64,7 @@ const MapController = {
             this.waypoints = response.waypoints || [];
             this.staleTimeout = response.stale_timeout || 300;
             this.collectorConfigs = response.collectors || [];
+            this.mPerDegLat = response.m_per_deg_lat || 111320;
         } catch (e) {
             console.error('Failed to load config:', e);
             this.config = {};
@@ -279,9 +280,8 @@ const MapController = {
                 const lat = wp.lat;
                 const lon = wp.lon;
                 const latRad = lat * Math.PI / 180;
-                const mPerDegLat = 111320;
-                const mPerDegLon = 111320 * Math.cos(latRad);
-                const halfH = wp.height / 2 / mPerDegLat;
+                const mPerDegLon = this.mPerDegLat * Math.cos(latRad);
+                const halfH = wp.height / 2 / this.mPerDegLat;
                 const halfW = wp.width / 2 / mPerDegLon;
                 const bounds = [[lat - halfH, lon - halfW], [lat + halfH, lon + halfW]];
                 shape = L.rectangle(bounds, {

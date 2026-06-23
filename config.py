@@ -28,6 +28,7 @@ class MapConfig:
 
 
 FEET_PER_METER = 3.28084
+M_PER_DEG_LAT = 111320  # meters per degree latitude at equator
 
 
 @dataclass
@@ -377,6 +378,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 for c in self.collectors
             ],
             "position_stale_minutes": self.position_stale_minutes,
+            "m_per_deg_lat": M_PER_DEG_LAT,
         }
 
     def reload_hot_config(self):

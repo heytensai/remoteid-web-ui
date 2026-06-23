@@ -32,6 +32,7 @@ class TestApiConfig:
         assert data["map"]["center_lat"] == 37.7749
         assert data["drone_aliases"]["drone-001"] == "Alpha"
         assert data["waypoints"] == []
+        assert data["m_per_deg_lat"] == 111320
 
 
 class TestApiAlerts:
