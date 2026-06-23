@@ -127,7 +127,13 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
 
     def __init__(self, yaml_file: str):
         self.config_path = yaml_file
+        web_data = self._load_raw_config(yaml_file)
+        self._parse_config(web_data)
+        self._validate()
 
+    @staticmethod
+    def _load_raw_config(yaml_file: str) -> dict:
+        """Load and return raw web_interface config from YAML file."""
         try:
             with open(yaml_file, encoding="utf-8") as fh:
                 data = yaml.safe_load(fh)
@@ -142,8 +148,10 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 f"got {type(data).__name__}"
             )
 
-        web_data = data.get("web_interface", {})
+        return data.get("web_interface", {})
 
+    def _parse_config(self, web_data: dict) -> None:
+        """Parse configuration values from raw web_interface dict."""
         self.host = web_data.get("host", "0.0.0.0")
         self.port = web_data.get("port", 5000)
         self.database_path = web_data.get("database_path", "./web.db")
@@ -159,43 +167,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         self.use_metric = web_data.get("use_metric", True)
 
         # Waypoint & geozone configuration
-        self.waypoints = []
-        for wp_data in web_data.get("waypoints") or []:
-            wp_type = wp_data.get("type", "point")
-            fill_opacity = wp_data.get("fill_opacity", 0.1)
-            if wp_type == "circle":
-                radius = wp_data.get("radius", 0)
-                if not self.use_metric:
-                    radius /= FEET_PER_METER
-            else:
-                radius = 0.0
-            if wp_type == "rectangle":
-                width = wp_data.get("width", 0)
-                height = wp_data.get("height", 0)
-                if not self.use_metric:
-                    width /= FEET_PER_METER
-                    height /= FEET_PER_METER
-            else:
-                width = 0.0
-                height = 0.0
-            self.waypoints.append(
-                WaypointConfig(
-                    name=wp_data["name"],
-                    lat=wp_data["lat"],
-                    lon=wp_data["lon"],
-                    type=wp_type,
-                    icon=wp_data.get("icon", "fa-map-pin"),
-                    color=wp_data.get("color", "#007bff"),
-                    description=wp_data.get("description", ""),
-                    enabled=wp_data.get("enabled", True),
-                    category=wp_data.get("category", ""),
-                    radius=radius,
-                    width=width,
-                    height=height,
-                    fill_opacity=fill_opacity,
-                    alert_enabled=wp_data.get("alert_enabled", False),
-                )
-            )
+        self.waypoints = self._parse_waypoints(web_data.get("waypoints") or [])
 
         # API key configuration: api_key -> source name
         self.api_keys = web_data.get("api_keys") or {}
@@ -216,10 +188,56 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
 
         # Collector configuration
         self.position_stale_minutes = web_data.get("position_stale_minutes", 30)
-        self.collectors = []
-        for c_data in web_data.get("collectors") or []:
+        self.collectors = self._parse_collectors(web_data.get("collectors") or [])
+        self.collectors_by_key = {c.api_key: c.name for c in self.collectors if c.api_key}
+
+    def _parse_waypoints(self, waypoints_data: list) -> list:
+        """Parse waypoint configuration from raw data."""
+        waypoints = []
+        for wp_data in waypoints_data:
+            wp_type = wp_data.get("type", "point")
+            fill_opacity = wp_data.get("fill_opacity", 0.1)
+            if wp_type == "circle":
+                radius = wp_data.get("radius", 0)
+                if not self.use_metric:
+                    radius /= FEET_PER_METER
+            else:
+                radius = 0.0
+            if wp_type == "rectangle":
+                width = wp_data.get("width", 0)
+                height = wp_data.get("height", 0)
+                if not self.use_metric:
+                    width /= FEET_PER_METER
+                    height /= FEET_PER_METER
+            else:
+                width = 0.0
+                height = 0.0
+            waypoints.append(
+                WaypointConfig(
+                    name=wp_data["name"],
+                    lat=wp_data["lat"],
+                    lon=wp_data["lon"],
+                    type=wp_type,
+                    icon=wp_data.get("icon", "fa-map-pin"),
+                    color=wp_data.get("color", "#007bff"),
+                    description=wp_data.get("description", ""),
+                    enabled=wp_data.get("enabled", True),
+                    category=wp_data.get("category", ""),
+                    radius=radius,
+                    width=width,
+                    height=height,
+                    fill_opacity=fill_opacity,
+                    alert_enabled=wp_data.get("alert_enabled", False),
+                )
+            )
+        return waypoints
+
+    def _parse_collectors(self, collectors_data: list) -> list:
+        """Parse collector configuration from raw data."""
+        collectors = []
+        for c_data in collectors_data:
             c_type = c_data.get("type", "mobile")
-            self.collectors.append(CollectorConfig(
+            collectors.append(CollectorConfig(
                 name=c_data["name"],
                 api_key=c_data.get("api_key", ""),
                 color=c_data.get("color", "#e67e22"),
@@ -228,9 +246,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 lon=c_data.get("lon"),
                 timezone=c_data.get("timezone") or None,
             ))
-        self.collectors_by_key = {c.api_key: c.name for c in self.collectors if c.api_key}
-
-        self._validate()
+        return collectors
 
     def _validate(self):
         """Validate configuration values, raising ValueError on invalid input."""
