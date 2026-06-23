@@ -633,7 +633,7 @@ class TestExport:
         resp = client.get("/api/export/gpx/drone-001")
         body = resp.get_data(as_text=True)
         assert '<?xml version="1.0" encoding="UTF-8"?>' in body
-        assert '<gpx version="1.1"' in body
+        assert 'version="1.1"' in body
         assert "<trk>" in body
         assert "<trkseg>" in body
         assert "</trkseg>" in body

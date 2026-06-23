@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
-from xml.sax.saxutils import escape
+import xml.etree.ElementTree as ET
 
 from flask import Flask, jsonify, make_response, request, render_template, Response
 from flask_limiter import Limiter
@@ -494,27 +494,34 @@ def _export_csv(positions, filename):
 
 def _export_gpx(positions, filename):
     """Generate GPX export from position data"""
-    gpx = '<?xml version="1.0" encoding="UTF-8"?>\n'
-    gpx += '<gpx version="1.1" creator="RemoteID Web UI" xmlns="http://www.topografix.com/GPX/1/1">\n'
-    gpx += f'  <trk>\n    <name>{escape(filename)}</name>\n    <trkseg>\n'
+    ns = "http://www.topografix.com/GPX/1/1"
+    ET.register_namespace("", ns)
+
+    gpx = ET.Element(f"{{{ns}}}gpx", version="1.1", creator="RemoteID Web UI")
+    trk = ET.SubElement(gpx, f"{{{ns}}}trk")
+    name = ET.SubElement(trk, f"{{{ns}}}name")
+    name.text = filename
+    trkseg = ET.SubElement(trk, f"{{{ns}}}trkseg")
 
     for pos in positions:
         lat = pos.get("latitude")
         lon = pos.get("longitude")
         if lat is not None and lon is not None:
-            gpx += f'      <trkpt lat="{lat}" lon="{lon}">\n'
+            trkpt = ET.SubElement(trkseg, f"{{{ns}}}trkpt", lat=str(lat), lon=str(lon))
             ts = pos.get("timestamp")
             if ts:
-                gpx += f'        <time>{ts}</time>\n'
+                time_elem = ET.SubElement(trkpt, f"{{{ns}}}time")
+                time_elem.text = str(ts)
             alt = pos.get("altitude")
             if alt is not None:
-                gpx += f'        <ele>{alt}</ele>\n'
-            gpx += "      </trkpt>\n"
+                ele = ET.SubElement(trkpt, f"{{{ns}}}ele")
+                ele.text = str(alt)
 
-    gpx += "    </trkseg>\n  </trk>\n</gpx>\n"
+    ET.indent(gpx)
+    xml_str = '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(gpx, encoding="unicode")
 
     return Response(
-        gpx,
+        xml_str,
         mimetype="application/gpx+xml",
         headers={"Content-Disposition": f"attachment; filename={filename}.gpx"},
     )
@@ -522,23 +529,31 @@ def _export_gpx(positions, filename):
 
 def _export_kml(positions, filename):
     """Generate KML export from position data"""
-    kml = '<?xml version="1.0" encoding="UTF-8"?>\n'
-    kml += '<kml xmlns="http://www.opengis.net/kml/2.2">\n'
-    kml += f'  <Document>\n    <name>{escape(filename)}</name>\n'
+    ns = "http://www.opengis.net/kml/2.2"
+    ET.register_namespace("", ns)
+
+    kml = ET.Element(f"{{{ns}}}kml")
+    doc = ET.SubElement(kml, f"{{{ns}}}Document")
+    doc_name = ET.SubElement(doc, f"{{{ns}}}name")
+    doc_name.text = filename
 
     # Track as LineString
-    kml += "    <Placemark>\n"
-    kml += f'      <name>{escape(filename)} Track</name>\n'
-    kml += '      <LineString>\n        <altitudeMode>absolute</altitudeMode>\n        <coordinates>\n'
+    pm = ET.SubElement(doc, f"{{{ns}}}Placemark")
+    pm_name = ET.SubElement(pm, f"{{{ns}}}name")
+    pm_name.text = f"{filename} Track"
+    line_string = ET.SubElement(pm, f"{{{ns}}}LineString")
+    alt_mode = ET.SubElement(line_string, f"{{{ns}}}altitudeMode")
+    alt_mode.text = "absolute"
+    coords = ET.SubElement(line_string, f"{{{ns}}}coordinates")
 
+    coord_parts = []
     for pos in positions:
         lat = pos.get("latitude")
         lon = pos.get("longitude")
         if lat is not None and lon is not None:
             alt = pos.get("altitude") or 0
-            kml += f"          {lon},{lat},{alt}\n"
-
-    kml += "        </coordinates>\n      </LineString>\n    </Placemark>\n"
+            coord_parts.append(f"{lon},{lat},{alt}")
+    coords.text = "\n" + "\n".join(coord_parts) + "\n"
 
     # Individual position waypoints
     for i, pos in enumerate(positions):
@@ -547,16 +562,20 @@ def _export_kml(positions, filename):
         if lat is not None and lon is not None:
             ts = pos.get("timestamp", "")
             alt = pos.get("altitude") or 0
-            kml += "    <Placemark>\n"
-            kml += f'      <name>Point {i + 1}</name>\n'
-            kml += f'      <description>Time: {escape(str(ts))}</description>\n'
-            kml += f'      <Point>\n        <coordinates>{lon},{lat},{alt}</coordinates>\n      </Point>\n'
-            kml += "    </Placemark>\n"
+            wp = ET.SubElement(doc, f"{{{ns}}}Placemark")
+            wp_name = ET.SubElement(wp, f"{{{ns}}}name")
+            wp_name.text = f"Point {i + 1}"
+            desc = ET.SubElement(wp, f"{{{ns}}}description")
+            desc.text = f"Time: {ts}"
+            point = ET.SubElement(wp, f"{{{ns}}}Point")
+            pt_coords = ET.SubElement(point, f"{{{ns}}}coordinates")
+            pt_coords.text = f"{lon},{lat},{alt}"
 
-    kml += "  </Document>\n</kml>\n"
+    ET.indent(kml)
+    xml_str = '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(kml, encoding="unicode")
 
     return Response(
-        kml,
+        xml_str,
         mimetype="application/vnd.google-earth.kml+xml",
         headers={"Content-Disposition": f"attachment; filename={filename}.kml"},
     )
