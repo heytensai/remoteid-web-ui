@@ -32,6 +32,7 @@ class WebDatabase:
     """Manages SQLite database for web interface"""
 
     def __init__(self, db_path: str):
+        """Initialize the web database, creating schema if needed."""
         self.db_path = Path(db_path)
         self._tlocal = threading.local()
         self._init_db()
@@ -569,6 +570,7 @@ class WebDatabase:
         data_rows = data_cursor.fetchall()
 
         def _parse_ts(val):
+            """Parse a timestamp value into a datetime object."""
             if isinstance(val, datetime):
                 return val
             if isinstance(val, str):

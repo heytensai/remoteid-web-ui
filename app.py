@@ -79,21 +79,25 @@ limiter = Limiter(
 
 @app.errorhandler(413)
 def request_entity_too_large(error):  # pylint: disable=unused-argument
+    """Return JSON error for payload exceeding MAX_CONTENT_LENGTH."""
     return jsonify({"success": False, "error": "Payload too large"}), 413
 
 
 @app.errorhandler(429)
 def rate_limit_exceeded(error):  # pylint: disable=unused-argument
+    """Return JSON error when rate limit is exceeded."""
     return jsonify({"success": False, "error": "Rate limit exceeded"}), 429
 
 
 @app.errorhandler(404)
 def not_found(error):  # pylint: disable=unused-argument
+    """Return JSON error for unknown routes."""
     return jsonify({"error": "Not found"}), 404
 
 
 @app.errorhandler(500)
 def internal_error(error):  # pylint: disable=unused-argument
+    """Return JSON error for unhandled server exceptions."""
     return jsonify({"error": "Internal server error"}), 500
 
 
@@ -111,6 +115,7 @@ _CSP = (
 
 @app.after_request
 def add_security_headers(response):
+    """Add CSP and security headers to every response."""
     response.headers["Content-Security-Policy"] = _CSP
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -877,6 +882,7 @@ def _export_alert_csv(events):
                 duration = int(end.timestamp() - entered.timestamp())
 
         def fmt_dt(val):
+            """Format a datetime value for CSV output."""
             if val and hasattr(val, "isoformat"):
                 return val.isoformat()
             return str(val) if val else ""

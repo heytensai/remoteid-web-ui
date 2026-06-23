@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def main():
+    """CLI entry point: parse args and import from a collector database."""
     parser = argparse.ArgumentParser(
         description="Import data from a collector SQLite database"
     )

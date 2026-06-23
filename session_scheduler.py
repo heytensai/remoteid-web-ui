@@ -37,6 +37,7 @@ class SessionScheduler:
     """
 
     def __init__(self, config, db_path: str, alert_engine=None):
+        """create"""
         self._config = config
         self._db_path = db_path
         self._alert_engine = alert_engine
@@ -52,6 +53,7 @@ class SessionScheduler:
 
     @property
     def is_running(self) -> bool:
+        """Return is running"""
         return self._running
 
     def start(self):
