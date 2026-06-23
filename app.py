@@ -79,6 +79,16 @@ def rate_limit_exceeded(error):  # pylint: disable=unused-argument
     return jsonify({"success": False, "error": "Rate limit exceeded"}), 429
 
 
+@app.errorhandler(404)
+def not_found(error):  # pylint: disable=unused-argument
+    return jsonify({"error": "Not found"}), 404
+
+
+@app.errorhandler(500)
+def internal_error(error):  # pylint: disable=unused-argument
+    return jsonify({"error": "Internal server error"}), 500
+
+
 _CSP = (
     "default-src 'self';"
     " manifest-src 'self';"
