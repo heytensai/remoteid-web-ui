@@ -12,10 +12,10 @@ watching updates in-process memory, so each worker needs an independent copy.
 
 from app import start_background_services, start_config_watcher
 
-bind = "0.0.0.0:5000"
-workers = 2
-access_logfile = "-"
-preload_app = True
+bind = "0.0.0.0:5000"  # pylint: disable=invalid-name
+workers = 2  # pylint: disable=invalid-name
+access_logfile = "-"  # pylint: disable=invalid-name
+preload_app = True  # pylint: disable=invalid-name
 
 
 def when_ready(server):
