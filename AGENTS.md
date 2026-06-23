@@ -4,6 +4,11 @@
 
 **IMPORTANT**: The `config/web_config.yaml` file is in `.gitignore` and should NEVER be modified directly. It contains user-specific settings and sensitive data like API keys.
 
+**Security Note**: API keys are stored in plaintext in the configuration file. This is a known design decision — environment variable or secrets manager integration is not implemented. Ensure the config file is protected:
+- Set restrictive permissions: `chmod 600 config/web_config.yaml`
+- Ensure backups of the config directory are encrypted or access-controlled
+- Do not share config files between different security contexts (dev/staging/production)
+
 ### Correct Workflow for Config Changes
 
 1. **Always edit `default.web_config.yaml`** - This is the template file that IS tracked in git
