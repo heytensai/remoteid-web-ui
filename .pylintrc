@@ -28,26 +28,10 @@ max-module-lines=1200
 indent-string='    '
 
 [MESSAGES CONTROL]
-disable=raw-checker-failed,
-        bad-inline-option,
-        locally-disabled,
-        file-ignored,
-        suppressed-message,
-        useless-suppression,
-        deprecated-pragma,
-        use-symbolic-message-instead,
-        use-implicit-booleaness-not-comparison-to-string,
-        use-implicit-booleaness-not-comparison-to-zero,
-        too-many-arguments,
-        too-many-positional-arguments,
-        too-many-locals,
-        too-many-return-statements,
+disable=too-many-positional-arguments,
         too-many-branches,
         too-many-instance-attributes,
-        consider-using-f-string,
-		  invalid-name,
-        global-statement,
-        line-too-long
+		  invalid-name
 
 [TYPECHECK]
 ignored-classes=optparse.Values,thread._local,_thread._local,argparse.Namespace
