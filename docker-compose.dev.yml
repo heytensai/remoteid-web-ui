@@ -31,6 +31,8 @@ services:
       - ./docker-config/web_config.docker.yaml:/app/config/web_config.yaml:ro
       # Database persistence (bind mount to host directory)
       - ./data:/app/data
+    env_file:
+      - .env
     environment:
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1

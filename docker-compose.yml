@@ -20,6 +20,8 @@ services:
       - ./config:/app/config:ro
       # Database persistence (bind mount to host directory)
       - ./data:/app/data
+    env_file:
+      - .env
     environment:
       # Python settings
       - PYTHONUNBUFFERED=1
