@@ -105,6 +105,24 @@ def internal_error(error):  # pylint: disable=unused-argument
     return jsonify({"error": "Internal server error"}), 500
 
 
+@app.errorhandler(400)
+def bad_request(error):  # pylint: disable=unused-argument
+    """Log and return JSON for 400 errors (CSRF, malformed requests, etc.)."""
+    desc = getattr(error, 'description', str(error))
+    safe_headers = {
+        k: v if k.lower() not in ('cookie', 'authorization') else '[REDACTED]'
+        for k, v in request.headers
+    }
+    logger.warning(
+        "400 Bad Request: %s %s — %s | Headers: %s | Body: %s",
+        request.method, request.path,
+        desc,
+        safe_headers,
+        request.get_data(as_text=True)[:500],
+    )
+    return jsonify({"error": desc}), 400
+
+
 _CSP = (
     "default-src 'self';"
     " manifest-src 'self';"
