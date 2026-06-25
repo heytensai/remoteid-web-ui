@@ -55,7 +55,8 @@ describe('API', () => {
       const result = await API.getConfig();
       expect(result).toEqual(configData);
       expect(API.csrfToken).toBe('token123');
-      expect(fetch).toHaveBeenCalledWith('/api/config');
+      const url = fetch.mock.calls[0][0];
+      expect(url).toBe('/api/config');
     });
   });
 

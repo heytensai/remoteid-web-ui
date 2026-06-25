@@ -165,16 +165,23 @@ const API = {
     /**
      * Generic GET request with retry logic
      */
-    async _get(url, retries = 2, delay = 500) {
+    async _get(url, retries = 2, delay = 500, timeoutMs = 30000) {
         let lastError;
         for (let attempt = 0; attempt <= retries; attempt++) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
             try {
-                const response = await fetch(this.baseUrl + url);
+                const response = await fetch(this.baseUrl + url, { signal: controller.signal });
+                clearTimeout(timeoutId);
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 }
                 return response.json();
             } catch (error) {
+                clearTimeout(timeoutId);
+                if (error.name === 'AbortError') {
+                    console.debug(`[API] GET ${url} timed out after ${timeoutMs}ms`);
+                }
                 lastError = error;
                 if (attempt < retries) {
                     await new Promise(r => setTimeout(r, delay));
@@ -187,9 +194,11 @@ const API = {
     /**
      * Generic POST request with retry logic
      */
-    async _post(url, data = {}, retries = 2, delay = 500) {
+    async _post(url, data = {}, retries = 2, delay = 500, timeoutMs = 30000) {
         let lastError;
         for (let attempt = 0; attempt <= retries; attempt++) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
             try {
                 const headers = {
                     'Content-Type': 'application/json'
@@ -200,13 +209,19 @@ const API = {
                 const response = await fetch(this.baseUrl + url, {
                     method: 'POST',
                     headers,
-                    body: JSON.stringify(data)
+                    body: JSON.stringify(data),
+                    signal: controller.signal
                 });
+                clearTimeout(timeoutId);
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 }
                 return response.json();
             } catch (error) {
+                clearTimeout(timeoutId);
+                if (error.name === 'AbortError') {
+                    console.debug(`[API] POST ${url} timed out after ${timeoutMs}ms`);
+                }
                 lastError = error;
                 if (attempt < retries) {
                     await new Promise(r => setTimeout(r, delay));

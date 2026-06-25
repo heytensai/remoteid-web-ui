@@ -44,6 +44,7 @@ const UIController = {
     pollActivityThresholdMs: 300000,
     _pollMode: 'slow',
     lastActivityTime: null,
+    _wasPolling: false,
 
     // Incremental update tracking
     droneTimestamps: {}, // Map of "uas_id:session_id" -> last known timestamp
@@ -127,6 +128,8 @@ const UIController = {
      */
     _startPolling() {
         if (this.pollTimer) return;
+        console.debug('[Poll] Starting timer (10s slow mode)');
+        this._pollMode = 'slow';
         this.pollTimer = setInterval(() => this.refreshData(false), this.pollSlowMs);
     },
 
@@ -137,6 +140,7 @@ const UIController = {
         if (this.pollTimer) {
             clearInterval(this.pollTimer);
             this.pollTimer = null;
+            console.debug('[Poll] Timer stopped');
         }
     },
 
@@ -930,8 +934,31 @@ const UIController = {
     },
 
     _handleVisibilityChange() {
-        if (this.keepScreenOn && !document.hidden && 'wakeLock' in navigator) {
-            this._requestWakeLock();
+        if (document.hidden) {
+            console.debug('[Poll] Page hidden — pausing timer');
+            this._wasPolling = !!this.pollTimer;
+            this._stopPolling();
+        } else {
+            console.debug('[Poll] Page visible — resuming');
+
+            // Safety: reset stuck loading state so refresh can proceed
+            if (this.isLoading) {
+                console.warn('[Poll] isLoading was stuck true — resetting');
+                this.isLoading = false;
+                this.elements.refreshBtn.classList.remove('spinning');
+            }
+
+            // Re-acquire wake lock if needed
+            if (this.keepScreenOn && 'wakeLock' in navigator) {
+                this._requestWakeLock();
+            }
+
+            // Resume polling and immediately fetch fresh data
+            if (this._wasPolling) {
+                this._wasPolling = false;
+                this._startPolling();
+                this.refreshData(false);
+            }
         }
     },
 
@@ -1407,7 +1434,10 @@ const UIController = {
      * and existing DOM state.
      */
     async refreshData(showSpinner = true) {
-        if (this.isLoading) return;
+        if (this.isLoading) {
+            console.debug('[Refresh] Skipped — isLoading is true');
+            return;
+        }
 
         this.isLoading = true;
         if (showSpinner) {
@@ -1512,6 +1542,19 @@ const UIController = {
             this.elements.refreshBtn.classList.remove('spinning');
             this._adjustPollTimer();
         }
+    },
+
+    /**
+     * Force-refresh: reset loading state and trigger a refresh.
+     * Useful for recovering from a stuck state (e.g. after device sleep).
+     */
+    forceRefresh() {
+        if (this.isLoading) {
+            console.warn('[Refresh] forceRefresh — was stuck, resetting isLoading');
+            this.isLoading = false;
+            this.elements.refreshBtn.classList.remove('spinning');
+        }
+        this.refreshData(true);
     },
 
     _mergeDrones(newDrones) {
