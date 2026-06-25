@@ -37,10 +37,19 @@ const NEVER_CACHE = ['/api/', '/manifest.json', '/sw.js'];
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
+
+  // Bypass SW for cross-origin requests (CDN resources)
+  if (url.origin !== self.location.origin) {
+    return;
+  }
+
+  // Bypass SW for API and config endpoints
   if (NEVER_CACHE.some((p) => url.pathname.includes(p))) {
     event.respondWith(fetch(event.request));
     return;
   }
+
+  // Cache-first for same-origin static assets
   event.respondWith(
     caches.match(event.request).then((cached) => cached || fetch(event.request))
   );
