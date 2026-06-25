@@ -1052,9 +1052,20 @@ class WebDatabase:
                     )
                     continue
 
+                # Strict validation: reject records with invalid lat/lon/alt
                 lat = self._sanitize_float(record.get("latitude"), "latitude")
+                if record.get("latitude") is not None and lat is None:
+                    errors.append({"index": idx, "reason": "Invalid latitude"})
+                    continue
                 lon = self._sanitize_float(record.get("longitude"), "longitude")
+                if record.get("longitude") is not None and lon is None:
+                    errors.append({"index": idx, "reason": "Invalid longitude"})
+                    continue
                 alt = self._sanitize_float(record.get("altitude"), "altitude")
+                if record.get("altitude") is not None and alt is None:
+                    errors.append({"index": idx, "reason": "Invalid altitude"})
+                    continue
+                # Operator coordinates: permissive (set to None if invalid)
                 op_lat = self._sanitize_float(
                     record.get("operator_latitude"), "operator_latitude"
                 )
