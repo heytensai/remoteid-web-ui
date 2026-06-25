@@ -382,12 +382,5 @@
     <script src="{{ url_prefix }}{{ url_for('static', filename='js/map.js') }}"></script>
     <script src="{{ url_prefix }}{{ url_for('static', filename='js/ui.js') }}"></script>
 
-    <script>
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('{{ url_prefix }}/sw.js').catch(function(e) {
-                console.error('SW registration failed:', e);
-            });
-        }
-    </script>
 </body>
 </html>

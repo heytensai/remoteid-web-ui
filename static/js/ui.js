@@ -121,6 +121,8 @@ const UIController = {
         await this.refreshData(false);
         this._initialized = true;
         this._startPolling();
+        // Register service worker (fire-and-forget)
+        this._registerServiceWorker();
     },
 
     /**
@@ -765,11 +767,19 @@ const UIController = {
         return window.btoa(binary);
     },
 
+    _registerServiceWorker() {
+        if (!('serviceWorker' in navigator)) return;
+        const swUrl = API.baseUrl + '/sw.js';
+        console.debug('[SW] Registering', swUrl);
+        navigator.serviceWorker.register(swUrl).catch(function(e) {
+            console.error('[SW] Registration failed:', e);
+        });
+    },
+
     async _initServiceWorker() {
-        // Wait for the existing service worker (registered in the template)
-        // with a timeout so we don't hang forever.
         if (!('serviceWorker' in navigator)) return null;
         try {
+            // If already registered via _registerServiceWorker, get the ready state
             const reg = await Promise.race([
                 navigator.serviceWorker.ready,
                 new Promise((_, reject) =>
@@ -778,9 +788,8 @@ const UIController = {
             ]);
             return reg;
         } catch (e) {
-            console.warn('_initServiceWorker: failed:', e);
+            console.warn('_initServiceWorker: ready timed out, registering fresh:', e);
         }
-        // SW never activated — unregister stale registrations and register fresh
         try {
             const registrations = await navigator.serviceWorker.getRegistrations();
             for (const reg of registrations) {
