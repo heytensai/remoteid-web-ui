@@ -65,6 +65,7 @@ if not app.secret_key:
 csrf = CSRFProtect(app)
 logging.getLogger("flask_wtf.csrf").setLevel(logging.WARNING)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB limit
+app.config["WTF_CSRF_TIME_LIMIT"] = None  # No time limit on CSRF tokens (session-scoped only)
 
 # Session cookie security settings
 app.config.update(

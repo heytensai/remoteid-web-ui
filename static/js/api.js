@@ -214,6 +214,23 @@ const API = {
                 });
                 clearTimeout(timeoutId);
                 if (!response.ok) {
+                    const body = await response.json().catch(() => ({}));
+                    // CSRF token expired/missing — refresh and retry
+                    if (response.status === 400 && /csrf/i.test(body.error || '')) {
+                        console.warn('[API] CSRF error — refreshing token and retrying');
+                        await this.getConfig();
+                        headers['X-CSRFToken'] = this.csrfToken;
+                        const retryResp = await fetch(this.baseUrl + url, {
+                            method: 'POST',
+                            headers,
+                            body: JSON.stringify(data),
+                            signal: (new AbortController()).signal
+                        });
+                        if (!retryResp.ok) {
+                            throw new Error(`HTTP ${retryResp.status}: ${retryResp.statusText}`);
+                        }
+                        return retryResp.json();
+                    }
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 }
                 return response.json();
