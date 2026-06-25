@@ -60,6 +60,7 @@ class AlertEngine:
         self._config = config
         self._geozones: List[WaypointConfig] = []
         self._rebuild_geozone_list()
+        self.on_new_alert = None  # callback(uas_id, geozone_name) called on first entry
 
     def _rebuild_geozone_list(self):
         """Rebuild the internal list of alert-enabled geozones from config."""
@@ -126,6 +127,11 @@ class AlertEngine:
                 "ALERT: %s entered geozone '%s' at %s",
                 uas_id, geozone_name, timestamp.isoformat(),
             )
+            if self.on_new_alert:
+                try:
+                    self.on_new_alert(uas_id, geozone_name)
+                except Exception:  # pylint: disable=broad-exception-caught
+                    logger.exception("on_new_alert callback failed")
 
     def _handle_exit(self, uas_id: str, geozone_name: str, timestamp: datetime):
         """Called when a position is outside a geozone. Exits active event."""

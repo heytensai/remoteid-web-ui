@@ -129,6 +129,20 @@ class WebDatabase:
         """
         )
 
+        # Create push subscriptions table for Web Push notifications
+        conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS push_subscriptions(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            endpoint TEXT NOT NULL UNIQUE,
+            p256dh_key TEXT NOT NULL,
+            auth_key TEXT NOT NULL,
+            user_agent TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+        )
+
         # Create indexes
         conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_uas_time ON remoteid(uas_id, timestamp)"
@@ -1388,5 +1402,40 @@ class WebDatabase:
         conn.row_factory = sqlite3.Row
         cursor = conn.execute(
             "SELECT name, latitude, longitude, updated_at FROM collector_positions ORDER BY name"
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    # --- Push subscription methods ---
+
+    def save_push_subscription(
+        self, endpoint: str, p256dh_key: str, auth_key: str, user_agent: Optional[str] = None
+    ):
+        """Save or update a push notification subscription."""
+        conn = self._get_conn()
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO push_subscriptions
+            (endpoint, p256dh_key, auth_key, user_agent, created_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (endpoint, p256dh_key, auth_key, user_agent),
+        )
+        conn.commit()
+
+    def remove_push_subscription(self, endpoint: str):
+        """Remove a push notification subscription."""
+        conn = self._get_conn()
+        conn.execute(
+            "DELETE FROM push_subscriptions WHERE endpoint = ?",
+            (endpoint,),
+        )
+        conn.commit()
+
+    def get_all_push_subscriptions(self) -> List[Dict]:
+        """Get all push notification subscriptions."""
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(
+            "SELECT endpoint, p256dh_key, auth_key FROM push_subscriptions ORDER BY created_at"
         )
         return [dict(row) for row in cursor.fetchall()]

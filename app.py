@@ -23,6 +23,7 @@ from database import WebDatabase
 from session_detect import process_database as redetect_sessions
 from session_scheduler import SessionScheduler
 from alert_engine import AlertEngine
+from push_service import PushService, _ensure_vapid_keys
 
 # Configure logging
 logging.basicConfig(
@@ -35,6 +36,8 @@ CONFIG: WebConfig = None
 DATABASE: WebDatabase = None
 SESSION_SCHEDULER: Optional[SessionScheduler] = None
 ALERT_ENGINE: Optional[AlertEngine] = None
+PUSH_SERVICE: Optional[PushService] = None
+PUSH_VAPID_PUBLIC_KEY: Optional[str] = None
 
 # Thread-safe config snapshot — swapped atomically on hot reload.
 # Readers should always call get_config() instead of accessing CONFIG directly.
@@ -193,6 +196,8 @@ def service_worker():
     """PWA service worker"""
     sw_path = BASE_DIR / "static" / "sw.js"
     body = sw_path.read_text()
+    prefix = _get_config().url_prefix
+    body = body.replace("__URL_PREFIX__", prefix)
     resp = make_response(body)
     resp.headers["Content-Type"] = "application/javascript"
     resp.headers["Cache-Control"] = "no-cache"
@@ -221,9 +226,41 @@ def api_config():
             "collectors": cfg.to_dict().get("collectors", []),
             "position_stale_minutes": cfg.position_stale_minutes,
             "m_per_deg_lat": M_PER_DEG_LAT,
+            "vapid_public_key": PUSH_VAPID_PUBLIC_KEY,
             "csrf_token": generate_csrf(),
         }
     )
+
+
+@app.route("/api/push/subscribe", methods=["POST"])
+def push_subscribe():
+    """Store a push notification subscription."""
+    if PUSH_SERVICE is None:
+        return jsonify({"success": False, "error": "Push not configured"}), 503
+    try:
+        data = request.get_json(force=True)
+        PUSH_SERVICE.subscribe(
+            data["endpoint"],
+            data["keys"]["p256dh"],
+            data["keys"]["auth"],
+            request.headers.get("User-Agent"),
+        )
+        return jsonify({"success": True})
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"success": False, "error": "Invalid subscription data"}), 400
+
+
+@app.route("/api/push/unsubscribe", methods=["POST"])
+def push_unsubscribe():
+    """Remove a push notification subscription."""
+    if PUSH_SERVICE is None:
+        return jsonify({"success": False, "error": "Push not configured"}), 503
+    try:
+        data = request.get_json(force=True)
+        PUSH_SERVICE.unsubscribe(data["endpoint"])
+        return jsonify({"success": True})
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"success": False, "error": "Invalid request"}), 400
 
 
 def _format_utc_ts(dt):
@@ -1051,13 +1088,14 @@ def _hot_reload_config():
 def _init_app(config_path: str):
     """Initialize application components. Returns Flask app ready to serve.
 
-    Creates configuration, database, session scheduler, and alert engine
-    objects but does **not** start any background threads.  Call
-    :func:`start_background_services` when ready to start them
-    (gunicorn master via ``when_ready``, or ``main()`` for dev server).
+    Creates configuration, database, session scheduler, alert engine,
+    and push notification service objects but does **not** start any
+    background threads.  Call :func:`start_background_services` when
+    ready to start them (gunicorn master via ``when_ready``, or
+    ``main()`` for dev server).
     """
     # pylint: disable=global-statement
-    global CONFIG, DATABASE, SESSION_SCHEDULER, ALERT_ENGINE
+    global CONFIG, DATABASE, SESSION_SCHEDULER, ALERT_ENGINE, PUSH_SERVICE, PUSH_VAPID_PUBLIC_KEY
 
     logger.info("Loading configuration from %s", config_path)
     CONFIG = WebConfig(config_path)
@@ -1067,12 +1105,38 @@ def _init_app(config_path: str):
 
     ALERT_ENGINE = AlertEngine(DATABASE, CONFIG)
 
+    # Initialize push notification service
+    # Keys are stored alongside the database so they survive container rebuilds
+    logger.info("Initializing push notification service (database_path=%s)", CONFIG.database_path)
+    vapid_private, vapid_public = _ensure_vapid_keys(CONFIG.database_path)
+    PUSH_VAPID_PUBLIC_KEY = vapid_public
+    logger.info("PUSH_VAPID_PUBLIC_KEY=%s", vapid_public[:20] + "..." if vapid_public else "None")
+    if vapid_private and vapid_public:
+        PUSH_SERVICE = PushService(DATABASE, vapid_private, vapid_public)
+        ALERT_ENGINE.on_new_alert = _on_new_alert
+        logger.info("Push notification service initialized")
+    else:
+        PUSH_SERVICE = None
+        logger.info("Push notification service not available")
+
     SESSION_SCHEDULER = SessionScheduler(CONFIG, CONFIG.database_path, alert_engine=ALERT_ENGINE)
 
     global _config_snapshot  # noqa: PLW0603  # pylint: disable=global-statement
     _config_snapshot = CONFIG
 
     return app
+
+
+def _on_new_alert(uas_id: str, geozone_name: str):
+    """Callback fired when a new geozone alert is triggered. Sends push notification."""
+    if PUSH_SERVICE is None:
+        return
+    name = CONFIG.drone_aliases.get(uas_id, uas_id)
+    PUSH_SERVICE.notify_all(
+        "Geozone Alert",
+        f"{name} entered {geozone_name}",
+        data={"uas_id": uas_id, "geozone": geozone_name},
+    )
 
 
 def start_background_services():

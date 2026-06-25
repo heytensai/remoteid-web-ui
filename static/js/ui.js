@@ -34,6 +34,7 @@ const UIController = {
     _suppressTimeChange: false,
     wakeLock: null,
     keepScreenOn: false,
+    notificationsEnabled: false,
 
     // Adaptive polling
     _initialized: false,
@@ -232,6 +233,7 @@ const UIController = {
             showUnknownDrones: document.getElementById('showUnknownDrones'),
             darkModeCheckbox: document.getElementById('darkMode'),
             keepScreenOnCheckbox: document.getElementById('keepScreenOn'),
+            notificationToggle: document.getElementById('enableNotifications'),
             startTimeMInput: document.getElementById('startTimeM'),
             endTimeMInput: document.getElementById('endTimeM'),
             settingsTimePresets: document.querySelectorAll('.settings-time-presets button'),
@@ -450,6 +452,12 @@ const UIController = {
             this._saveSettings();
         });
 
+        // Notifications toggle
+        this.elements.notificationToggle.addEventListener('change', (e) => {
+            this._toggleNotifications(e.target.checked);
+            this._saveSettings();
+        });
+
         // Close sidebar when clicking on map (mobile)
         document.addEventListener('click', (e) => {
             if (window.innerWidth < 768 &&
@@ -635,6 +643,7 @@ const UIController = {
             this.droneAliases = config.drone_aliases || {};
             this.manufacturerPrefixes = config.manufacturer_prefixes || {};
             this.positionStaleMinutes = config.position_stale_minutes || 30;
+            this.vapidPublicKey = config.vapid_public_key || null;
 
             // Override default with stored preset if available
             const stored = this._getStoredPreset();
@@ -725,6 +734,170 @@ const UIController = {
         }
     },
 
+    _toggleNotifications(enabled) {
+        this.notificationsEnabled = enabled;
+        if (enabled) {
+            this._subscribePush();
+        } else {
+            this._unsubscribePush();
+        }
+    },
+
+    _urlBase64ToUint8Array(base64String) {
+        const padding = '='.repeat((4 - base64String.length % 4) % 4);
+        const base64 = (base64String + padding)
+            .replace(/-/g, '+')
+            .replace(/_/g, '/');
+        const rawData = window.atob(base64);
+        return Uint8Array.from([...rawData].map(ch => ch.charCodeAt(0)));
+    },
+
+    _arrayBufferToBase64(buffer) {
+        const bytes = new Uint8Array(buffer);
+        let binary = '';
+        for (let i = 0; i < bytes.byteLength; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        return window.btoa(binary);
+    },
+
+    async _initServiceWorker() {
+        // Wait for the existing service worker (registered in the template)
+        // with a timeout so we don't hang forever.
+        if (!('serviceWorker' in navigator)) return null;
+        try {
+            const reg = await Promise.race([
+                navigator.serviceWorker.ready,
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('SW ready timeout')), 10000)
+                ),
+            ]);
+            return reg;
+        } catch (e) {
+            console.warn('_initServiceWorker: failed:', e);
+        }
+        // SW never activated — unregister stale registrations and register fresh
+        try {
+            const registrations = await navigator.serviceWorker.getRegistrations();
+            for (const reg of registrations) {
+                if (reg.active) continue;
+                console.log('_initServiceWorker: unregistering stale SW:', reg.scope);
+                await reg.unregister();
+            }
+            const swUrl = API.baseUrl + '/sw.js';
+            console.log('_initServiceWorker: registering', swUrl);
+            const reg = await navigator.serviceWorker.register(swUrl);
+            return await Promise.race([
+                new Promise((resolve, reject) => {
+                    if (reg.active) return resolve(reg);
+                    const sw = reg.installing || reg.waiting;
+                    if (!sw) return resolve(reg);
+                    sw.addEventListener('statechange', () => {
+                        if (sw.state === 'activated') resolve(reg);
+                        if (sw.state === 'redundant') reject(new Error('SW redundant'));
+                    });
+                }),
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('New SW activation timeout')), 10000)
+                ),
+            ]);
+        } catch (e2) {
+            console.error('_initServiceWorker: recovery failed:', e2);
+            return null;
+        }
+    },
+
+    async _subscribePush() {
+        if (this._pushSubscribing) return;
+        try {
+            this._pushSubscribing = true;
+            if (!this.vapidPublicKey) {
+                console.warn('Push not supported: no VAPID public key from server');
+                return;
+            }
+            if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+                console.warn('Push not supported: browser lacks PushManager');
+                return;
+            }
+            if (Notification.permission === 'denied') {
+                console.warn('Push not supported: notifications are blocked in browser settings');
+                this._showToast('Notifications are blocked. Enable them in your browser site settings.', 5000);
+                this.notificationsEnabled = false;
+                if (this.elements.notificationToggle) {
+                    this.elements.notificationToggle.checked = false;
+                }
+                return;
+            }
+            // Request permission explicitly so we control the UX
+            if (Notification.permission === 'default') {
+                const result = await Notification.requestPermission();
+                if (result !== 'granted') {
+                    console.warn('Push not supported: notification permission denied');
+                    this._showToast('Notification permission was denied. Enable it in your browser site settings.', 5000);
+                    this.notificationsEnabled = false;
+                    if (this.elements.notificationToggle) {
+                        this.elements.notificationToggle.checked = false;
+                    }
+                    return;
+                }
+            }
+            console.log('_subscribePush: permission=', Notification.permission, 'vapidKey=', this.vapidPublicKey.slice(0, 20));
+            const registration = await this._initServiceWorker();
+            if (!registration) {
+                throw new Error('Service worker not available');
+            }
+            console.log('_subscribePush: service worker ready');
+            let sub = await registration.pushManager.getSubscription();
+            if (!sub) {
+                console.log('_subscribePush: no existing subscription, subscribing...');
+                sub = await registration.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: this._urlBase64ToUint8Array(this.vapidPublicKey),
+                });
+                console.log('Push subscribed:', sub.endpoint);
+            } else {
+                console.log('_subscribePush: reusing existing subscription:', sub.endpoint);
+            }
+            const p256dh = sub.getKey('p256dh');
+            const auth = sub.getKey('auth');
+            if (!p256dh || !auth) {
+                throw new Error('Push subscription missing encryption keys');
+            }
+            const result = await API._post('/api/push/subscribe', {
+                endpoint: sub.endpoint,
+                keys: {
+                    p256dh: this._arrayBufferToBase64(p256dh),
+                    auth: this._arrayBufferToBase64(auth),
+                },
+            });
+            console.log('Push subscription sent to server:', result);
+            this._showToast('Push notifications enabled');
+        } catch (e) {
+            console.error('Failed to subscribe push:', e);
+            this.notificationsEnabled = false;
+            if (this.elements.notificationToggle) {
+                this.elements.notificationToggle.checked = false;
+            }
+        } finally {
+            this._pushSubscribing = false;
+        }
+    },
+
+    async _unsubscribePush() {
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+        try {
+            const registration = await navigator.serviceWorker.ready;
+            const sub = await registration.pushManager.getSubscription();
+            if (sub) {
+                await API._post('/api/push/unsubscribe', { endpoint: sub.endpoint });
+                await sub.unsubscribe();
+                console.log('Push unsubscribed');
+            }
+        } catch (e) {
+            console.error('Failed to unsubscribe push:', e);
+        }
+    },
+
     async _requestWakeLock() {
         if (!('wakeLock' in navigator)) {
             console.warn('Wake Lock API not supported');
@@ -773,6 +946,7 @@ const UIController = {
                 showKnownDrones: this.elements.showKnownDrones.checked,
                 showUnknownDrones: this.elements.showUnknownDrones.checked,
                 darkMode: this.elements.darkModeCheckbox.checked,
+                notificationsEnabled: this.elements.notificationToggle.checked,
             };
             localStorage.setItem('remoteid_settings', JSON.stringify(settings));
         } catch {
@@ -817,6 +991,10 @@ const UIController = {
                 // Defer tile switching to pending settings (needs MapController)
             }
             // keepScreenOn is intentionally NOT restored - always starts off
+            if (saved.notificationsEnabled !== undefined) {
+                this.elements.notificationToggle.checked = saved.notificationsEnabled;
+                this.notificationsEnabled = saved.notificationsEnabled;
+            }
 
             // Defer MapController-applied settings until after map is ready
             this._pendingSettings = {};
@@ -837,6 +1015,10 @@ const UIController = {
             }
             if (saved.darkMode !== undefined) {
                 this._pendingSettings.darkMode = saved.darkMode;
+            }
+            // Initialize push notifications if previously enabled
+            if (saved.notificationsEnabled && this.vapidPublicKey) {
+                this._subscribePush();
             }
         } catch {
             // ignore
@@ -2028,10 +2210,20 @@ const UIController = {
     /**
      * Show error message
      */
+    _showToast(message, duration = 3000) {
+        const toast = document.createElement('div');
+        toast.className = 'toast-notification';
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        requestAnimationFrame(() => toast.classList.add('show'));
+        setTimeout(() => {
+            toast.classList.remove('show');
+            setTimeout(() => toast.remove(), 300);
+        }, duration);
+    },
+
     _showError(message) {
-        // Simple alert for now - could be replaced with a toast
         console.error(message);
-        // Could implement a toast notification here
     },
 
     /**

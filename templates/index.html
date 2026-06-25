@@ -216,6 +216,14 @@
                             Show Geozone Alerts Only <i class="fas fa-exclamation-triangle"></i> <span class="geozone-alert-count" id="alertFilterCount">0</span>
                         </label>
                     </div>
+                    <div class="settings-section">
+                        <h4 class="settings-section-title">Notifications</h4>
+                        <label class="settings-item">
+                            <input type="checkbox" id="enableNotifications">
+                            Push Notifications <i class="fas fa-bell"></i>
+                        </label>
+                        <p class="settings-note">Receive alerts when drones enter geozones, even when the tab is closed.</p>
+                    </div>
                 </div>
             </div>
 
@@ -376,7 +384,9 @@
 
     <script>
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('{{ url_prefix }}/sw.js');
+            navigator.serviceWorker.register('{{ url_prefix }}/sw.js').catch(function(e) {
+                console.error('SW registration failed:', e);
+            });
         }
     </script>
 </body>

@@ -1369,6 +1369,7 @@ body.dark-mode .replay-time-display {
 .settings-panel-body {
     padding: 16px;
     flex: 1;
+    overflow-y: auto;
 }
 
 .settings-section {
@@ -1384,6 +1385,13 @@ body.dark-mode .replay-time-display {
     margin-bottom: 12px;
     padding-bottom: 6px;
     border-bottom: 1px solid #e9ecef;
+}
+
+.settings-note {
+    font-size: 0.75rem;
+    color: #6c757d;
+    margin: -4px 0 8px 0;
+    line-height: 1.4;
 }
 
 .settings-item {
@@ -2404,4 +2412,27 @@ body.dark-mode .stat-card-value {
 
 body.dark-mode .stat-card-label {
     color: #999;
+}
+
+/* Toast notification */
+.toast-notification {
+    position: fixed;
+    bottom: 60px;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: #333;
+    color: #fff;
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    z-index: 10000;
+    opacity: 0;
+    transition: opacity 0.3s ease, transform 0.3s ease;
+    pointer-events: none;
+    white-space: nowrap;
+}
+
+.toast-notification.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
 } 

@@ -7,6 +7,19 @@ from urllib.parse import urlencode
 from app import _parse_time_range
 
 
+class TestServiceWorker:
+    def test_sw_served(self, client):
+        resp = client.get("/sw.js")
+        assert resp.status_code == 200
+        assert resp.content_type == "application/javascript"
+        assert "Service-Worker-Allowed" in resp.headers
+
+    def test_sw_url_prefix_replaced(self, client):
+        resp = client.get("/sw.js")
+        body = resp.get_data(as_text=True)
+        assert "__URL_PREFIX__" not in body
+
+
 class TestIndex:
     def test_get_index(self, client):
         resp = client.get("/")

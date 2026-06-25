@@ -22,6 +22,9 @@ services:
       - ./app.py:/app/app.py:ro
       - ./config.py:/app/config.py:ro
       - ./database.py:/app/database.py:ro
+      - ./push_service.py:/app/push_service.py:ro
+      - ./session_scheduler.py:/app/session_scheduler.py:ro
+      - ./alert_engine.py:/app/alert_engine.py:ro
       - ./templates:/app/templates:ro
       - ./static:/app/static:ro
       # Config file

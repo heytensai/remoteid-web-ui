@@ -11,8 +11,17 @@ const PRECACHE = [
 ];
 
 self.addEventListener('install', (event) => {
+  console.log('SW install starting, precache:', PRECACHE);
   event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(PRECACHE)).then(() => self.skipWaiting())
+    caches.open(CACHE).then((cache) => {
+      return cache.addAll(PRECACHE);
+    }).then(() => {
+      console.log('SW precache done, skipWaiting');
+      self.skipWaiting();
+    }).catch((err) => {
+      console.error('SW install failed:', err);
+      throw err;
+    })
   );
 });
 
@@ -34,5 +43,38 @@ self.addEventListener('fetch', (event) => {
   }
   event.respondWith(
     caches.match(event.request).then((cached) => cached || fetch(event.request))
+  );
+});
+
+// Push notification: receive and display
+self.addEventListener('push', (event) => {
+  let data = { title: 'Drone Tracker', body: '' };
+  if (event.data) {
+    try {
+      data = event.data.json();
+    } catch (e) {
+      data.body = event.data.text();
+    }
+  }
+  const options = {
+    body: data.body,
+    icon: '__URL_PREFIX__/icons/icon-192x192.png',
+    badge: '__URL_PREFIX__/icons/icon-192x192.png',
+    data: data.data || {},
+    vibrate: [200, 100, 200],
+  };
+  event.waitUntil(self.registration.showNotification(data.title, options));
+});
+
+// Notification click: focus or open the app
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then((windowClients) => {
+        const focused = windowClients.find((c) => 'focus' in c);
+        if (focused) return focused.focus();
+        return clients.openWindow('/');
+      })
   );
 });
