@@ -76,6 +76,7 @@ class SessionScheduler:
     def _run(self):
         self._running = True
         while not self._stop_event.is_set():
+            cycle_start = time.monotonic()
             logger.debug("Session scheduler waking up")
             sd = self._config.session_detection
 
@@ -110,10 +111,21 @@ class SessionScheduler:
 
             self.last_run = datetime.now(timezone.utc)
 
-            # Sleep in small increments so stop() is responsive
-            for _ in range(sd.interval):
-                if self._stop_event.is_set():
-                    break
-                time.sleep(1)
+            # Backpressure: only sleep for remaining interval time.
+            # If a cycle takes longer than the interval, skip sleep to
+            # avoid cycles stacking up.
+            elapsed = time.monotonic() - cycle_start
+            remaining = sd.interval - int(elapsed)
+            if remaining <= 0:
+                logger.warning(
+                    "Session detection cycle took %ds (interval=%ds), "
+                    "starting next cycle immediately",
+                    int(elapsed), sd.interval,
+                )
+            else:
+                for _ in range(remaining):
+                    if self._stop_event.is_set():
+                        break
+                    time.sleep(1)
 
         self._running = False

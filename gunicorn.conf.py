@@ -14,6 +14,8 @@ from app import start_background_services, start_config_watcher
 
 bind = "0.0.0.0:5000"  # pylint: disable=invalid-name
 workers = 2  # pylint: disable=invalid-name
+max_requests = 10000  # pylint: disable=invalid-name
+max_requests_jitter = 2000  # pylint: disable=invalid-name
 access_logfile = "-"  # pylint: disable=invalid-name
 preload_app = True  # pylint: disable=invalid-name
 

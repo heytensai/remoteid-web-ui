@@ -355,6 +355,7 @@ def get_drones_incremental():
 
 
 @app.route("/api/refresh", methods=["POST"])
+@limiter.limit("60/minute")
 def get_refresh():
     """Consolidated refresh: returns drones, alerts, stats, and sources in one call."""
     try:
