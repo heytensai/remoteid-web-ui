@@ -633,7 +633,7 @@ const MapController = {
                     popup += `
                     <div class="popup-row" style="color:#999;">
                         <span class="popup-label">Status:</span>
-                        <span class="popup-value">Stale — no recent check-in</span>
+                        <span class="popup-value">Stale</span>
                     </div>`;
                 }
                 popup += '</div>';
