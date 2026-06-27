@@ -455,6 +455,8 @@ class WebDatabase:
 
         if row:
             last_seen = row[0]
+            if isinstance(last_seen, datetime) and last_seen.tzinfo is None:
+                last_seen = last_seen.replace(tzinfo=timezone.utc)
             last_session = row[1]
             gap = (timestamp - last_seen).total_seconds()
 
