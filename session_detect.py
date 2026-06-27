@@ -39,24 +39,6 @@ sqlite3.register_adapter(datetime, _adapt_datetime)
 sqlite3.register_converter("DATETIME", _convert_datetime)
 
 
-def ensure_session_columns(db_path: str):
-    """Add computed_session_id column if it doesn't exist"""
-    with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES) as conn:
-        # Check if column exists
-        cursor = conn.execute("PRAGMA table_info(remoteid)")
-        columns = [row[1] for row in cursor.fetchall()]
-
-        if "computed_session_id" not in columns:
-            logger.info("Adding computed_session_id column to remoteid table")
-            conn.execute("ALTER TABLE remoteid ADD COLUMN computed_session_id TEXT")
-
-        if "session_detected_at" not in columns:
-            logger.info("Adding session_detected_at column to remoteid table")
-            conn.execute("ALTER TABLE remoteid ADD COLUMN session_detected_at DATETIME")
-
-        conn.commit()
-
-
 def get_uas_list(db_path: str, since: Optional[datetime] = None) -> List[str]:
     """Get list of all unique UAS IDs in the database.
 
@@ -225,10 +207,6 @@ def process_database(
     if since is not None:
         logger.debug("Incremental mode: only UAS with activity since %s", since)
 
-    # Ensure schema is up to date
-    if not dry_run:
-        ensure_session_columns(str(db_path))
-
     # Get relevant UAS IDs (filtered by activity window when since is set)
     uas_list = get_uas_list(str(db_path), since=since)
     logger.debug("Found %i unique UAS IDs", len(uas_list))
@@ -319,7 +297,6 @@ def main():
 
     if args.analyze:
         # Just analyze and show sessions
-        ensure_session_columns(args.db)
         stats = analyze_sessions(args.db, args.analyze)
         print(f"\nSession analysis for UAS: {args.analyze}")
         print(f"Total sessions: {stats['total_count']}")

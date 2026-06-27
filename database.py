@@ -12,6 +12,9 @@ from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
+# Current schema version — bump this and add a migration in _migrate()
+SCHEMA_VERSION = 1
+
 
 def _adapt_datetime(dt: datetime) -> str:
     """Adapt datetime to ISO format string for SQLite"""
@@ -69,12 +72,14 @@ class WebDatabase:
         """
         )
 
-        # Migration: add collector position columns to existing databases
-        for col in ("collector_latitude", "collector_longitude"):
-            try:
-                conn.execute(f"ALTER TABLE remoteid ADD COLUMN {col} REAL")
-            except sqlite3.OperationalError:
-                pass
+        # Create schema version tracking table
+        conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS _schema_version(
+            version INTEGER NOT NULL
+        )
+        """
+        )
 
         # Create sync log table
         conn.execute(
@@ -168,7 +173,47 @@ class WebDatabase:
         )
 
         conn.commit()
+        self._ensure_schema_version(conn)
         logger.debug("Database initialized at %s", self.db_path)
+
+    def _ensure_schema_version(self, conn: sqlite3.Connection):
+        """Check the schema version and apply any pending migrations.
+
+        The ``_schema_version`` table is guaranteed to exist by
+        ``_init_db()`` (``CREATE TABLE IF NOT EXISTS``).
+        """
+        current = conn.execute(
+            "SELECT COALESCE(MAX(version), 0) FROM _schema_version"
+        ).fetchone()[0]
+
+        if current < SCHEMA_VERSION:
+            self._migrate(conn, current, SCHEMA_VERSION)
+            conn.execute(
+                "INSERT INTO _schema_version (version) VALUES (?)",
+                (SCHEMA_VERSION,),
+            )
+            conn.commit()
+
+    @staticmethod
+    def _migrate(
+        conn: sqlite3.Connection, from_version: int, to_version: int
+    ):
+        """Apply schema migrations between *from_version* and *to_version*.
+
+        Each ``if version == X`` branch applies the changes needed to go
+        from version X to version X+1.  The version table is updated
+        separately by the caller.
+        """
+        # Migration stubs go here as the schema evolves, for example:
+        #
+        # if from_version == 1:
+        #     conn.execute(
+        #         "ALTER TABLE remoteid ADD COLUMN new_column TEXT"
+        #     )
+        #     from_version = 2
+        #
+        # if from_version == 2:
+        #     ...
 
     def _get_conn(self) -> sqlite3.Connection:
         """Get a thread-local database connection, creating one if needed.

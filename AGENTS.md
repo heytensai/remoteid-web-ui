@@ -48,6 +48,43 @@
 - `timezone` (per-collector) - IANA timezone name (e.g. "America/Denver"). If set, naive timestamps from that collector are converted from this timezone to UTC before storing. (default: None — naive assumed UTC)
 - `position_stale_minutes` - Minutes without ping before collector marker turns gray (hot-reloadable)
 
+## Database Schema Versioning
+
+The database uses a lightweight integer-based versioning system tracked in the `_schema_version` table. Current schema version: **1**.
+
+### How It Works
+
+1. `WebDatabase.__init__()` calls `_init_db()` which creates all tables via `CREATE TABLE IF NOT EXISTS`
+2. `_ensure_schema_version()` then checks or creates the `_schema_version` table:
+   - **Fresh database** — `_schema_version` is created at version 1
+   - **Pre-versioning database** (no `_schema_version` table) — created at version 1 (all columns already exist)
+   - **Up-to-date database** (version == `SCHEMA_VERSION`) — no action
+   - **Stale database** (version < `SCHEMA_VERSION`) — `_migrate()` runs each missing step, then version is bumped
+3. The `SCHEMA_VERSION` constant at the top of `database.py` defines the current version
+
+### Adding a Future Migration
+
+1. Bump `SCHEMA_VERSION` in `database.py` (e.g., to `2`)
+2. Add an `if from_version == N:` block in `_migrate()` (static method on `WebDatabase`) with the required `ALTER TABLE` or other DDL
+3. Update this file to document the new version and what changed
+4. Add tests in `tests/test_database.py` (e.g., simulate old version and verify upgrade)
+
+**Do NOT** add ad-hoc ALTER TABLE or PRAGMA-based column checks anywhere else — all schema changes go through `_migrate()`.
+
+### Example Migration Stub
+
+```python
+@staticmethod
+def _migrate(conn, from_version, to_version):
+    if from_version == 1:
+        conn.execute("ALTER TABLE remoteid ADD COLUMN new_column TEXT")
+        from_version = 2
+    if from_version == 2:
+        ...
+```
+
+The `_schema_version` table records each migration step so any gap between the current version and the target is closed in order.
+
 ## Code Style Guidelines
 
 - JavaScript: Use single quotes for strings

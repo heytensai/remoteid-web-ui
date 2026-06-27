@@ -12,6 +12,39 @@ def test_database_init(db):
     assert db.db_path.exists()
 
 
+def test_schema_version_created(db):
+    """_schema_version table exists at current version."""
+    import sqlite3
+    conn = sqlite3.connect(db.db_path)
+    version = conn.execute(
+        "SELECT MAX(version) FROM _schema_version"
+    ).fetchone()[0]
+    conn.close()
+    assert version == 1
+
+
+def test_schema_version_upgrade(tmp_path):
+    """Opening a pre-v1 database upgrades it to the current version."""
+    import sqlite3
+    from database import SCHEMA_VERSION
+
+    db_path = tmp_path / "test_upgrade.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE _schema_version (version INTEGER NOT NULL)")
+    conn.execute("INSERT INTO _schema_version (version) VALUES (0)")
+    conn.commit()
+    conn.close()
+
+    WebDatabase(str(db_path))
+
+    conn = sqlite3.connect(str(db_path))
+    version = conn.execute(
+        "SELECT MAX(version) FROM _schema_version"
+    ).fetchone()[0]
+    conn.close()
+    assert version == SCHEMA_VERSION
+
+
 def test_validate_record_valid():
     now = datetime.now(timezone.utc)
     row = (1, now, "aa:bb:cc:dd:ee:ff", "uas-001", None, 37.7749, -122.4194, 100.0, None, None, None)
