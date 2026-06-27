@@ -1,9 +1,17 @@
-"""Geozone alert engine — evaluates positions against alert-enabled geozones."""
+"""Alert engine — evaluates drone positions against configured alert conditions.
+
+Currently supports:
+  - New session detection (drone starts a new flight)
+  - Geozone entry/exit (drone enters or exits an alert-enabled area)
+
+Extensible to additional triggers (altitude, unknown drone, etc.) as
+check methods added to ``evaluate()``.
+"""
 
 import logging
 import math
 from datetime import datetime, timezone
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Callable
 
 from config import WaypointConfig, M_PER_DEG_LAT
 
@@ -53,14 +61,26 @@ def point_in_rectangle( # pylint: disable=too-many-positional-arguments
 
 
 class AlertEngine:
-    """Evaluates drone positions against alert-enabled geozone waypoints."""
+    """Evaluates drone positions against configured alert conditions.
+
+    Callbacks (set externally):
+      on_new_alert(uas_id, geozone_name)   — drone entered a geozone
+      on_new_session(uas_id, session_id, first_position) — drone started a new flight
+    """
 
     def __init__(self, database, config):
         self._db = database
         self._config = config
         self._geozones: List[WaypointConfig] = []
         self._rebuild_geozone_list()
-        self.on_new_alert = None  # callback(uas_id, geozone_name) called on first entry
+        # Session tracking
+        self._known_sessions: Dict[str, str] = {}
+        self._load_known_sessions()
+        # Callbacks
+        self.on_new_alert: Optional[Callable] = None
+        self.on_new_session: Optional[Callable] = None
+
+    # --- Config loading ---
 
     def _rebuild_geozone_list(self):
         """Rebuild the internal list of alert-enabled geozones from config."""
@@ -72,35 +92,72 @@ class AlertEngine:
             "AlertEngine: %d alert-enabled geozones loaded", len(self._geozones)
         )
 
+    def _load_known_sessions(self):
+        """Pre-populate known sessions from DB to avoid false "new" notifications on startup."""
+        try:
+            self._known_sessions = self._db.get_all_current_sessions()
+            logger.debug(
+                "AlertEngine: loaded %d existing sessions", len(self._known_sessions)
+            )
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.exception("AlertEngine: failed to load known sessions")
+
     def reload_config(self, config):
         """Hot-reload the config reference."""
         self._config = config
         self._rebuild_geozone_list()
 
-    def evaluate(self, uas_id: str, positions: List[Dict]):
-        """Evaluate a list of positions for a UAS against all geozones.
+    # --- Public entry point ---
 
-        Positions should be dicts with 'latitude', 'longitude', and 'timestamp' keys.
-        Timestamps can be datetime objects or ISO-format strings.
+    def evaluate(self, uas_id: str, positions: List[Dict]):
+        """Evaluate a drone position update against all alert conditions.
+
+        Called after data is inserted (submit handler) or during background
+        checks (session scheduler).  Positions are dicts with at least
+        ``latitude``, ``longitude``, and ``timestamp`` keys (and optionally
+        ``uas_id``, ``altitude``, etc.).
         """
+        self._check_new_session(uas_id, positions)
+        self._evaluate_geozones(uas_id, positions)
+
+    # --- Session tracking ---
+
+    def _check_new_session(self, uas_id: str, positions: List[Dict]):
+        """Fire ``on_new_session`` when the drone's session ID changes.
+
+        Queries the latest ``computed_session_id`` from the database and
+        compares it against the internally tracked value for this UAS.
+        A difference means either a first flight or a new flight after a gap.
+        """
+        session_id = self._db.get_latest_session_id(uas_id)
+        if session_id is None:
+            return
+        if self._known_sessions.get(uas_id) != session_id:
+            self._known_sessions[uas_id] = session_id
+            first_pos = positions[0] if positions else None
+            logger.info(
+                "New session for %s: %s", uas_id, session_id,
+            )
+            self._fire(self.on_new_session, uas_id, session_id, first_pos)
+
+    # --- Geozone evaluation ---
+
+    def _evaluate_geozones(self, uas_id: str, positions: List[Dict]):
+        """Check positions against all alert-enabled geozones."""
         if not self._geozones:
             return
-
         if self._config.alerts.skip_known_drones and uas_id in self._config.drone_aliases:
             return
-
         for pos in positions:
             lat = pos.get("latitude")
             lon = pos.get("longitude")
             ts = pos.get("timestamp")
             if lat is None or lon is None or ts is None:
                 continue
-
             if isinstance(ts, str):
                 ts = datetime.fromisoformat(ts)
             if ts.tzinfo is None:
                 ts = ts.replace(tzinfo=timezone.utc)
-
             for gz in self._geozones:
                 inside = False
                 if gz.type == "circle":
@@ -109,7 +166,6 @@ class AlertEngine:
                     inside = point_in_rectangle(
                         lat, lon, gz.lat, gz.lon, gz.width, gz.height
                     )
-
                 if inside:
                     self._handle_entry(uas_id, gz.name, ts)
                 else:
@@ -127,11 +183,7 @@ class AlertEngine:
                 "ALERT: %s entered geozone '%s' at %s",
                 uas_id, geozone_name, timestamp.isoformat(),
             )
-            if self.on_new_alert:
-                try:
-                    self.on_new_alert(uas_id, geozone_name)
-                except Exception:  # pylint: disable=broad-exception-caught
-                    logger.exception("on_new_alert callback failed")
+            self._fire(self.on_new_alert, uas_id, geozone_name)
 
     def _handle_exit(self, uas_id: str, geozone_name: str, timestamp: datetime):
         """Called when a position is outside a geozone. Exits active event."""
@@ -144,8 +196,10 @@ class AlertEngine:
                 uas_id, geozone_name, timestamp.isoformat(),
             )
 
+    # --- Batch processing ---
+
     def evaluate_all(self, since: Optional[datetime] = None):
-        """Evaluate all UAS with positions since *since* against geozones.
+        """Evaluate all UAS with positions since *since* against all alert conditions.
 
         Used by the session scheduler for periodic background checking.
         """
@@ -166,3 +220,15 @@ class AlertEngine:
         count = self._db.check_stale_geozone_events(timeout, reference_time)
         if count:
             logger.info("AlertEngine: marked %d geozone event(s) as stale", count)
+
+    # --- Helpers ---
+
+    @staticmethod
+    def _fire(callback, *args):
+        """Safely invoke an optional callback, logging but not propagating exceptions."""
+        if callback is None:
+            return
+        try:
+            callback(*args)
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.exception("Alert callback failed")

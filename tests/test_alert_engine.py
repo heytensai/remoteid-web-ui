@@ -348,3 +348,101 @@ def test_evaluate_string_timestamp(engine):
     alert_engine.evaluate("drone-001", positions)
     events = db.get_active_geozone_events()
     assert len(events) == 1
+
+
+# --- New session callback tests ---
+
+def test_new_session_callback_fired(engine):
+    """on_new_session fires when a drone first appears in the DB."""
+    alert_engine, db, _ = engine
+    now = datetime.now(timezone.utc)
+
+    # Insert a record so a session is created in the DB
+    db.insert_remoteid_records("test", [{
+        "timestamp": (now - timedelta(hours=2)).isoformat(),
+        "uas_id": "drone-001",
+        "latitude": 37.78,
+        "longitude": -122.42,
+        "altitude": 100,
+    }])
+
+    # _known_sessions was loaded at init time, before the insert,
+    # so "drone-001" is not tracked yet → callback should fire
+    calls = []
+    alert_engine.on_new_session = lambda uas_id, session_id, first_pos: calls.append((uas_id, session_id))
+
+    alert_engine.evaluate("drone-001", [
+        {"latitude": 37.78, "longitude": -122.42, "timestamp": now},
+    ])
+
+    assert len(calls) == 1
+    assert calls[0][0] == "drone-001"
+    assert calls[0][1].startswith("session_")
+
+
+def test_new_session_not_fired_for_known(engine):
+    """on_new_session does NOT fire when the session hasn't changed."""
+    alert_engine, db, _ = engine
+    now = datetime.now(timezone.utc)
+
+    db.insert_remoteid_records("test", [{
+        "timestamp": now.isoformat(),
+        "uas_id": "drone-001",
+        "latitude": 37.78,
+        "longitude": -122.42,
+        "altitude": 100,
+    }])
+
+    # Manually track the current session so it's "known"
+    session_id = db.get_latest_session_id("drone-001")
+    alert_engine._known_sessions["drone-001"] = session_id
+
+    calls = []
+    alert_engine.on_new_session = lambda uas_id, session_id, first_pos: calls.append((uas_id, session_id))
+
+    alert_engine.evaluate("drone-001", [
+        {"latitude": 37.78, "longitude": -122.42, "timestamp": now},
+    ])
+
+    assert len(calls) == 0
+
+
+def test_new_session_fired_after_gap(engine):
+    """on_new_session fires when the session changes (new flight)."""
+    alert_engine, db, _ = engine
+    now = datetime.now(timezone.utc)
+
+    # First flight — creates session_old
+    db.insert_remoteid_records("test", [{
+        "timestamp": (now - timedelta(hours=2)).isoformat(),
+        "uas_id": "drone-001",
+        "latitude": 37.78,
+        "longitude": -122.42,
+        "altitude": 100,
+    }])
+
+    # Track the first session
+    old_session = db.get_latest_session_id("drone-001")
+    alert_engine._known_sessions["drone-001"] = old_session
+
+    # Second flight — gap > 600s, creates a new session
+    db.insert_remoteid_records("test", [{
+        "timestamp": now.isoformat(),
+        "uas_id": "drone-001",
+        "latitude": 37.78,
+        "longitude": -122.42,
+        "altitude": 200,
+    }])
+
+    calls = []
+    alert_engine.on_new_session = lambda uas_id, session_id, first_pos: calls.append((uas_id, session_id, first_pos))
+
+    alert_engine.evaluate("drone-001", [
+        {"latitude": 37.78, "longitude": -122.42, "timestamp": now, "altitude": 200},
+    ])
+
+    assert len(calls) == 1
+    assert calls[0][0] == "drone-001"
+    assert calls[0][1] != old_session
+    assert calls[0][2] is not None
+    assert calls[0][2].get("altitude") == 200

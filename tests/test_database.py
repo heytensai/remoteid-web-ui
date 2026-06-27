@@ -400,3 +400,29 @@ def test_get_stats_alerts(db):
     stats = db.get_stats(start, end)
     assert stats["active_alerts"] == 1
     assert stats["total_alerts"] == 1
+
+
+# --- Session tracking helpers ---
+
+def test_get_latest_session_id(db, sample_records):
+    """Returns the computed_session_id of the most recent record for a UAS."""
+    inserted, _, _ = db.insert_remoteid_records("test-source", sample_records)
+    assert inserted > 0
+    session_id = db.get_latest_session_id("drone-001")
+    assert session_id is not None
+    assert session_id.startswith("session_")
+
+
+def test_get_latest_session_id_nonexistent(db):
+    """Returns None for a UAS with no records."""
+    assert db.get_latest_session_id("nonexistent") is None
+
+
+def test_get_all_current_sessions(db, sample_records):
+    """Returns a dict mapping every UAS to its latest session ID."""
+    db.insert_remoteid_records("test-source", sample_records)
+    sessions = db.get_all_current_sessions()
+    assert "drone-001" in sessions
+    assert "drone-002" in sessions
+    assert sessions["drone-001"].startswith("session_")
+    assert sessions["drone-002"].startswith("session_")

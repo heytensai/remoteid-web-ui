@@ -1256,6 +1256,39 @@ class WebDatabase:
             )
         return [dict(row) for row in cursor.fetchall()]
 
+    # --- Session tracking helpers ---
+
+    def get_latest_session_id(self, uas_id: str) -> Optional[str]:
+        """Get the most recent ``computed_session_id`` for a UAS, or ``None``."""
+        conn = self._get_conn()
+        cursor = conn.execute(
+            """SELECT computed_session_id FROM remoteid
+               WHERE uas_id = ? AND computed_session_id IS NOT NULL
+               ORDER BY timestamp DESC LIMIT 1""",
+            (uas_id,),
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+    def get_all_current_sessions(self) -> Dict[str, str]:
+        """Return the latest ``computed_session_id`` for every UAS that has one.
+
+        Used by ``AlertEngine`` to pre-populate known sessions at startup so
+        existing flights don't trigger false "new session" notifications.
+        """
+        conn = self._get_conn()
+        cursor = conn.execute(
+            """SELECT r.uas_id, r.computed_session_id
+               FROM remoteid r
+               INNER JOIN (
+                   SELECT uas_id, MAX(timestamp) AS max_ts
+                   FROM remoteid WHERE computed_session_id IS NOT NULL
+                   GROUP BY uas_id
+               ) latest ON r.uas_id = latest.uas_id AND r.timestamp = latest.max_ts
+               WHERE r.computed_session_id IS NOT NULL"""
+        )
+        return {row[0]: row[1] for row in cursor.fetchall()}
+
     # --- Geozone event methods ---
 
     def get_active_geozone_events(self) -> List[Dict]:

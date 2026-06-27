@@ -1,4 +1,5 @@
 """Flask web interface for Remote ID visualization"""
+# pylint: disable=too-many-lines
 
 import argparse
 import csv
@@ -10,7 +11,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 import xml.etree.ElementTree as ET
 
 from flask import Flask, jsonify, make_response, request, render_template, Response
@@ -1134,6 +1135,7 @@ def _init_app(config_path: str):
     if vapid_private and vapid_public:
         PUSH_SERVICE = PushService(DATABASE, vapid_private, vapid_public)
         ALERT_ENGINE.on_new_alert = _on_new_alert
+        ALERT_ENGINE.on_new_session = _on_new_session
         logger.info("Push notification service initialized")
     else:
         PUSH_SERVICE = None
@@ -1156,6 +1158,21 @@ def _on_new_alert(uas_id: str, geozone_name: str):
         "Geozone Alert",
         f"{name} entered {geozone_name}",
         data={"uas_id": uas_id, "geozone": geozone_name},
+    )
+
+
+def _on_new_session(uas_id: str, session_id: str, first_position: Optional[Dict] = None):
+    """Callback fired when a new drone session/flight is detected. Sends push notification."""
+    if PUSH_SERVICE is None:
+        return
+    name = CONFIG.drone_aliases.get(uas_id, uas_id)
+    body = f"{name} — new flight detected"
+    if first_position and first_position.get("altitude") is not None:
+        body += f" • Alt: {first_position['altitude']:.0f}m"
+    PUSH_SERVICE.notify_all(
+        "New Drone",
+        body,
+        data={"uas_id": uas_id, "session_id": session_id, "type": "new_session"},
     )
 
 
