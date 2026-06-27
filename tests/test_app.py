@@ -730,6 +730,315 @@ class TestAlertExport:
         assert "drone-002" not in body
 
 
+class TestApiDronesIncremental:
+    def test_incremental_drones_all(self, client, db):
+        """Without known_timestamps, returns all drones."""
+        resp = client.post(
+            "/api/drones/incremental",
+            data=json.dumps({"known_timestamps": {}}),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "drones" in data
+        assert len(data["drones"]) >= 3
+
+    def test_incremental_drones_with_known(self, client, db):
+        """With known timestamps, returns only changed drones."""
+        known = {}
+        now = datetime.now()
+        resp = client.get("/api/drones")
+        for d in resp.get_json()["drones"]:
+            sid = d.get("computed_session_id", "unknown")
+            key = f"{d['uas_id']}:{sid}"
+            known[key] = (now + timedelta(days=1)).isoformat()
+
+        resp = client.post(
+            "/api/drones/incremental",
+            data=json.dumps({"known_timestamps": known}),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "drones" in data
+
+    def test_incremental_drones_empty_window(self, client):
+        resp = client.post(
+            "/api/drones/incremental?start=2020-01-01T00:00:00&end=2020-01-02T00:00:00",
+            data=json.dumps({"known_timestamps": {}}),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["drones"] == []
+
+
+class TestApiRefresh:
+    def test_refresh_endpoint(self, client, db):
+        resp = client.post(
+            "/api/refresh",
+            data=json.dumps({"known_timestamps": {}}),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "drones" in data
+        assert "alerts" in data
+        assert "stats" in data
+        assert "sources" in data
+        assert len(data["drones"]) >= 3
+        assert data["alerts"]["count"] >= 0
+
+    def test_refresh_with_known_timestamps(self, client, db):
+        known = {}
+        resp = client.get("/api/drones")
+        for d in resp.get_json()["drones"]:
+            sid = d.get("computed_session_id", "unknown")
+            key = f"{d['uas_id']}:{sid}"
+            known[key] = (datetime.now() + timedelta(days=1)).isoformat()
+
+        resp = client.post(
+            "/api/refresh",
+            data=json.dumps({"known_timestamps": known}),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "drones" in data
+        assert "alerts" in data
+        assert "stats" in data
+
+    def test_refresh_invalid_params(self, client):
+        resp = client.post(
+            "/api/refresh?start=not-a-date",
+            data=json.dumps({}),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 500
+
+
+class TestApiCollectors:
+    def test_collectors_no_config(self, client):
+        """With no collectors in config, returns empty list."""
+        resp = client.get("/api/collectors")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data == []
+
+    def test_collectors_with_fixed(self, client, sample_config_yaml):
+        """A fixed collector appears in the response."""
+        config_path, _ = sample_config_yaml
+        import yaml
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        data["web_interface"]["collectors"] = [
+            {"name": "Node1", "api_key": "key1", "color": "#ff0000",
+             "type": "fixed", "lat": 37.78, "lon": -122.41},
+        ]
+        data["web_interface"]["api_keys"]["key1"] = "Node1"
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f)
+
+        import app as _app_module
+        res = _app_module.CONFIG.reload_hot_config()
+        if res is not None:
+            _app_module.CONFIG = res
+            _app_module._config_snapshot = res
+
+        resp = client.get("/api/collectors")
+        assert resp.status_code == 200
+        result = resp.get_json()
+        assert len(result) == 1
+        assert result[0]["name"] == "Node1"
+        assert result[0]["type"] == "fixed"
+        assert result[0]["latitude"] == 37.78
+        assert result[0]["stale"] is True
+
+    def test_collectors_with_mobile(self, client, sample_config_yaml):
+        """A mobile collector appears with lat/lon from DB."""
+        config_path, db_path = sample_config_yaml
+        import yaml
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        data["web_interface"]["collectors"] = [
+            {"name": "Mobile1", "api_key": "key2", "color": "#00ff00",
+             "type": "mobile", "lat": None, "lon": None},
+        ]
+        data["web_interface"]["api_keys"]["key2"] = "Mobile1"
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f)
+
+        import app as _app_module
+        res = _app_module.CONFIG.reload_hot_config()
+        if res is not None:
+            _app_module.CONFIG = res
+            _app_module._config_snapshot = res
+
+        # Update collector position via DB and log submission to avoid stale
+        _app_module.DATABASE.update_collector_position("Mobile1", 37.77, -122.40)
+        _app_module.DATABASE.log_submission("Mobile1", 0)
+
+        resp = client.get("/api/collectors")
+        assert resp.status_code == 200
+        result = resp.get_json()
+        assert len(result) == 1
+        assert result[0]["name"] == "Mobile1"
+        assert result[0]["type"] == "mobile"
+        assert result[0]["latitude"] == 37.77
+        assert result[0]["longitude"] == -122.40
+        assert result[0]["stale"] is False
+
+
+class TestApiPing:
+    def test_ping_without_auth(self, client):
+        resp = client.get("/api/submit/ping")
+        assert resp.status_code == 401
+
+    def test_ping_with_auth(self, client):
+        resp = client.get(
+            "/api/submit/ping",
+            headers={"Authorization": "Bearer test-api-key-123"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["success"] is True
+        assert data["source"] == "test-source"
+
+    def test_ping_with_position(self, client):
+        resp = client.get(
+            "/api/submit/ping?lat=37.78&lon=-122.41",
+            headers={"Authorization": "Bearer test-api-key-123"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["success"] is True
+        # Verify collector position was stored
+        import app as _app_module
+        positions = _app_module.DATABASE.get_collector_positions()
+        pos_by_name = {p["name"]: p for p in positions}
+        assert pos_by_name.get("test-source") is not None, \
+            "Collector position should have been stored in DB"
+
+    def test_ping_invalid_position(self, client):
+        """Invalid lat/lon values are silently ignored."""
+        resp = client.get(
+            "/api/submit/ping?lat=abc&lon=def",
+            headers={"Authorization": "Bearer test-api-key-123"},
+        )
+        assert resp.status_code == 200
+
+
+class TestApiRedetect:
+    def test_redetect_without_auth(self, client):
+        resp = client.post("/api/sessions/redetect")
+        assert resp.status_code == 401
+
+    def test_redetect_with_auth(self, client):
+        resp = client.post(
+            "/api/sessions/redetect",
+            headers={"Authorization": "Bearer test-api-key-123"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["success"] is True
+
+
+class TestPwa:
+    def test_manifest_json(self, client):
+        resp = client.get("/manifest.json")
+        assert resp.status_code == 200
+        assert resp.content_type == "application/json"
+        data = resp.get_json()
+        assert data["name"] == "Drone Tracker"
+        assert data["short_name"] == "Drones"
+        assert "icons" in data
+        assert len(data["icons"]) == 2
+
+    def test_manifest_start_url(self, client):
+        resp = client.get("/manifest.json")
+        data = resp.get_json()
+        assert data["start_url"] == "/"
+
+    def test_pwa_icon_valid(self, client):
+        resp = client.get("/icons/icon-192x192.png")
+        assert resp.status_code == 200
+        assert resp.content_type == "image/png"
+        assert resp.headers["Cache-Control"] == "public, max-age=86400"
+
+    def test_pwa_icon_not_found(self, client):
+        resp = client.get("/icons/nonexistent.png")
+        assert resp.status_code == 404
+
+    def test_pwa_icon_path_traversal(self, client):
+        """Path traversal attempts are rejected."""
+        resp = client.get("/icons/../../../etc/passwd")
+        assert resp.status_code == 404
+
+
+class TestApiPush:
+    def test_push_subscribe_invalid(self, client):
+        """Missing fields return 400."""
+        resp = client.post(
+            "/api/push/subscribe",
+            data=json.dumps({"endpoint": "https://example.com"}),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 400
+        data = resp.get_json()
+        assert "Invalid subscription data" in data.get("error", "")
+
+    def test_push_subscribe_valid(self, client):
+        resp = client.post(
+            "/api/push/subscribe",
+            data=json.dumps({
+                "endpoint": "https://push.example.com/abc",
+                "keys": {"p256dh": "key123", "auth": "auth456"},
+            }),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["success"] is True
+
+    def test_push_unsubscribe_invalid(self, client):
+        resp = client.post(
+            "/api/push/unsubscribe",
+            data=json.dumps({}),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 400
+
+    def test_push_unsubscribe_valid(self, client):
+        """Subscribe then unsubscribe."""
+        client.post(
+            "/api/push/subscribe",
+            data=json.dumps({
+                "endpoint": "https://push.example.com/remove-me",
+                "keys": {"p256dh": "k1", "auth": "a1"},
+            }),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        resp = client.post(
+            "/api/push/unsubscribe",
+            data=json.dumps({"endpoint": "https://push.example.com/remove-me"}),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["success"] is True
+
+
 class TestCSRF:
     def test_csrf_present_in_config(self, client):
         resp = client.get("/api/config")

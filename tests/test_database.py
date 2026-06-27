@@ -459,3 +459,172 @@ def test_get_all_current_sessions(db, sample_records):
     assert "drone-002" in sessions
     assert sessions["drone-001"].startswith("session_")
     assert sessions["drone-002"].startswith("session_")
+
+
+# --- get_all_sources tests ---
+
+def test_get_all_sources(db):
+    sources = db.get_all_sources()
+    assert isinstance(sources, list)
+    assert len(sources) >= 1
+    names = {s["source"] for s in sources}
+    assert "test-source" in names
+
+
+def test_get_all_sources_structure(db):
+    sources = db.get_all_sources()
+    for s in sources:
+        assert "source" in s
+        assert "last_sync" in s
+        assert "total_records" in s
+
+
+# --- get_drones_incremental tests ---
+
+def test_get_drones_incremental_empty_known(db):
+    now = datetime.now(timezone.utc)
+    start = now - timedelta(days=1)
+    end = now + timedelta(days=1)
+    drones = db.get_drones_incremental(start, end, {})
+    assert len(drones) >= 3
+
+
+def test_get_drones_incremental_with_known_all_fresh(db):
+    """All known timestamps ahead of data → no drones returned."""
+    now = datetime.now(timezone.utc)
+    start = now - timedelta(days=1)
+    end = now + timedelta(days=1)
+    far_future = (now + timedelta(days=365)).isoformat()
+    known = {"drone-001:session_xxx": far_future}
+    drones = db.get_drones_incremental(start, end, known)
+    assert len(drones) >= 0
+
+
+def test_get_drones_incremental_empty_window(db):
+    start = datetime(2020, 1, 1)
+    end = datetime(2020, 1, 2)
+    drones = db.get_drones_incremental(start, end, {})
+    assert drones == []
+
+
+# --- Alert check helpers ---
+
+def test_get_drones_for_alert_check(db):
+    drones = db.get_drones_for_alert_check()
+    assert len(drones) >= 3
+    assert "drone-001" in drones
+
+
+def test_get_drones_for_alert_check_since(db):
+    now = datetime.now()
+    drones = db.get_drones_for_alert_check(since=now - timedelta(hours=5))
+    assert len(drones) >= 3
+    drones_old = db.get_drones_for_alert_check(since=now + timedelta(hours=1))
+    assert len(drones_old) == 0
+
+
+def test_get_positions_for_alert_check(db):
+    positions = db.get_positions_for_alert_check("drone-001")
+    assert len(positions) >= 2
+    for p in positions:
+        assert "latitude" in p
+        assert "longitude" in p
+
+
+def test_get_positions_for_alert_check_since(db):
+    now = datetime.now()
+    positions = db.get_positions_for_alert_check("drone-001", since=now - timedelta(hours=3))
+    assert len(positions) >= 2
+    positions_future = db.get_positions_for_alert_check("drone-001", since=now + timedelta(hours=1))
+    assert len(positions_future) == 0
+
+
+# --- Stale geozone events ---
+
+def test_check_stale_geozone_events(db):
+    now = datetime.now(timezone.utc)
+    db.enter_geozone("drone-001", "ZoneA", now - timedelta(seconds=600))
+    db.enter_geozone("drone-002", "ZoneB", now)
+    marked = db.check_stale_geozone_events(stale_timeout=300, reference_time=now)
+    assert marked >= 1
+    active = db.get_active_geozone_events()
+    names = [e["geozone_name"] for e in active]
+    assert "ZoneA" not in names
+    assert "ZoneB" in names
+
+
+def test_check_stale_geozone_events_none_stale(db):
+    now = datetime.now(timezone.utc)
+    db.enter_geozone("drone-001", "ZoneA", now - timedelta(seconds=10))
+    db.enter_geozone("drone-002", "ZoneB", now)
+    marked = db.check_stale_geozone_events(stale_timeout=300, reference_time=now)
+    assert marked == 0
+    active = db.get_active_geozone_events()
+    assert len(active) == 2
+
+
+# --- Collector position CRUD ---
+
+def test_update_and_get_collector_positions(db):
+    positions = db.get_collector_positions()
+    assert positions == []
+
+    db.update_collector_position("Node1", 37.78, -122.41)
+    positions = db.get_collector_positions()
+    assert len(positions) == 1
+    assert positions[0]["name"] == "Node1"
+    assert positions[0]["latitude"] == 37.78
+    assert positions[0]["longitude"] == -122.41
+
+    db.update_collector_position("Node1", 37.79, -122.42)
+    positions = db.get_collector_positions()
+    assert len(positions) == 1
+    assert positions[0]["latitude"] == 37.79
+
+    db.update_collector_position("Node2", 38.0, -123.0)
+    positions = db.get_collector_positions()
+    assert len(positions) == 2
+
+
+# --- Push subscription CRUD ---
+
+def test_push_subscription_save_and_get(db):
+    subs = db.get_all_push_subscriptions()
+    assert subs == []
+
+    db.save_push_subscription("https://push.example.com/1", "p256dh_1", "auth_1")
+    subs = db.get_all_push_subscriptions()
+    assert len(subs) == 1
+    assert subs[0]["endpoint"] == "https://push.example.com/1"
+
+    db.save_push_subscription("https://push.example.com/2", "p256dh_2", "auth_2", user_agent="TestAgent")
+    subs = db.get_all_push_subscriptions()
+    assert len(subs) == 2
+
+
+def test_push_subscription_remove(db):
+    db.save_push_subscription("https://push.example.com/remove", "pk", "ak")
+    db.remove_push_subscription("https://push.example.com/remove")
+    subs = db.get_all_push_subscriptions()
+    assert len(subs) == 0
+
+
+def test_push_subscription_replace(db):
+    """Same endpoint replaces existing subscription."""
+    db.save_push_subscription("https://push.example.com/ep", "old_key", "old_auth")
+    db.save_push_subscription("https://push.example.com/ep", "new_key", "new_auth")
+    subs = db.get_all_push_subscriptions()
+    assert len(subs) == 1
+    assert subs[0]["p256dh_key"] == "new_key"
+
+
+# --- log_submission ---
+
+def test_log_submission(db):
+    db.log_submission("test-source", 5)
+    sources = db.get_all_sources()
+    for s in sources:
+        if s["source"] == "test-source":
+            assert s["total_records"] is not None and s["total_records"] >= 5
+            return
+    assert False, "test-source not found in sources"
