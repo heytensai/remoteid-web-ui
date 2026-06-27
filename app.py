@@ -103,7 +103,19 @@ def not_found(error):  # pylint: disable=unused-argument
 
 @app.errorhandler(500)
 def internal_error(error):  # pylint: disable=unused-argument
-    """Return JSON error for unhandled server exceptions."""
+    """Log request details at WARN and return JSON error for unhandled exceptions."""
+    safe_headers = {
+        k: v if k.lower() not in ('cookie', 'authorization') else '[REDACTED]'
+        for k, v in request.headers
+    }
+    logger.warning(
+        "500 %s %s | Args: %s | Headers: %s | Body: %s",
+        request.method, request.path,
+        dict(request.args),
+        safe_headers,
+        request.get_data(as_text=True)[:500],
+        exc_info=True,
+    )
     return jsonify({"error": "Internal server error"}), 500
 
 
