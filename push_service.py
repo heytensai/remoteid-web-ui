@@ -38,6 +38,23 @@ def _vapid_public_b64url(vapid_instance):
     return base64.urlsafe_b64encode(pub_bytes).decode().rstrip("=")
 
 
+def _validate_vapid_key(private_pem: str) -> bool:
+    """Check that a VAPID private key PEM can be loaded by ``cryptography``."""
+    if serialization is None:
+        return True
+    try:
+        key = serialization.load_pem_private_key(private_pem.encode("utf-8"), password=None)
+        key.private_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        return True
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning("VAPID private key validation failed", exc_info=True)
+        return False
+
+
 def _ensure_vapid_keys(database_path=None):
     """Load VAPID keys from file or generate new ones.
 
@@ -62,10 +79,10 @@ def _ensure_vapid_keys(database_path=None):
                 data = json.load(f)
             private = data.get("private_key")
             public = data.get("public_key")
-            if private and public:
+            if private and public and _validate_vapid_key(private):
                 logger.info("Loaded existing VAPID keys from %s", keys_file)
                 return private, public
-            logger.warning("VAPID keys file %s is incomplete, regenerating", keys_file)
+            logger.warning("VAPID keys file %s is invalid, regenerating", keys_file)
         except (OSError, json.JSONDecodeError) as e:
             logger.warning("Failed to read VAPID keys file %s: %s", keys_file, e)
 
@@ -76,6 +93,8 @@ def _ensure_vapid_keys(database_path=None):
     public_b64url = _vapid_public_b64url(v)
     logger.info("VAPID keys generated (private=%d chars, public=%d chars)",
                 len(private_pem), len(public_b64url))
+    if not _validate_vapid_key(private_pem):
+        logger.warning("Freshly generated VAPID key failed validation — push will be broken")
     try:
         with open(keys_file, "w", encoding="utf-8") as f:
             json.dump({"private_key": private_pem, "public_key": public_b64url}, f)
@@ -92,9 +111,23 @@ class PushService:
 
     def __init__(self, db, vapid_private_key, vapid_public_key, email="admin@drone-tracker.local"):
         self._db = db
-        self._vapid_private_key = vapid_private_key
         self._vapid_public_key = vapid_public_key
         self._claims = {"sub": f"mailto:{email}"}
+        # Pre-convert PEM to DER so the installed py_vapid's from_string →
+        # from_der path works correctly (some versions don't decode PEM properly).
+        self._vapid_private_key = vapid_private_key
+        if vapid_private_key and serialization is not None:
+            try:
+                key = serialization.load_pem_private_key(
+                    vapid_private_key.encode("utf-8"), password=None
+                )
+                self._vapid_private_key = key.private_bytes(
+                    encoding=serialization.Encoding.DER,
+                    format=serialization.PrivateFormat.PKCS8,
+                    encryption_algorithm=serialization.NoEncryption(),
+                )
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.warning("Failed to pre-parse VAPID private key, falling back to raw PEM")
 
     def subscribe(self, endpoint, p256dh_key, auth_key, user_agent=None):
         """Store a push subscription."""
