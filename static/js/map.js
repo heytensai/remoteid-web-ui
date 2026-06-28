@@ -260,9 +260,11 @@ const MapController = {
             if (wp.enabled === false) continue;
             if (wp.lat == null || wp.lon == null) continue;
 
-            const popupContent = this._createWaypointPopup(wp);
             const center = [wp.lat, wp.lon];
             const color = wp.color || '#007bff';
+            // Lazily generate popup content so Units.init(config) has already
+            // been called when the user clicks — fixes metric-ignoring bug.
+            const popupFn = () => this._createWaypointPopup(wp);
             let shape = null;
 
             if (wp.type === 'circle' && wp.radius > 0) {
@@ -275,7 +277,7 @@ const MapController = {
                     dashArray: '8, 8',
                     opacity: 0.8
                 }).addTo(this.layers.waypoints);
-                shape.bindPopup(popupContent);
+                shape.bindPopup(popupFn);
             } else if (wp.type === 'rectangle' && wp.width > 0 && wp.height > 0) {
                 const lat = wp.lat;
                 const lon = wp.lon;
@@ -292,7 +294,7 @@ const MapController = {
                     dashArray: '8, 8',
                     opacity: 0.8
                 }).addTo(this.layers.waypoints);
-                shape.bindPopup(popupContent);
+                shape.bindPopup(popupFn);
             }
 
             // Always place a clickable marker at center
@@ -300,7 +302,7 @@ const MapController = {
                 icon: this.createWaypointIcon(wp),
                 opacity: 0.85
             }).addTo(this.layers.waypoints);
-            marker.bindPopup(popupContent);
+            marker.bindPopup(popupFn);
 
             this.waypointMarkers[wp.name] = { marker, shape };
         }
