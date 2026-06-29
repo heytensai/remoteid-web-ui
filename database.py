@@ -1,6 +1,8 @@
 """Database layer for web interface"""
 # pylint: disable=too-many-lines
 
+import hashlib
+import secrets as _secrets
 import sqlite3
 import threading
 import uuid
@@ -13,7 +15,7 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger(__name__)
 
 # Current schema version — bump this and add a migration in _migrate()
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _adapt_datetime(dt: datetime) -> str:
@@ -134,6 +136,38 @@ class WebDatabase:
         """
         )
 
+        # Create users table
+        conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            email TEXT,
+            role_name TEXT NOT NULL DEFAULT 'guest',
+            is_ephemeral INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            login_token_hash TEXT UNIQUE,
+            login_token_expires_at DATETIME,
+            auth_method TEXT NOT NULL DEFAULT 'ephemeral',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+        )
+
+        # Create auth_tokens table
+        conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS auth_tokens(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token_hash TEXT NOT NULL,
+            expires_at DATETIME NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+        """
+        )
+
         # Create push subscriptions table for Web Push notifications
         conn.execute(
         """
@@ -171,6 +205,14 @@ class WebDatabase:
         "CREATE INDEX IF NOT EXISTS idx_geozone_events_stale "
         "ON geozone_events(exited_at, last_seen_at)"
         )
+        conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_auth_tokens_hash "
+        "ON auth_tokens(token_hash)"
+        )
+        conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_auth_tokens_user "
+        "ON auth_tokens(user_id)"
+        )
 
         conn.commit()
         self._ensure_schema_version(conn)
@@ -195,7 +237,7 @@ class WebDatabase:
             conn.commit()
 
     @staticmethod
-    def _migrate(
+    def _migrate(  # pylint: disable=unused-argument
         conn: sqlite3.Connection, from_version: int, to_version: int
     ):
         """Apply schema migrations between *from_version* and *to_version*.
@@ -204,16 +246,44 @@ class WebDatabase:
         from version X to version X+1.  The version table is updated
         separately by the caller.
         """
-        # Migration stubs go here as the schema evolves, for example:
-        #
-        # if from_version == 1:
-        #     conn.execute(
-        #         "ALTER TABLE remoteid ADD COLUMN new_column TEXT"
-        #     )
-        #     from_version = 2
-        #
-        # if from_version == 2:
-        #     ...
+        if from_version == 1:
+            conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT,
+                role_name TEXT NOT NULL DEFAULT 'guest',
+                is_ephemeral INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                login_token_hash TEXT UNIQUE,
+                login_token_expires_at DATETIME,
+                auth_method TEXT NOT NULL DEFAULT 'ephemeral',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+            )
+            conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auth_tokens(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                token_hash TEXT NOT NULL,
+                expires_at DATETIME NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+            """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_auth_tokens_hash "
+                "ON auth_tokens(token_hash)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_auth_tokens_user "
+                "ON auth_tokens(user_id)"
+            )
+            from_version = 2
 
     def _get_conn(self) -> sqlite3.Connection:
         """Get a thread-local database connection, creating one if needed.
@@ -1530,3 +1600,141 @@ class WebDatabase:
             "SELECT endpoint, p256dh_key, auth_key FROM push_subscriptions ORDER BY created_at"
         )
         return [dict(row) for row in cursor.fetchall()]
+
+    # --- Auth methods ---
+
+    def create_user(  # pylint: disable=too-many-positional-arguments
+        self, name: str, email: str, role_name: str,
+        login_token: str, login_token_expires_at: datetime
+    ) -> dict:
+        """Create a pre-created user with a login token.
+
+        Returns the user row as a dict.
+        """
+        token_hash = hashlib.sha256(login_token.encode()).hexdigest()
+        conn = self._get_conn()
+        conn.execute(
+            """
+            INSERT INTO users (name, email, role_name, is_ephemeral, is_active,
+                               login_token_hash, login_token_expires_at, auth_method)
+            VALUES (?, ?, ?, 0, 1, ?, ?, 'login_link')
+            """,
+            (name, email, role_name, token_hash, login_token_expires_at),
+        )
+        conn.commit()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute("SELECT * FROM users WHERE login_token_hash = ?", (token_hash,))
+        return dict(cursor.fetchone())
+
+    def create_ephemeral_user(self) -> Tuple[str, int]:
+        """Create an ephemeral visitor user and an auth token.
+
+        Returns (session_token, user_id).
+        """
+        name = f"Guest-{_secrets.token_hex(4)}"
+        conn = self._get_conn()
+        cursor = conn.execute(
+            """INSERT INTO users (name, role_name, is_ephemeral, is_active, auth_method)
+               VALUES (?, 'guest', 1, 1, 'ephemeral')""",
+            (name,),
+        )
+        user_id = cursor.lastrowid
+        session_token = _secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(session_token.encode()).hexdigest()
+        expires_at = datetime.now(timezone.utc) + timedelta(days=90)
+        conn.execute(
+            "INSERT INTO auth_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)",
+            (user_id, token_hash, expires_at),
+        )
+        conn.commit()
+        return session_token, user_id
+
+    def exchange_login_token(self, login_token: str) -> Optional[Tuple[str, dict]]:
+        """Exchange a one-time login token for a session token.
+
+        Returns (session_token, user_dict) on success, or None if the token is
+        invalid or expired.
+        """
+        token_hash = hashlib.sha256(login_token.encode()).hexdigest()
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(
+            "SELECT * FROM users WHERE login_token_hash = ? AND login_token_expires_at > ? AND is_active = 1",
+            (token_hash, datetime.now(timezone.utc)),
+        )
+        user = cursor.fetchone()
+        if not user:
+            return None
+
+        # Clear the one-time login token
+        conn.execute(
+            "UPDATE users SET login_token_hash = NULL, login_token_expires_at = NULL WHERE id = ?",
+            (user["id"],),
+        )
+
+        # Create session token
+        session_token = _secrets.token_urlsafe(32)
+        session_hash = hashlib.sha256(session_token.encode()).hexdigest()
+        expires_at = datetime.now(timezone.utc) + timedelta(days=90)
+        conn.execute(
+            "INSERT INTO auth_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)",
+            (user["id"], session_hash, expires_at),
+        )
+        conn.commit()
+
+        return session_token, dict(user)
+
+    def get_user_by_auth_token(self, token: str) -> Optional[dict]:
+        """Look up a user by their session auth token.
+
+        Returns user dict (including role info) or None if the token is invalid
+        or expired.
+        """
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(
+            """SELECT u.* FROM users u JOIN auth_tokens t ON u.id = t.user_id
+               WHERE t.token_hash = ? AND t.expires_at > ? AND u.is_active = 1""",
+            (token_hash, datetime.now(timezone.utc)),
+        )
+        user = cursor.fetchone()
+        return dict(user) if user else None
+
+    def revoke_token(self, token: str):
+        """Revoke (delete) an auth token."""
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        conn = self._get_conn()
+        conn.execute("DELETE FROM auth_tokens WHERE token_hash = ?", (token_hash,))
+        conn.commit()
+
+    def revoke_all_user_tokens(self, user_id: int):
+        """Revoke all auth tokens for a given user."""
+        conn = self._get_conn()
+        conn.execute("DELETE FROM auth_tokens WHERE user_id = ?", (user_id,))
+        conn.commit()
+
+    def upgrade_ephemeral_user(self, ephemeral_user_id: int, target_user_id: int) -> bool:
+        """Merge a pre-created user into an ephemeral user record.
+
+        Transfers name, email, role_name from the target to the ephemeral,
+        deletes any session tokens created for the target, and deactivates
+        the target record so the ephemeral becomes a full account.
+        """
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        target = conn.execute(
+            "SELECT name, email, role_name FROM users WHERE id = ? AND is_active = 1",
+            (target_user_id,),
+        ).fetchone()
+        if not target:
+            return False
+
+        conn.execute(
+            "UPDATE users SET name=?, email=?, role_name=?, auth_method='upgraded' WHERE id=?",
+            (target["name"], target["email"], target["role_name"], ephemeral_user_id),
+        )
+        conn.execute("DELETE FROM auth_tokens WHERE user_id = ?", (target_user_id,))
+        conn.execute("UPDATE users SET is_active = 0 WHERE id = ?", (target_user_id,))
+        conn.commit()
+        return True

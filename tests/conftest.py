@@ -10,7 +10,7 @@ import yaml
 
 import app as _app_module
 
-from app import _init_app
+from app import _init_app, limiter
 
 
 SAMPLE_API_KEY = "test-api-key-123"
@@ -38,6 +38,33 @@ def sample_config_yaml():
             "api_keys": {SAMPLE_API_KEY: "test-source"},
             "drone_aliases": {"drone-001": "Alpha", "drone-002": "Bravo"},
             "use_metric": True,
+            "roles": {
+                "operator": {
+                    "permissions": [
+                        "view_map", "view_drones", "view_tracks",
+                        "view_operators", "view_waypoints", "view_sources",
+                        "view_stats", "view_alert_history", "view_settings",
+                        "use_replay", "export_data", "add_waypoint",
+                        "edit_waypoint", "delete_waypoint", "add_alias",
+                        "edit_alias", "delete_alias", "push_notifications",
+                        "manage_collectors",
+                    ],
+                },
+                "viewer": {
+                    "permissions": [
+                        "view_map", "view_drones", "view_tracks",
+                        "view_operators", "view_waypoints",
+                        "view_alert_history", "use_replay",
+                        "push_notifications",
+                    ],
+                },
+                "guest": {
+                    "permissions": [
+                        "view_map", "view_drones", "view_tracks",
+                        "view_operators", "view_waypoints", "use_replay",
+                    ],
+                },
+            },
         }
     }
 
@@ -60,6 +87,7 @@ def app(sample_config_yaml):
     app.config["TESTING"] = True
     app.config["WTF_CSRF_ENABLED"] = False
     app.config["SERVER_NAME"] = "localhost"
+    limiter.enabled = False
 
     if _app_module.SESSION_SCHEDULER:
         _app_module.SESSION_SCHEDULER.stop()

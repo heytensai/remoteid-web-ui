@@ -36,6 +36,10 @@ const UIController = {
     keepScreenOn: false,
     notificationsEnabled: false,
 
+    // Auth state
+    permissions: [],
+    currentUser: null,
+
     // Adaptive polling
     _initialized: false,
     pollTimer: null,
@@ -60,11 +64,78 @@ const UIController = {
     },
 
     /**
+     * Check if the current user has a given permission.
+     * The ``*`` wildcard grants all permissions.
+     */
+    hasPermission(permission) {
+        return this.permissions.indexOf('*') !== -1 || this.permissions.indexOf(permission) !== -1;
+    },
+
+    /**
+     * Initialize authentication: handle login tokens from URL, validate
+     * existing session tokens, or create an ephemeral account.
+     */
+    async _initAuth() {
+        // 1. Check for login token in URL parameters
+        const params = new URLSearchParams(window.location.search);
+        const loginToken = params.get('login_token');
+        if (loginToken) {
+            try {
+                const result = await API.loginWithToken(loginToken);
+                API.setAuthToken(result.token);
+                // Clean the URL (remove login_token param) without reloading
+                const url = new URL(window.location);
+                url.searchParams.delete('login_token');
+                window.history.replaceState({}, '', url);
+            } catch (e) {
+                console.warn('[Auth] Login token exchange failed:', e);
+                // Token invalid/expired — clear and fall through to anon
+                API.setAuthToken(null);
+            }
+        }
+
+        // 2. If we have a stored token, validate it
+        const storedToken = API.getAuthToken();
+        if (storedToken) {
+            try {
+                const me = await API.getMe();
+                if (me.authenticated) {
+                    this.currentUser = me.user;
+                    this.permissions = me.permissions || [];
+                    return;
+                }
+            } catch (e) {
+                console.warn('[Auth] Token validation failed:', e);
+            }
+            // Token expired or invalid — clear it
+            API.setAuthToken(null);
+            this.currentUser = null;
+            this.permissions = [];
+        }
+
+        // 3. No valid token — create an ephemeral account
+        try {
+            const result = await API.anonLogin();
+            API.setAuthToken(result.token);
+            this.currentUser = result.user;
+            this.permissions = ['view_map', 'view_drones', 'view_tracks',
+                'view_operators', 'view_waypoints', 'use_replay'];
+            console.info('[Auth] Ephemeral user created:', result.user.name);
+        } catch (e) {
+            console.warn('[Auth] Ephemeral account creation failed, proceeding without auth:', e);
+        }
+    },
+
+    /**
      * Initialize UI
      */
     async init() {
         this._cacheElements();
         this._initEventListeners();
+
+        // Auth initialization
+        await this._initAuth();
+
         await this._loadConfig();
         this._restoreSettings();
 
@@ -120,9 +191,35 @@ const UIController = {
         MapController.clearAllOperators();
         await this.refreshData(false);
         this._initialized = true;
+        this._applyPermissionGating();
         this._startPolling();
         // Register service worker (fire-and-forget)
         this._registerServiceWorker();
+    },
+
+    /**
+     * Show/hide UI elements based on the current user's permissions.
+     */
+    _applyPermissionGating() {
+        const show = (sel, visible) => {
+            const el = document.querySelector(sel);
+            if (el) el.style.display = visible ? '' : 'none';
+        };
+        show('.analytics-dropdown', this.hasPermission('view_stats'));
+        show('.remote-bar', this.hasPermission('view_sources'));
+        show('.waypoints-dropdown', this.hasPermission('view_waypoints'));
+        show('#settingsPanel', this.hasPermission('view_settings'));
+        show('#openSettings', this.hasPermission('view_settings'));
+        show('#openAlertLogDropdown', this.hasPermission('view_alert_history'));
+
+        // Push notifications toggle
+        const notifyCheckbox = this.elements.enableNotificationsCheckbox;
+        if (notifyCheckbox) {
+            const container = notifyCheckbox.closest('.settings-item');
+            if (container) {
+                container.style.display = this.hasPermission('push_notifications') ? '' : 'none';
+            }
+        }
     },
 
     /**
@@ -650,6 +747,14 @@ const UIController = {
             this.manufacturerPrefixes = config.manufacturer_prefixes || {};
             this.positionStaleMinutes = config.position_stale_minutes || 30;
             this.vapidPublicKey = config.vapid_public_key || null;
+
+            // Merge server-side permissions if available (auth from middleware)
+            if (config.auth && config.auth.authenticated) {
+                this.isAuthenticated = true;
+                if (config.auth.permissions) {
+                    this.permissions = config.auth.permissions;
+                }
+            }
 
             // Override default with stored preset if available
             const stored = this._getStoredPreset();
@@ -1708,9 +1813,9 @@ const UIController = {
                                         <button class="focus-btn" title="Focus on map">
                                             <i class="fas fa-crosshairs"></i>
                                         </button>
-                                        <button class="export-btn" title="Export session" data-uas-id="${esc(drone.uas_id)}" data-session-id="${esc(drone.computed_session_id || '')}" data-session-key="${esc(rawSessionKey)}">
+                                        ${this.hasPermission('export_data') ? `<button class="export-btn" title="Export session" data-uas-id="${esc(drone.uas_id)}" data-session-id="${esc(drone.computed_session_id || '')}" data-session-key="${esc(rawSessionKey)}">
                                             <i class="fas fa-download"></i>
-                                        </button>
+                                        </button>` : ''}
                                     </div>
                                 </div>
                             `;

@@ -6,18 +6,22 @@ import csv
 import io
 import logging
 import os
+import secrets
 import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 import xml.etree.ElementTree as ET
 
-from flask import Flask, jsonify, make_response, request, render_template, Response
+import click
+from flask import Flask, g, jsonify, make_response, request, render_template, Response
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect, generate_csrf
+from werkzeug.exceptions import BadRequest
 
 from config import WebConfig, M_PER_DEG_LAT
 from database import WebDatabase
@@ -44,6 +48,14 @@ PUSH_VAPID_PUBLIC_KEY: Optional[str] = None
 # Readers should always call get_config() instead of accessing CONFIG directly.
 _config_lock = threading.Lock()
 _config_snapshot: Optional[WebConfig] = None # pylint: disable=invalid-name
+
+# Endpoints that do not require authentication (static assets, auth setup, etc.)
+_AUTH_EXEMPT_ENDPOINTS = {
+    'api_auth_anon', 'api_auth_login',
+    'index', 'pwa_manifest', 'pwa_icon', 'service_worker', 'static',
+}
+# Endpoints that are public but still expect an optional X-Auth-Token (auth/me)
+_AUTH_OPTIONAL_ENDPOINTS = {'api_auth_me'}
 
 
 def _get_config() -> WebConfig:
@@ -93,6 +105,39 @@ def request_entity_too_large(error):  # pylint: disable=unused-argument
 def rate_limit_exceeded(error):  # pylint: disable=unused-argument
     """Return JSON error when rate limit is exceeded."""
     return jsonify({"success": False, "error": "Rate limit exceeded"}), 429
+
+
+def require_permission(permission: str):
+    """Decorator: require a specific permission (or ``*`` wildcard) to access a route.
+
+    Usage::
+
+        @app.route('/api/waypoints')
+        @require_permission('add_waypoint')
+        def add_waypoint():
+            ...
+    """
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            perms = _get_current_permissions()
+            if '*' not in perms and permission not in perms:
+                return jsonify({"error": "Forbidden", "required_permission": permission}), 403
+            return f(*args, **kwargs)
+        return decorated_function
+    return decorator
+
+
+def _get_current_permissions() -> List[str]:
+    """Return the permission list for the current request's user (or empty)."""
+    return getattr(g, 'permissions', [])
+
+
+def _get_role_permissions(role_name: str) -> List[str]:
+    """Look up a role's permission list from the config."""
+    cfg = _get_config()
+    role = cfg.roles.get(role_name) if cfg else None
+    return role.permissions if role else []
 
 
 @app.errorhandler(404)
@@ -163,6 +208,32 @@ def add_security_headers(response):
 
 # CORS intentionally not set globally — API is same-origin via the Flask server.
 # Only /api/submit allows cross-origin (uses Bearer token auth).
+
+
+@app.before_request
+def load_current_user():
+    """Set ``g.current_user`` and ``g.permissions`` based on the ``X-Auth-Token`` header.
+
+    - If the token is valid → ``g.current_user`` is set, ``g.permissions`` populated.
+    - If the endpoint is exempt (anon, static, …) → skipped entirely.
+    - For all other requests with no/missing token → ``g.current_user = None``,
+      ``g.permissions = []`` (the route decides how to handle that).
+    """
+    if request.endpoint in _AUTH_EXEMPT_ENDPOINTS or request.endpoint is None:
+        return
+    token = request.headers.get('X-Auth-Token')
+    if token:
+        try:
+            user = DATABASE.get_user_by_auth_token(token)
+            if user:
+                g.current_user = user
+                g.permissions = _get_role_permissions(user['role_name'])
+                return
+        except sqlite3.Error:
+            logger.exception("Error validating auth token")
+    # Token absent or invalid — allow through, route/permissions will decide
+    g.current_user = None
+    g.permissions = []
 
 
 @app.route("/")
@@ -238,10 +309,138 @@ def service_worker():
     return resp
 
 
+# ---------------------------------------------------------------------------
+# Auth endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.route("/api/auth/anon", methods=["POST"])
+@csrf.exempt
+@limiter.limit("10/minute")
+def api_auth_anon():
+    """Create an ephemeral visitor account and return a session token.
+
+    The frontend calls this when a user has no stored ``X-Auth-Token``.
+    The returned token should be stored in ``localStorage`` and sent as the
+    ``X-Auth-Token`` header on subsequent requests.
+    """
+    try:
+        session_token, user_id = DATABASE.create_ephemeral_user()
+        user = dict(DATABASE.get_user_by_auth_token(session_token))
+        logger.info("Created ephemeral user '%s' (id=%d, IP=%s)",
+                     user['name'], user_id, request.remote_addr)
+        return jsonify({
+            "token": session_token,
+            "user": {"id": user['id'], "name": user['name'], "role": user['role_name']},
+        })
+    except sqlite3.Error:
+        logger.exception("Error creating ephemeral user")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@app.route("/api/auth/login", methods=["POST"])
+@csrf.exempt
+@limiter.limit("5/minute")
+def api_auth_login():
+    """Exchange a one-time login token for a session token.
+
+    Request body: ``{"login_token": "<token>"}``
+
+    On success returns ``{"token": "<session_token>", "user": {...}}``.
+    On failure (invalid/expired) returns 401.
+    """
+    try:
+        data = request.get_json(force=True)
+        login_token = data.get("login_token", "")
+        if not login_token:
+            return jsonify({"error": "Missing login_token"}), 400
+    except BadRequest:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    # Check if there is an existing ephemeral session to upgrade in-place
+    existing_token = request.headers.get("X-Auth-Token")
+    existing_user = DATABASE.get_user_by_auth_token(existing_token) if existing_token else None
+
+    result = DATABASE.exchange_login_token(login_token)
+    if result is None:
+        logger.warning("Login token not found or expired (IP=%s)", request.remote_addr)
+        return jsonify({"error": "Invalid or expired login token"}), 401
+
+    session_token, user = result
+
+    if existing_user and existing_user.get("auth_method") == "ephemeral":
+        DATABASE.upgrade_ephemeral_user(existing_user["id"], user["id"])
+        session_token = existing_token
+        user = DATABASE.get_user_by_auth_token(existing_token)
+
+    logger.info("User '%s' (id=%d) logged in via login link (IP=%s)",
+                 user['name'], user['id'], request.remote_addr)
+    return jsonify({
+        "token": session_token,
+        "user": {"id": user['id'], "name": user['name'], "email": user['email'], "role": user['role_name']},
+    })
+
+
+@app.route("/api/auth/me")
+@limiter.limit("30/minute")
+def api_auth_me():
+    """Return the current authenticated user and their role permissions.
+
+    If the ``X-Auth-Token`` header is valid, returns::
+
+        {"authenticated": true, "user": {...}, "permissions": [...]}
+
+    Otherwise returns ``{"authenticated": false}``.
+    """
+    token = request.headers.get('X-Auth-Token')
+    if not token:
+        return jsonify({"authenticated": False})
+
+    user = getattr(g, 'current_user', None)
+    perms = _get_current_permissions()
+    if user:
+        logger.debug("Token valid for user '%s' (role=%s)", user['name'], user['role_name'])
+        return jsonify({
+            "authenticated": True,
+            "user": {"id": user['id'], "name": user['name'], "email": user['email'],
+                     "role": user['role_name'], "is_ephemeral": bool(user['is_ephemeral'])},
+            "permissions": perms,
+        })
+
+    # Token was provided but didn't match — may be expired
+    logger.debug("Auth token presented but not valid (IP=%s)", request.remote_addr)
+    return jsonify({"authenticated": False})
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+@csrf.exempt
+@limiter.limit("10/minute")
+def api_auth_logout():
+    """Revoke the current auth token.
+
+    Request body (optional): ``{"token": "..."}`` — if omitted the token is
+    read from the ``X-Auth-Token`` header.
+    """
+    data = request.get_json(silent=True) or {}
+    token = data.get("token")
+    if not token:
+        token = request.headers.get('X-Auth-Token')
+    if token:
+        DATABASE.revoke_token(token)
+        logger.debug("Auth token revoked (IP=%s)", request.remote_addr)
+    return jsonify({"success": True})
+
+
+# ---------------------------------------------------------------------------
+# Config & data endpoints
+# ---------------------------------------------------------------------------
+
+
 @app.route("/api/config")
 def api_config():
     """Get map configuration"""
     cfg = _get_config()
+    user = getattr(g, 'current_user', None)
     return jsonify(
         {
             "map": {
@@ -261,6 +460,10 @@ def api_config():
             "m_per_deg_lat": M_PER_DEG_LAT,
             "vapid_public_key": PUSH_VAPID_PUBLIC_KEY,
             "csrf_token": generate_csrf(),
+            "auth": {
+                "authenticated": user is not None,
+                "permissions": _get_current_permissions(),
+            },
         }
     )
 
@@ -823,6 +1026,7 @@ def submit_ping():
 
 
 @app.route("/api/collectors")
+@require_permission("view_sources")
 def get_collectors():
     """Get current positions and status for all configured collectors"""
     positions = DATABASE.get_collector_positions()
@@ -1160,6 +1364,75 @@ def _init_app(config_path: str):
     _config_snapshot = CONFIG
 
     return app
+
+
+# ---------------------------------------------------------------------------
+# Flask CLI commands
+# ---------------------------------------------------------------------------
+
+
+@app.cli.group("auth")
+def auth_cmd():
+    """Manage user accounts and login tokens."""
+
+
+@auth_cmd.command("create-user")
+@click.argument("name")
+@click.argument("email")
+@click.argument("role")
+@click.option("--config", "-c", required=True, envvar="WEB_CONFIG",
+              help="Path to config YAML file")
+@click.option("--expires", default=7, help="Login token expiry in days (default: 7)")
+def create_user(name, email, role, config, expires):
+    """Create a user account and print a one-time login link."""
+    _init_app(config)
+    login_token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(days=expires)
+    valid_roles = list(CONFIG.roles.keys())
+    if role not in valid_roles:
+        print(f"Error: unknown role '{role}'. Valid roles: {', '.join(valid_roles)}")
+        return
+    DATABASE.create_user(name, email, role, login_token, expires_at)
+    print(f"User '{name}' ({email}) created with role '{role}'.")
+    print(f"Login link: ?login_token={login_token}")
+    print(f"Expires: {expires_at.strftime('%Y-%m-%dT%H:%M:%SZ')}")
+
+
+@auth_cmd.command("list-users")
+@click.option("--config", "-c", required=True, envvar="WEB_CONFIG",
+              help="Path to config YAML file")
+def list_users(config):
+    """List all users in the database."""
+    _init_app(config)
+    conn = DATABASE._get_conn()  # pylint: disable=protected-access
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT id, name, email, role_name, is_ephemeral, is_active, auth_method, created_at "
+        "FROM users ORDER BY created_at DESC"
+    ).fetchall()
+    if not rows:
+        print("No users found.")
+        return
+    print(f"{'ID':>4}  {'Name':<20} {'Email':<30} {'Role':<12} {'Type':<12} {'Active':<7} {'Created'}")
+    print("-" * 100)
+    for r in rows:
+        utype = "ephemeral" if r['is_ephemeral'] else "pre-created"
+        created = r['created_at']
+        if hasattr(created, 'strftime'):
+            created = created.strftime('%Y-%m-%d %H:%M')
+        print(f"{r['id']:>4}  {r['name']:<20} {(r['email'] or ''):<30} "
+              f"{r['role_name']:<12} {utype:<12} {str(bool(r['is_active'])):<7} {created}")
+
+
+@auth_cmd.command("revoke-tokens")
+@click.argument("user_id", type=int)
+@click.option("--config", "-c", required=True, envvar="WEB_CONFIG",
+              help="Path to config YAML file")
+def revoke_tokens(user_id, config):
+    """Revoke all session tokens for a user, forcing re-login."""
+    _init_app(config)
+    DATABASE.revoke_all_user_tokens(user_id)
+    print(f"All session tokens revoked for user id={user_id}.")
 
 
 def _on_new_alert(uas_id: str, geozone_name: str):

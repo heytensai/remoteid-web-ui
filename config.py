@@ -4,7 +4,7 @@ import logging
 import os
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 import yaml
 
 logger = logging.getLogger(__name__)
@@ -72,6 +72,14 @@ class CollectorConfig:
     timezone: Optional[str] = None
 
 
+@dataclass
+class RoleConfig:
+    """A named role with a list of permissions."""
+
+    name: str
+    permissions: List[str]
+
+
 VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 
 
@@ -125,6 +133,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
     collectors: List[CollectorConfig] = field(default_factory=list)
     position_stale_minutes: int = 30
+    roles: Dict[str, RoleConfig] = field(default_factory=dict)
 
     def __init__(self, yaml_file: str):
         self.config_path = yaml_file
@@ -187,10 +196,26 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         alerts_data = web_data.get("alerts") or {}
         self.alerts = AlertsConfig(alerts_data)
 
+        # Roles configuration
+        self.roles = self._parse_roles(web_data.get("roles") or {})
+
         # Collector configuration
         self.position_stale_minutes = web_data.get("position_stale_minutes", 30)
         self.collectors = self._parse_collectors(web_data.get("collectors") or [])
         self.collectors_by_key = {c.api_key: c.name for c in self.collectors if c.api_key}
+
+    def _parse_roles(self, roles_data: dict) -> Dict[str, RoleConfig]:
+        """Parse role configuration from raw data."""
+        roles = {}
+        for name, data in roles_data.items():
+            perms = data.get("permissions", []) if isinstance(data, dict) else []
+            roles[name] = RoleConfig(name=name, permissions=perms)
+        return roles
+
+    def get_role_permissions(self, role_name: str) -> List[str]:
+        """Return the permission list for a role, or empty list if not found."""
+        role = self.roles.get(role_name)
+        return role.permissions if role else []
 
     def _parse_waypoints(self, waypoints_data: list) -> list:
         """Parse waypoint configuration from raw data."""
@@ -378,6 +403,10 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 for c in self.collectors
             ],
             "position_stale_minutes": self.position_stale_minutes,
+            "roles": {
+                name: {"name": r.name, "permissions": r.permissions}
+                for name, r in self.roles.items()
+            },
             "m_per_deg_lat": M_PER_DEG_LAT,
         }
 
@@ -443,6 +472,10 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
 
         if new_config.position_stale_minutes != self.position_stale_minutes:
             logger.info("Reloaded position_stale_minutes from %s", self.config_path)
+            changed = True
+
+        if new_config.roles != self.roles:
+            logger.info("Reloaded roles from %s", self.config_path)
             changed = True
 
         old_col = {c.name: c for c in self.collectors}

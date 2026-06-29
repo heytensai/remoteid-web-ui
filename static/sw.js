@@ -1,4 +1,4 @@
-const CACHE = 'drone-tracker-v1';
+const CACHE = 'drone-tracker-v2';
 
 const PRECACHE = [
   './',

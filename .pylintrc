@@ -19,7 +19,7 @@ max-locals=25
 max-returns=10
 max-statements=80
 max-parents=7
-max-public-methods=35
+max-public-methods=45
 min-public-methods=1
 
 [FORMAT]

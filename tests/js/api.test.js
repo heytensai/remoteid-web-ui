@@ -12,7 +12,7 @@ let apiCode = fs.readFileSync(
 // Remove the auto-init at the end, strip const so eval assigns globally
 apiCode = apiCode
   .replace(/\/\/ Initialize on load\nAPI\.init\(\);$/, '')
-  .replace(/^const /m, '');
+  .replace(/^const /gm, '');
 (0, eval)(apiCode);
 
 global.fetch = jest.fn();

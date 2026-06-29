@@ -6,7 +6,7 @@ import tempfile
 import pytest
 import yaml
 
-from config import WebConfig, MapConfig, WaypointConfig
+from config import WebConfig, MapConfig, WaypointConfig, RoleConfig
 
 
 def test_map_config_defaults():
@@ -635,3 +635,187 @@ class TestApiKeysHotReload:
             cfg.reload_hot_config()
 
         assert not any("Reloaded api_keys" in msg for msg in caplog.messages)
+
+
+# --- Role configuration tests ---
+
+
+def test_role_config_dataclass():
+    role = RoleConfig(name="operator", permissions=["view_map", "view_drones", "*"])
+    assert role.name == "operator"
+    assert role.permissions == ["view_map", "view_drones", "*"]
+
+
+def test_role_config_empty_permissions():
+    role = RoleConfig(name="guest", permissions=[])
+    assert role.permissions == []
+
+
+def test_parse_roles_empty():
+    config_data = {"web_interface": {"database_path": "/tmp/test_empty_roles.db"}}
+    path = _write_config(config_data)
+    try:
+        cfg = WebConfig(path)
+        assert cfg.roles == {}
+    finally:
+        os.unlink(path)
+
+
+def test_parse_roles_with_data():
+    config_data = {
+        "database_path": "/tmp/test_roles.db",
+        "roles": {
+            "operator": {
+                "permissions": ["view_map", "view_drones", "view_tracks"],
+            },
+            "viewer": {
+                "permissions": ["view_map", "view_drones"],
+            },
+        },
+    }
+    path = _write_config(config_data)
+    try:
+        cfg = WebConfig(path)
+        assert "operator" in cfg.roles
+        assert cfg.roles["operator"].name == "operator"
+        assert cfg.roles["operator"].permissions == ["view_map", "view_drones", "view_tracks"]
+        assert "viewer" in cfg.roles
+        assert cfg.roles["viewer"].permissions == ["view_map", "view_drones"]
+    finally:
+        os.unlink(path)
+
+
+def test_parse_roles_with_wildcard():
+    """A role with '*' permission gets full access."""
+    config_data = {
+        "database_path": "/tmp/test_wildcard.db",
+        "roles": {
+            "admin": {"permissions": ["*"]},
+        },
+    }
+    path = _write_config(config_data)
+    try:
+        cfg = WebConfig(path)
+        assert cfg.roles["admin"].permissions == ["*"]
+    finally:
+        os.unlink(path)
+
+
+def test_get_role_permissions_found():
+    config_data = {
+        "database_path": "/tmp/test_get_perm.db",
+        "roles": {
+            "viewer": {"permissions": ["view_map"]},
+        },
+    }
+    path = _write_config(config_data)
+    try:
+        cfg = WebConfig(path)
+        assert cfg.get_role_permissions("viewer") == ["view_map"]
+    finally:
+        os.unlink(path)
+
+
+def test_get_role_permissions_not_found():
+    config_data = {
+        "web_interface": {
+            "database_path": "/tmp/test_get_perm_missing.db",
+            "roles": {
+                "viewer": {"permissions": ["view_map"]},
+            },
+        }
+    }
+    path = _write_config(config_data)
+    try:
+        cfg = WebConfig(path)
+        assert cfg.get_role_permissions("nonexistent") == []
+    finally:
+        os.unlink(path)
+
+
+def test_roles_in_to_dict():
+    config_data = {
+        "database_path": "/tmp/test_roles_dict.db",
+        "roles": {
+            "operator": {"permissions": ["view_map", "view_drones"]},
+        },
+    }
+    path = _write_config(config_data)
+    try:
+        cfg = WebConfig(path)
+        d = cfg.to_dict()
+        assert "roles" in d
+        assert d["roles"]["operator"]["name"] == "operator"
+        assert d["roles"]["operator"]["permissions"] == ["view_map", "view_drones"]
+    finally:
+        os.unlink(path)
+
+
+def test_roles_empty_in_to_dict():
+    """When no roles configured, to_dict still includes empty 'roles' key."""
+    config_data = {
+        "web_interface": {
+            "database_path": "/tmp/test_empty_roles_dict.db",
+        }
+    }
+    path = _write_config(config_data)
+    try:
+        cfg = WebConfig(path)
+        d = cfg.to_dict()
+        assert "roles" in d
+        assert d["roles"] == {}
+    finally:
+        os.unlink(path)
+
+
+class TestRolesHotReload:
+    """Tests for roles hot reload in reload_hot_config"""
+
+    def test_roles_reloadable(self, sample_config_yaml):
+        """Changing roles in the YAML is picked up by reload_hot_config"""
+        config_path, _ = sample_config_yaml
+
+        cfg = WebConfig(config_path)
+        assert "custom" not in cfg.roles
+
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        data["web_interface"]["roles"] = {
+            "custom": {"permissions": ["view_map"]},
+        }
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f)
+
+        cfg = cfg.reload_hot_config() or cfg
+        assert "custom" in cfg.roles
+        assert cfg.roles["custom"].permissions == ["view_map"]
+
+    def test_roles_hot_reload_logs_change(self, sample_config_yaml, caplog):
+        """reload_hot_config logs when roles change"""
+        config_path, _ = sample_config_yaml
+
+        cfg = WebConfig(config_path)
+
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        data["web_interface"]["roles"] = {
+            "custom": {"permissions": ["view_map"]},
+        }
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f)
+
+        with caplog.at_level("INFO"):
+            cfg.reload_hot_config()
+
+        assert any("Reloaded roles" in msg for msg in caplog.messages)
+
+    def test_roles_no_log_when_unchanged(self, sample_config_yaml, caplog):
+        """reload_hot_config does not log when roles haven't changed"""
+        config_path, _ = sample_config_yaml
+
+        cfg = WebConfig(config_path)
+
+        with caplog.at_level("INFO"):
+            cfg.reload_hot_config()
+
+        assert not any("Reloaded roles" in msg for msg in caplog.messages)

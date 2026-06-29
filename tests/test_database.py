@@ -1,5 +1,6 @@
 """Tests for database.py - database operations"""
 
+import hashlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -20,7 +21,7 @@ def test_schema_version_created(db):
         "SELECT MAX(version) FROM _schema_version"
     ).fetchone()[0]
     conn.close()
-    assert version == 1
+    assert version == 2
 
 
 def test_schema_version_upgrade(tmp_path):
@@ -628,3 +629,205 @@ def test_log_submission(db):
             assert s["total_records"] is not None and s["total_records"] >= 5
             return
     assert False, "test-source not found in sources"
+
+
+# --- Auth method tests ---
+
+
+def test_create_user(tmp_path):
+    db_path = tmp_path / "test_create_user.db"
+    db = WebDatabase(str(db_path))
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    user = db.create_user("Alice", "alice@example.com", "operator", "login-token-123", expires_at)
+    assert user["name"] == "Alice"
+    assert user["email"] == "alice@example.com"
+    assert user["role_name"] == "operator"
+    assert user["is_ephemeral"] == 0
+    assert user["is_active"] == 1
+    assert user["auth_method"] == "login_link"
+    assert user["id"] > 0
+
+
+def test_create_user_stores_login_token_hash(tmp_path):
+    """The login token is stored as a SHA-256 hash, not plaintext."""
+    db_path = tmp_path / "test_login_hash.db"
+    db = WebDatabase(str(db_path))
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    db.create_user("Bob", "bob@example.com", "viewer", "my-raw-token", expires_at)
+
+    import sqlite3
+    conn = sqlite3.connect(str(db_path))
+    row = conn.execute(
+        "SELECT login_token_hash FROM users WHERE name = ?", ("Bob",)
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row[0] != "my-raw-token"  # not stored in plaintext
+    assert row[0] == hashlib.sha256("my-raw-token".encode()).hexdigest()
+
+
+def test_create_ephemeral_user(tmp_path):
+    db_path = tmp_path / "test_ephemeral.db"
+    db = WebDatabase(str(db_path))
+    session_token, user_id = db.create_ephemeral_user()
+    assert len(session_token) > 0
+    assert user_id > 0
+
+    # The token can be used to look up the user
+    user = db.get_user_by_auth_token(session_token)
+    assert user is not None
+    assert user["id"] == user_id
+    assert user["is_ephemeral"] == 1
+    assert user["role_name"] == "guest"
+    assert user["auth_method"] == "ephemeral"
+    assert user["name"].startswith("Guest-")
+
+
+def test_create_ephemeral_user_multiple(tmp_path):
+    """Each ephemeral user gets a unique name."""
+    db_path = tmp_path / "test_ephemeral_multi.db"
+    db = WebDatabase(str(db_path))
+    token1, uid1 = db.create_ephemeral_user()
+    token2, uid2 = db.create_ephemeral_user()
+    assert uid1 != uid2
+    u1 = db.get_user_by_auth_token(token1)
+    u2 = db.get_user_by_auth_token(token2)
+    assert u1["name"] != u2["name"]
+
+
+def test_exchange_login_token_valid(tmp_path):
+    db_path = tmp_path / "test_exchange.db"
+    db = WebDatabase(str(db_path))
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    db.create_user("Carol", "carol@example.com", "operator", "valid-login-token", expires_at)
+
+    result = db.exchange_login_token("valid-login-token")
+    assert result is not None
+    session_token, user = result
+    assert user["name"] == "Carol"
+    assert user["role_name"] == "operator"
+
+    # The session token works for auth
+    looked_up = db.get_user_by_auth_token(session_token)
+    assert looked_up is not None
+    assert looked_up["id"] == user["id"]
+
+
+def test_exchange_login_token_single_use(tmp_path):
+    """A login token can only be used once."""
+    db_path = tmp_path / "test_single_use.db"
+    db = WebDatabase(str(db_path))
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    db.create_user("Dave", "dave@example.com", "viewer", "one-time-token", expires_at)
+
+    result1 = db.exchange_login_token("one-time-token")
+    assert result1 is not None
+
+    result2 = db.exchange_login_token("one-time-token")
+    assert result2 is None
+
+
+def test_exchange_login_token_expired(tmp_path):
+    db_path = tmp_path / "test_expired_token.db"
+    db = WebDatabase(str(db_path))
+    expires_at = datetime.now(timezone.utc) - timedelta(hours=1)  # already expired
+    db.create_user("Eve", "eve@example.com", "viewer", "expired-token", expires_at)
+
+    result = db.exchange_login_token("expired-token")
+    assert result is None
+
+
+def test_exchange_login_token_invalid(tmp_path):
+    db_path = tmp_path / "test_invalid_token.db"
+    db = WebDatabase(str(db_path))
+    result = db.exchange_login_token("nonexistent-token")
+    assert result is None
+
+
+def test_get_user_by_auth_token_valid(tmp_path):
+    db_path = tmp_path / "test_get_user.db"
+    db = WebDatabase(str(db_path))
+    token, user_id = db.create_ephemeral_user()
+    user = db.get_user_by_auth_token(token)
+    assert user is not None
+    assert user["id"] == user_id
+
+
+def test_get_user_by_auth_token_invalid(tmp_path):
+    db_path = tmp_path / "test_get_user_invalid.db"
+    db = WebDatabase(str(db_path))
+    user = db.get_user_by_auth_token("invalid-token")
+    assert user is None
+
+
+def test_get_user_by_auth_token_expired(tmp_path):
+    db_path = tmp_path / "test_get_user_expired.db"
+    db = WebDatabase(str(db_path))
+
+    # Manually insert a token with an expired date
+    import sqlite3
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("INSERT INTO users (name, role_name, is_ephemeral) VALUES (?, 'guest', 1)",
+                 ("ExpiredUser",))
+    user_id = conn.execute("SELECT id FROM users WHERE name = 'ExpiredUser'").fetchone()[0]
+    token_hash = hashlib.sha256("stale-token".encode()).hexdigest()
+    expired = datetime.now(timezone.utc) - timedelta(days=1)
+    conn.execute(
+        "INSERT INTO auth_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)",
+        (user_id, token_hash, expired),
+    )
+    conn.commit()
+    conn.close()
+
+    user = db.get_user_by_auth_token("stale-token")
+    assert user is None
+
+
+def test_revoke_token(tmp_path):
+    db_path = tmp_path / "test_revoke.db"
+    db = WebDatabase(str(db_path))
+    token, _ = db.create_ephemeral_user()
+
+    # Token works before revocation
+    assert db.get_user_by_auth_token(token) is not None
+
+    db.revoke_token(token)
+
+    # Token no longer works after revocation
+    assert db.get_user_by_auth_token(token) is None
+
+
+def test_revoke_all_user_tokens(tmp_path):
+    db_path = tmp_path / "test_revoke_all.db"
+    db = WebDatabase(str(db_path))
+    token1, uid1 = db.create_ephemeral_user()
+    token2, _ = db.create_ephemeral_user()
+
+    # Both tokens work
+    assert db.get_user_by_auth_token(token1) is not None
+    assert db.get_user_by_auth_token(token2) is not None
+
+    db.revoke_all_user_tokens(uid1)
+
+    # Only user1's tokens are revoked
+    assert db.get_user_by_auth_token(token1) is None
+    assert db.get_user_by_auth_token(token2) is not None
+
+
+def test_revoke_nonexistent_token(tmp_path):
+    """Revoking a nonexistent token does not raise."""
+    db_path = tmp_path / "test_revoke_nonexistent.db"
+    db = WebDatabase(str(db_path))
+    db.revoke_token("i-dont-exist")  # should not raise
+
+
+def test_create_user_defaults(tmp_path):
+    """A user with 'guest' role is created correctly."""
+    db_path = tmp_path / "test_user_defaults.db"
+    db = WebDatabase(str(db_path))
+    import hashlib
+    expires_at = datetime.now(timezone.utc) + timedelta(days=1)
+    user = db.create_user("GuestUser", "", "guest", "guest-token", expires_at)
+    assert user["role_name"] == "guest"
+    assert user["auth_method"] == "login_link"
+    assert user["is_active"] == 1

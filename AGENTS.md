@@ -146,6 +146,107 @@ All POST endpoints in `app.py` are protected by `flask_wtf.csrf.CSRFProtect` (ex
 
 - `FLASK_SECRET_KEY` — env var for a persistent secret key. **Required in production** (set `FLASK_ENV=production` to enforce). In dev, a random key is auto-generated with a warning.
 
+## Authentication & Authorization
+
+### How Auth Works
+
+The app uses a lightweight token-based auth system:
+
+1. **Session tokens** are stored in `localStorage['auth_token']` and sent as the `X-Auth-Token` header on every API request.
+2. **Ephemeral accounts** are auto-created for first-time visitors via `POST /api/auth/anon`.
+3. **Pre-created accounts** get a one-time login link via the `flask auth create-user` CLI command.
+4. Tokens are stored as SHA-256 hashes in the `auth_tokens` table. Login tokens are single-use.
+5. The `before_request` handler reads `X-Auth-Token` and sets `g.current_user` and `g.permissions`.
+
+### Role-Based Access Control
+
+Roles are defined in `default.web_config.yaml`:
+
+```yaml
+roles:
+  operator:
+    permissions:
+      - view_map
+      - view_drones
+      - view_tracks
+      - view_operators
+      - add_waypoint
+      - delete_waypoint
+      ...
+```
+
+Use `["*"]` for full access. The frontend gates UI visibility via `UIController.hasPermission()`. Backend routes use the `@require_permission()` decorator.
+
+### CLI Commands
+
+```bash
+# Create a user with a login link
+flask auth create-user --config config/web_config.yaml "Alice" "alice@example.com" operator
+
+# List all users
+flask auth list-users --config config/web_config.yaml
+
+# Revoke all session tokens for a user
+flask auth revoke-tokens --config config/web_config.yaml 1
+```
+
+The CLI initializes the app internally (`_init_app`), so it requires the `--config` flag (or `WEB_CONFIG` env var).
+
+### Auth Endpoints
+
+| Endpoint | Method | Rate Limit | Purpose |
+|----------|--------|------------|---------|
+| `/api/auth/anon` | POST | 10/min | Create ephemeral account |
+| `/api/auth/login` | POST | 5/min | Exchange login token for session |
+| `/api/auth/me` | GET | 30/min | Get current user + permissions |
+| `/api/auth/logout` | POST | 10/min | Revoke session token |
+
+### When Adding New Permission-Gated Features
+
+1. Add the permission string to the role definitions in `default.web_config.yaml` and `docker-config/web_config.docker.yaml`
+2. Add `@require_permission('perm_name')` decorator to backend routes
+3. Use `UIController.hasPermission('perm_name')` in frontend to show/hide UI elements
+4. Update this AGENTS.md
+
+### Permission Inventory
+
+| Permission | What it gates |
+|---|---|
+| `view_map` | Map display |
+| `view_drones` | Drone markers + sidebar list |
+| `view_tracks` | Flight track polylines |
+| `view_operators` | Operator markers |
+| `view_waypoints` | Waypoint/geozone display |
+| `view_sources` | Remote sources bar |
+| `view_stats` | Analytics dropdown |
+| `view_alert_history` | Alert log modal |
+| `view_settings` | Settings panel |
+| `use_replay` | Playback controls |
+| `export_data` | CSV/GPX/KML export |
+| `add_waypoint` | Create waypoints |
+| `edit_waypoint` | Modify waypoints |
+| `delete_waypoint` | Remove waypoints |
+| `add_alias` | Create drone aliases |
+| `edit_alias` | Modify aliases |
+| `delete_alias` | Remove aliases |
+| `push_notifications` | Enable push notifications |
+| `manage_collectors` | Collector management |
+
+### Token Storage
+
+- Tokens stored in `localStorage` as `auth_token`
+- Sent as `X-Auth-Token` header (NOT `Authorization: Bearer` — that's reserved for API keys)
+- SHA-256 hashed before database storage
+- Session tokens expire after 90 days
+- Login tokens expire after 7 days (one-time use)
+
+### Logging
+
+- Successful login: `INFO` with user name and IP
+- Failed login (invalid/expired token): `WARNING` with IP
+- Ephemeral creation: `INFO` with name and IP
+- Token validation: `DEBUG` only (not visible in production)
+
 ## Testing Strategy
 
 Tests live in `tests/` with Python (`pytest`) and JavaScript (`Jest` + `jsdom`) suites.

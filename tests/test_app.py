@@ -1,7 +1,8 @@
 """Tests for app.py - Flask API endpoints"""
 
+import hashlib
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 from app import _parse_time_range
@@ -824,15 +825,28 @@ class TestApiRefresh:
 
 
 class TestApiCollectors:
-    def test_collectors_no_config(self, client):
+    def _operator_token(self, client, app):
+        import app as _app_module
+        db = _app_module.DATABASE
+        expires = datetime.now(timezone.utc) + timedelta(days=7)
+        db.create_user("OpUser", "op@example.com", "operator", "op-login", expires)
+        resp = client.post("/api/auth/login",
+            data=json.dumps({"login_token": "op-login"}),
+            content_type="application/json",
+        )
+        return resp.get_json()["token"]
+
+    def test_collectors_no_config(self, client, app):
         """With no collectors in config, returns empty list."""
-        resp = client.get("/api/collectors")
+        token = self._operator_token(client, app)
+        resp = client.get("/api/collectors", headers={"X-Auth-Token": token})
         assert resp.status_code == 200
         data = resp.get_json()
         assert data == []
 
-    def test_collectors_with_fixed(self, client, sample_config_yaml):
+    def test_collectors_with_fixed(self, client, app, sample_config_yaml):
         """A fixed collector appears in the response."""
+        token = self._operator_token(client, app)
         config_path, _ = sample_config_yaml
         import yaml
         with open(config_path, encoding="utf-8") as f:
@@ -851,7 +865,7 @@ class TestApiCollectors:
             _app_module.CONFIG = res
             _app_module._config_snapshot = res
 
-        resp = client.get("/api/collectors")
+        resp = client.get("/api/collectors", headers={"X-Auth-Token": token})
         assert resp.status_code == 200
         result = resp.get_json()
         assert len(result) == 1
@@ -860,7 +874,7 @@ class TestApiCollectors:
         assert result[0]["latitude"] == 37.78
         assert result[0]["stale"] is True
 
-    def test_collectors_with_mobile(self, client, sample_config_yaml):
+    def test_collectors_with_mobile(self, client, app, sample_config_yaml):
         """A mobile collector appears with lat/lon from DB."""
         config_path, db_path = sample_config_yaml
         import yaml
@@ -884,7 +898,8 @@ class TestApiCollectors:
         _app_module.DATABASE.update_collector_position("Mobile1", 37.77, -122.40)
         _app_module.DATABASE.log_submission("Mobile1", 0)
 
-        resp = client.get("/api/collectors")
+        token = self._operator_token(client, app)
+        resp = client.get("/api/collectors", headers={"X-Auth-Token": token})
         assert resp.status_code == 200
         result = resp.get_json()
         assert len(result) == 1
@@ -1045,3 +1060,291 @@ class TestCSRF:
         data = resp.get_json()
         assert "csrf_token" in data
         assert data["csrf_token"] is not None
+
+
+class TestAuth:
+    """Tests for authentication endpoints"""
+
+    def _get_session_token(self, client):
+        """Helper: create an ephemeral user and return the session token."""
+        resp = client.post("/api/auth/anon")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        return data["token"]
+
+    def test_anon_creates_ephemeral_user(self, client):
+        resp = client.post("/api/auth/anon")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "token" in data
+        assert len(data["token"]) > 0
+        assert "user" in data
+        assert data["user"]["role"] == "guest"
+        assert data["user"]["name"].startswith("Guest-")
+
+    def test_anon_user_has_auth_method_ephemeral(self, client, app):
+        import app as _app_module
+        token = self._get_session_token(client)
+        user = _app_module.DATABASE.get_user_by_auth_token(token)
+        assert user is not None
+        assert user["auth_method"] == "ephemeral"
+
+    def test_auth_me_unauthenticated(self, client):
+        resp = client.get("/api/auth/me")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["authenticated"] is False
+
+    def test_auth_me_authenticated(self, client):
+        token = self._get_session_token(client)
+        resp = client.get("/api/auth/me", headers={"X-Auth-Token": token})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["authenticated"] is True
+        assert "user" in data
+        assert data["user"]["role"] == "guest"
+        assert data["user"]["is_ephemeral"] is True
+        assert "permissions" in data
+
+    def test_auth_me_with_invalid_token(self, client):
+        resp = client.get("/api/auth/me", headers={"X-Auth-Token": "invalid-token"})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["authenticated"] is False
+
+    def test_auth_login_valid_token(self, client, app):
+        import app as _app_module
+        db = _app_module.DATABASE
+        expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+        db.create_user("TestUser", "test@example.com", "operator", "my-login-token", expires_at)
+
+        resp = client.post(
+            "/api/auth/login",
+            data=json.dumps({"login_token": "my-login-token"}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "token" in data
+        assert data["user"]["name"] == "TestUser"
+        assert data["user"]["role"] == "operator"
+        assert data["user"]["email"] == "test@example.com"
+
+        # Session token works
+        me = client.get("/api/auth/me", headers={"X-Auth-Token": data["token"]})
+        assert me.get_json()["authenticated"] is True
+
+    def test_auth_login_invalid_token(self, client):
+        resp = client.post(
+            "/api/auth/login",
+            data=json.dumps({"login_token": "nonexistent"}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 401
+        data = resp.get_json()
+        assert "error" in data
+
+    def test_auth_login_expired_token(self, client, app):
+        import app as _app_module
+        db = _app_module.DATABASE
+        expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        db.create_user("ExpiredUser", "expired@example.com", "viewer", "expired-login", expires_at)
+
+        resp = client.post(
+            "/api/auth/login",
+            data=json.dumps({"login_token": "expired-login"}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 401
+
+    def test_auth_login_missing_token(self, client):
+        resp = client.post(
+            "/api/auth/login",
+            data=json.dumps({}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 400
+
+    def test_auth_logout_revokes_token(self, client):
+        token = self._get_session_token(client)
+
+        # Token works before logout
+        me_before = client.get("/api/auth/me", headers={"X-Auth-Token": token})
+        assert me_before.get_json()["authenticated"] is True
+
+        resp = client.post(
+            "/api/auth/logout",
+            data=json.dumps({"token": token}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["success"] is True
+
+        # Token no longer works after logout
+        me_after = client.get("/api/auth/me", headers={"X-Auth-Token": token})
+        assert me_after.get_json()["authenticated"] is False
+
+    def test_auth_logout_from_header(self, client):
+        """Logout also works when token is in X-Auth-Token header."""
+        token = self._get_session_token(client)
+
+        resp = client.post(
+            "/api/auth/logout",
+            headers={"X-Auth-Token": token},
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["success"] is True
+
+        # Token revoked
+        me = client.get("/api/auth/me", headers={"X-Auth-Token": token})
+        assert me.get_json()["authenticated"] is False
+
+    def test_auth_logout_without_token(self, client):
+        """Logout without a token still returns success."""
+        resp = client.post(
+            "/api/auth/logout",
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["success"] is True
+
+    def test_config_includes_auth_block(self, client):
+        resp = client.get("/api/config")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "auth" in data
+        assert "authenticated" in data["auth"]
+        assert data["auth"]["authenticated"] is False
+        assert "permissions" in data["auth"]
+
+    def test_config_auth_block_authenticated(self, client):
+        token = self._get_session_token(client)
+        resp = client.get("/api/config", headers={"X-Auth-Token": token})
+        data = resp.get_json()
+        assert data["auth"]["authenticated"] is True
+
+    def test_auth_me_returns_permissions(self, client):
+        token = self._get_session_token(client)
+        resp = client.get("/api/auth/me", headers={"X-Auth-Token": token})
+        data = resp.get_json()
+        assert "permissions" in data
+        # Guest role has read-only permissions
+        assert data["permissions"] == [
+            "view_map", "view_drones", "view_tracks",
+            "view_operators", "view_waypoints", "use_replay",
+        ]
+
+    def test_login_single_use(self, client, app):
+        """A login token can only be used once."""
+        import app as _app_module
+        db = _app_module.DATABASE
+        expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+        db.create_user("SingleUse", "single@example.com", "viewer", "single-use-token", expires_at)
+
+        resp1 = client.post(
+            "/api/auth/login",
+            data=json.dumps({"login_token": "single-use-token"}),
+            content_type="application/json",
+        )
+        assert resp1.status_code == 200
+
+        resp2 = client.post(
+            "/api/auth/login",
+            data=json.dumps({"login_token": "single-use-token"}),
+            content_type="application/json",
+        )
+        assert resp2.status_code == 401
+
+    def test_login_upgrades_ephemeral_in_place(self, client, app):
+        """Ephemeral user upgraded in-place when login link is used in same session."""
+        import app as _app_module
+        db = _app_module.DATABASE
+
+        # Create an ephemeral session first
+        anon = client.post("/api/auth/anon")
+        ephemeral_token = anon.get_json()["token"]
+
+        # Create a pre-created user
+        expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+        db.create_user("Alice", "alice@example.com", "operator", "alice-login", expires_at)
+
+        # Login with the ephemeral session's X-Auth-Token
+        resp = client.post(
+            "/api/auth/login",
+            data=json.dumps({"login_token": "alice-login"}),
+            content_type="application/json",
+            headers={"X-Auth-Token": ephemeral_token},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["token"] == ephemeral_token
+        assert data["user"]["name"] == "Alice"
+        assert data["user"]["email"] == "alice@example.com"
+        assert data["user"]["role"] == "operator"
+
+        # Verify the upgraded session works
+        me = client.get("/api/auth/me", headers={"X-Auth-Token": ephemeral_token})
+        me_data = me.get_json()
+        assert me_data["authenticated"] is True
+        assert me_data["user"]["name"] == "Alice"
+        assert me_data["user"]["role"] == "operator"
+
+        # Verify the pre-created user was deactivated (login token gone)
+        reuse = client.post(
+            "/api/auth/login",
+            data=json.dumps({"login_token": "alice-login"}),
+            content_type="application/json",
+        )
+        assert reuse.status_code == 401
+
+    def test_login_does_not_upgrade_without_existing_session(self, client, app):
+        """Normal login (no X-Auth-Token) creates a fresh session as before."""
+        import app as _app_module
+        db = _app_module.DATABASE
+
+        expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+        db.create_user("Bob", "bob@example.com", "viewer", "bob-login", expires_at)
+
+        resp = client.post(
+            "/api/auth/login",
+            data=json.dumps({"login_token": "bob-login"}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["token"] != ""  # fresh session token
+        assert data["user"]["name"] == "Bob"
+
+    def test_login_does_not_upgrade_non_ephemeral_session(self, client, app):
+        """An already-logged-in (non-ephemeral) session is not upgraded."""
+        import app as _app_module
+        db = _app_module.DATABASE
+
+        # Create a real user and login first
+        expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+        db.create_user("Carol", "carol@example.com", "viewer", "carol-login-1", expires_at)
+
+        resp1 = client.post(
+            "/api/auth/login",
+            data=json.dumps({"login_token": "carol-login-1"}),
+            content_type="application/json",
+        )
+        existing_token = resp1.get_json()["token"]
+
+        # Create another user and login while holding the first session
+        db.create_user("Dave", "dave@example.com", "operator", "dave-login", expires_at)
+
+        resp2 = client.post(
+            "/api/auth/login",
+            data=json.dumps({"login_token": "dave-login"}),
+            content_type="application/json",
+            headers={"X-Auth-Token": existing_token},
+        )
+        assert resp2.status_code == 200
+        data = resp2.get_json()
+        # Token should be a new session token (Carol's session is not ephemeral)
+        assert data["token"] != existing_token
+        assert data["user"]["name"] == "Dave"
+        assert data["user"]["role"] == "operator"

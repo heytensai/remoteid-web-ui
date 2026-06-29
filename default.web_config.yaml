@@ -98,6 +98,50 @@ web_interface:
     #   description: "Helipad and landing area"
     #   alert_enabled: true      # Enable geozone alerting (default: false)
 
+  # Role-based access control
+  # Each role defines a set of permissions that determine what features
+  # are available to users with that role. Use ["*"] for full access.
+  roles:
+    operator:
+      permissions:
+        - view_map
+        - view_drones
+        - view_tracks
+        - view_operators
+        - view_waypoints
+        - view_sources
+        - view_stats
+        - view_alert_history
+        - view_settings
+        - use_replay
+        - export_data
+        - add_waypoint
+        - edit_waypoint
+        - delete_waypoint
+        - add_alias
+        - edit_alias
+        - delete_alias
+        - push_notifications
+        - manage_collectors
+    viewer:
+      permissions:
+        - view_map
+        - view_drones
+        - view_tracks
+        - view_operators
+        - view_waypoints
+        - view_alert_history
+        - use_replay
+        - push_notifications
+    guest:
+      permissions:
+        - view_map
+        - view_drones
+        - view_tracks
+        - view_operators
+        - view_waypoints
+        - use_replay
+
   # Background session detection
   # Periodically recomputes session boundaries based on time gaps between
   # position records for each drone.  Disabled by default; enable if your

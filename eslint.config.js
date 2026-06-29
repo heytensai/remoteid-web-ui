@@ -29,6 +29,7 @@ module.exports = [
         requestAnimationFrame: 'readonly',
         cancelAnimationFrame: 'readonly',
         Notification: 'readonly',
+        URL: 'readonly',
       },
     },
     rules: {

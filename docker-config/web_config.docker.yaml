@@ -71,6 +71,48 @@ web_interface:
       category: "demo"
       alert_enabled: true
 
+  # Role-based access control
+  roles:
+    operator:
+      permissions:
+        - view_map
+        - view_drones
+        - view_tracks
+        - view_operators
+        - view_waypoints
+        - view_sources
+        - view_stats
+        - view_alert_history
+        - view_settings
+        - use_replay
+        - export_data
+        - add_waypoint
+        - edit_waypoint
+        - delete_waypoint
+        - add_alias
+        - edit_alias
+        - delete_alias
+        - push_notifications
+        - manage_collectors
+    viewer:
+      permissions:
+        - view_map
+        - view_drones
+        - view_tracks
+        - view_operators
+        - view_waypoints
+        - view_alert_history
+        - use_replay
+        - push_notifications
+    guest:
+      permissions:
+        - view_map
+        - view_drones
+        - view_tracks
+        - view_operators
+        - view_waypoints
+        - use_replay
+
   # Background session detection
   session_detection:
     enabled: false
