@@ -21,7 +21,7 @@ def test_schema_version_created(db):
         "SELECT MAX(version) FROM _schema_version"
     ).fetchone()[0]
     conn.close()
-    assert version == 2
+    assert version == 3
 
 
 def test_schema_version_upgrade(tmp_path):

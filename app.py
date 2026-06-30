@@ -1354,7 +1354,7 @@ def _init_app(config_path: str):
         PUSH_SERVICE = None
         logger.info("Push notification service not available")
 
-    SESSION_SCHEDULER = SessionScheduler(CONFIG, CONFIG.database_path, alert_engine=ALERT_ENGINE)
+    SESSION_SCHEDULER = SessionScheduler(CONFIG, CONFIG.database_path, alert_engine=ALERT_ENGINE, database=DATABASE)
 
     global _config_snapshot  # noqa: PLW0603  # pylint: disable=global-statement
     _config_snapshot = CONFIG

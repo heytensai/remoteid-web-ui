@@ -36,11 +36,12 @@ class SessionScheduler:
     so toggling ``enabled`` in the YAML file takes effect within one interval.
     """
 
-    def __init__(self, config, db_path: str, alert_engine=None):
+    def __init__(self, config, db_path: str, alert_engine=None, database=None):
         """create"""
         self._config = config
         self._db_path = db_path
         self._alert_engine = alert_engine
+        self._database = database
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         # Start from the oldest record that hasn't been session-detected yet,
@@ -86,7 +87,7 @@ class SessionScheduler:
 
             if sd.enabled:
                 try:
-                    summary = process_database(
+                    summary, affected_uas = process_database(
                         self._db_path,
                         sd.gap_threshold,
                         dry_run=False,
@@ -96,6 +97,9 @@ class SessionScheduler:
                         "Session detection complete (gap=%ds): %s",
                         sd.gap_threshold, summary,
                     )
+                    # Rebuild materialized latest_positions for affected UAS only
+                    if self._database and affected_uas:
+                        self._database.rebuild_latest_positions(affected_uas)
                 except sqlite3.Error:
                     logger.exception("Session detection run failed")
             else:

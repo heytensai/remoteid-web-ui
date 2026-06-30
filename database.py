@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger(__name__)
 
 # Current schema version — bump this and add a migration in _migrate()
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _adapt_datetime(dt: datetime) -> str:
@@ -214,6 +214,32 @@ class WebDatabase:
         "ON auth_tokens(user_id)"
         )
 
+        # Materialized latest_positions table — O(sessions) instead of O(rows)
+        conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS latest_positions(
+            uas_id TEXT NOT NULL,
+            computed_session_id TEXT NOT NULL DEFAULT '',
+            max_ts DATETIME NOT NULL,
+            min_ts DATETIME NOT NULL,
+            latitude REAL,
+            longitude REAL,
+            altitude REAL,
+            operator_id TEXT,
+            operator_latitude REAL,
+            operator_longitude REAL,
+            source TEXT,
+            collector_latitude REAL,
+            collector_longitude REAL,
+            PRIMARY KEY (uas_id, computed_session_id)
+        )
+        """
+        )
+        conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_lp_max_ts "
+        "ON latest_positions(max_ts)"
+        )
+
         conn.commit()
         self._ensure_schema_version(conn)
         logger.debug("Database initialized at %s", self.db_path)
@@ -285,6 +311,118 @@ class WebDatabase:
             )
             from_version = 2
 
+        if from_version == 2:
+            WebDatabase._ensure_latest_positions_table(conn)
+            WebDatabase._backfill_latest_positions(conn)
+            from_version = 3
+
+    @staticmethod
+    def _ensure_latest_positions_table(conn: sqlite3.Connection):
+        """Create the latest_positions table and index (idempotent)."""
+        conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS latest_positions(
+            uas_id TEXT NOT NULL,
+            computed_session_id TEXT NOT NULL DEFAULT '',
+            max_ts DATETIME NOT NULL,
+            min_ts DATETIME NOT NULL,
+            latitude REAL,
+            longitude REAL,
+            altitude REAL,
+            operator_id TEXT,
+            operator_latitude REAL,
+            operator_longitude REAL,
+            source TEXT,
+            collector_latitude REAL,
+            collector_longitude REAL,
+            PRIMARY KEY (uas_id, computed_session_id)
+        )
+        """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lp_max_ts "
+            "ON latest_positions(max_ts)"
+        )
+
+    @staticmethod
+    def _backfill_latest_positions(conn: sqlite3.Connection):
+        """Populate latest_positions from existing remoteid data (one-time migration)."""
+        conn.execute(
+        """
+        INSERT INTO latest_positions
+            (uas_id, computed_session_id, max_ts, min_ts,
+             latitude, longitude, altitude, operator_id,
+             operator_latitude, operator_longitude, source,
+             collector_latitude, collector_longitude)
+        SELECT
+            uas_id,
+            COALESCE(computed_session_id, ''),
+            timestamp,
+            MIN(timestamp) OVER (
+                PARTITION BY uas_id, COALESCE(computed_session_id, '')
+            ),
+            latitude, longitude, altitude, operator_id,
+            operator_latitude, operator_longitude, source,
+            collector_latitude, collector_longitude
+        FROM (
+            SELECT *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY uas_id, COALESCE(computed_session_id, '')
+                    ORDER BY timestamp DESC
+                ) as rn
+            FROM remoteid
+        )
+        WHERE rn = 1
+        """
+        )
+
+    def rebuild_latest_positions(self, uas_ids: Optional[List[str]] = None):
+        """Rebuild latest_positions from remoteid for specific UAS IDs (or all).
+
+        Called after session re-detection to fix up the materialized table.
+        """
+        conn = self._get_conn()
+        if uas_ids:
+            placeholders = ','.join('?' for _ in uas_ids)
+            conn.execute(
+                f"DELETE FROM latest_positions WHERE uas_id IN ({placeholders})",
+                uas_ids,
+            )
+            conn.execute(
+                f"""
+                INSERT INTO latest_positions
+                    (uas_id, computed_session_id, max_ts, min_ts,
+                     latitude, longitude, altitude, operator_id,
+                     operator_latitude, operator_longitude, source,
+                     collector_latitude, collector_longitude)
+                SELECT
+                    uas_id,
+                    COALESCE(computed_session_id, ''),
+                    timestamp,
+                    MIN(timestamp) OVER (
+                        PARTITION BY uas_id, COALESCE(computed_session_id, '')
+                    ),
+                    latitude, longitude, altitude, operator_id,
+                    operator_latitude, operator_longitude, source,
+                    collector_latitude, collector_longitude
+                FROM (
+                    SELECT *,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY uas_id, COALESCE(computed_session_id, '')
+                            ORDER BY timestamp DESC
+                        ) as rn
+                    FROM remoteid
+                    WHERE uas_id IN ({placeholders})
+                )
+                WHERE rn = 1
+                """,
+                uas_ids,
+            )
+        else:
+            conn.execute("DELETE FROM latest_positions")
+            self._backfill_latest_positions(conn)
+        conn.commit()
+
     def _get_conn(self) -> sqlite3.Connection:
         """Get a thread-local database connection, creating one if needed.
 
@@ -296,9 +434,10 @@ class WebDatabase:
             conn = sqlite3.connect(
                 self.db_path,
                 detect_types=sqlite3.PARSE_DECLTYPES,
-                timeout=5,
+                timeout=10,
             )
             conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=10000")
             self._tlocal.conn = conn
         return conn
 
@@ -439,6 +578,7 @@ class WebDatabase:
                 dest_conn = self._get_conn()
                 # Track session state per UAS for this import batch
                 uas_sessions = {}
+                affected_uas_ids = set()
 
                 for row in cursor:
                     # Skip if already exists (check uas_id + timestamp)
@@ -503,11 +643,16 @@ class WebDatabase:
                             },
                         )
                         count += 1
+                        affected_uas_ids.add(uas_id)
 
                         # Update session tracking for this batch
                         uas_sessions[uas_id] = (timestamp, computed_session_id)
 
                 dest_conn.commit()
+
+            # Update materialized latest_positions for affected UAS IDs
+            if count > 0:
+                self.rebuild_latest_positions(list(affected_uas_ids))
 
             # Update sync log
             self._update_sync_log(source_name, count)
@@ -747,56 +892,30 @@ class WebDatabase:
     def _get_drones_query(
         self, start_time: datetime, end_time: datetime
     ) -> List[Dict]:
-        """Execute the base get_drones query returning all drones in the time window."""
+        """Return latest position per session in the time window.
+
+        Uses the materialized ``latest_positions`` table (O(sessions) instead of
+        O(rows) in the time window).
+        """
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
-        results = []
-
         cursor = conn.execute(
             """
-            SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
-                   r1.timestamp, r1.operator_id, r1.operator_latitude, r1.operator_longitude,
-                   r1.source, r1.computed_session_id,
-                   r1.collector_latitude, r1.collector_longitude,
-                   r2.min_ts as session_start
-            FROM remoteid r1
-            INNER JOIN (
-                SELECT uas_id, computed_session_id, MAX(timestamp) as max_ts, MIN(timestamp) as min_ts
-                FROM remoteid
-                WHERE timestamp BETWEEN ? AND ?
-                AND computed_session_id IS NOT NULL
-                GROUP BY uas_id, computed_session_id
-            ) r2 ON r1.uas_id = r2.uas_id
-                AND r1.computed_session_id = r2.computed_session_id
-                AND r1.timestamp = r2.max_ts
-            ORDER BY r1.uas_id, r1.computed_session_id
+            SELECT
+                uas_id,
+                NULLIF(computed_session_id, '') as computed_session_id,
+                max_ts as timestamp,
+                min_ts as session_start,
+                latitude, longitude, altitude, operator_id,
+                operator_latitude, operator_longitude, source,
+                collector_latitude, collector_longitude
+            FROM latest_positions
+            WHERE max_ts BETWEEN ? AND ?
+            ORDER BY uas_id, computed_session_id
         """,
             (start_time, end_time),
         )
-        results.extend(cursor.fetchall())
-
-        cursor = conn.execute(
-            """
-            SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
-                   r1.timestamp, r1.operator_id, r1.operator_latitude, r1.operator_longitude,
-                   r1.source, r1.computed_session_id,
-                   r1.collector_latitude, r1.collector_longitude,
-                   r2.min_ts as session_start
-            FROM remoteid r1
-            INNER JOIN (
-                SELECT uas_id, MAX(timestamp) as max_ts, MIN(timestamp) as min_ts
-                FROM remoteid
-                WHERE timestamp BETWEEN ? AND ?
-                AND computed_session_id IS NULL
-                GROUP BY uas_id
-            ) r2 ON r1.uas_id = r2.uas_id AND r1.timestamp = r2.max_ts
-            ORDER BY r1.uas_id
-        """,
-            (start_time, end_time),
-        )
-        results.extend(cursor.fetchall())
-
-        return [self._sanitize_record(dict(row)) for row in results]
+        return [self._sanitize_record(dict(row)) for row in cursor.fetchall()]
 
     def get_drones(self, start_time: datetime, end_time: datetime) -> List[Dict]:
         """Get list of unique drones seen in time window with latest positions"""
@@ -810,6 +929,10 @@ class WebDatabase:
     ) -> List[Dict]:
         """Get drones that have newer data than the client's known timestamps.
 
+        Uses the materialized ``latest_positions`` table instead of GROUP BY
+        on the full ``remoteid`` table, reducing scans from O(rows-in-window)
+        to O(sessions).
+
         Args:
             start_time: Start of time window
             end_time: End of time window
@@ -821,12 +944,10 @@ class WebDatabase:
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
 
-        # If no known timestamps, return all drones (full refresh)
         if not known_timestamps:
             return self._get_drones_query(start_time, end_time)
 
-        # Early exit: if the database has no data newer than the client's
-        # latest known timestamp, nothing has changed at all.
+        # Early exit: nothing changed since client's latest known
         most_recent = self.get_most_recent_timestamp()
         if most_recent and isinstance(most_recent, datetime):
             most_recent_str = most_recent.isoformat()
@@ -834,136 +955,77 @@ class WebDatabase:
             if known_vals and most_recent_str <= max(known_vals):
                 return []
 
-        # Build WHERE conditions for known timestamps
-        session_conditions = []
-        session_params = [start_time, end_time]
-        no_session_conditions = []
-        no_session_params = [start_time, end_time]
-
-        for key, ts in known_timestamps.items():
-            if ':' in key:
-                uas_id, session_id = key.split(':', 1)
-                if session_id != 'unknown':
-                    session_conditions.append(
-                        "(uas_id = ? AND computed_session_id = ? AND timestamp > ?)"
-                    )
-                    session_params.extend([uas_id, session_id, ts])
-                else:
-                    no_session_conditions.append(
-                        "(uas_id = ? AND computed_session_id IS NULL AND timestamp > ?)"
-                    )
-                    no_session_params.extend([uas_id, ts])
-            else:
-                no_session_conditions.append(
-                    "(uas_id = ? AND computed_session_id IS NULL AND timestamp > ?)"
-                )
-                no_session_params.extend([key, ts])
-
-        results = []
-
-        # Query drones with sessions that have newer data
-        if session_conditions:
-            where_clause = " OR ".join(session_conditions)
-            cursor = conn.execute(
-                f"""
-                SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
-                       r1.timestamp, r1.operator_id, r1.operator_latitude, r1.operator_longitude,
-                       r1.source, r1.computed_session_id
-                FROM remoteid r1
-                INNER JOIN (
-                    SELECT uas_id, computed_session_id, MAX(timestamp) as max_ts
-                    FROM remoteid
-                    WHERE timestamp BETWEEN ? AND ?
-                    AND computed_session_id IS NOT NULL
-                    AND ({where_clause})
-                    GROUP BY uas_id, computed_session_id
-                ) r2 ON r1.uas_id = r2.uas_id
-                    AND r1.computed_session_id = r2.computed_session_id
-                    AND r1.timestamp = r2.max_ts
-                ORDER BY r1.uas_id, r1.computed_session_id
-            """,
-                tuple(session_params),
-            )
-            results.extend(cursor.fetchall())
-
-        # Query drones without sessions that have newer data
-        if no_session_conditions:
-            where_clause = " OR ".join(no_session_conditions)
-            cursor = conn.execute(
-                f"""
-                SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
-                       r1.timestamp, r1.operator_id, r1.operator_latitude, r1.operator_longitude,
-                       r1.source, r1.computed_session_id
-                FROM remoteid r1
-                INNER JOIN (
-                    SELECT uas_id, MAX(timestamp) as max_ts
-                    FROM remoteid
-                    WHERE timestamp BETWEEN ? AND ?
-                    AND computed_session_id IS NULL
-                    AND ({where_clause})
-                    GROUP BY uas_id
-                ) r2 ON r1.uas_id = r2.uas_id AND r1.timestamp = r2.max_ts
-                ORDER BY r1.uas_id
-            """,
-                tuple(no_session_params),
-            )
-            results.extend(cursor.fetchall())
-
-        # Find new sessions not in known_timestamps at all.
-        # Restrict the scan to data newer than the client's oldest known
-        # timestamp — sessions with data only before this point would
-        # already be known to the client.
         known_uas_sessions = set(known_timestamps.keys())
         oldest_known = (
             min(known_timestamps.values()) if known_timestamps
             else start_time.isoformat()
         )
 
-        cursor = conn.execute(
-            """
-            SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
-                   r1.timestamp, r1.operator_id, r1.operator_latitude, r1.operator_longitude,
-                   r1.source, r1.computed_session_id
-            FROM remoteid r1
-            INNER JOIN (
-                SELECT uas_id, computed_session_id, MAX(timestamp) as max_ts
-                FROM remoteid
-                WHERE timestamp BETWEEN ? AND ?
-                AND computed_session_id IS NOT NULL
-                AND timestamp > ?
-                GROUP BY uas_id, computed_session_id
-            ) r2 ON r1.uas_id = r2.uas_id
-                AND r1.computed_session_id = r2.computed_session_id
-                AND r1.timestamp = r2.max_ts
-            ORDER BY r1.uas_id, r1.computed_session_id
-        """,
-            (start_time, end_time, oldest_known),
-        )
-        for row in cursor.fetchall():
-            key = f"{row['uas_id']}:{row['computed_session_id']}"
-            if key not in known_uas_sessions:
-                results.append(row)
+        conditions = []
+        params = []
 
+        for key, ts in known_timestamps.items():
+            if ':' in key:
+                uas_id, session_id = key.split(':', 1)
+                if session_id != 'unknown':
+                    conditions.append(
+                        "(uas_id = ? AND computed_session_id = ? AND max_ts > ?)"
+                    )
+                    params.extend([uas_id, session_id, ts])
+                else:
+                    conditions.append(
+                        "(uas_id = ? AND computed_session_id = '' AND max_ts > ?)"
+                    )
+                    params.extend([uas_id, ts])
+            else:
+                conditions.append(
+                    "(uas_id = ? AND computed_session_id = '' AND max_ts > ?)"
+                )
+                params.extend([key, ts])
+
+        results = []
+
+        # Known sessions — query latest_positions directly
+        if conditions:
+            where_clause = " OR ".join(conditions)
+            cursor = conn.execute(
+                f"""
+                SELECT
+                    uas_id,
+                    NULLIF(computed_session_id, '') as computed_session_id,
+                    max_ts as timestamp, min_ts as session_start,
+                    latitude, longitude, altitude, operator_id,
+                    operator_latitude, operator_longitude, source,
+                    collector_latitude, collector_longitude
+                FROM latest_positions
+                WHERE ({where_clause})
+                ORDER BY uas_id, computed_session_id
+            """,
+                params,
+            )
+            results.extend(cursor.fetchall())
+
+        # New sessions (not in known_timestamps).
+        # Only scan sessions with max_ts > client's oldest known ts.
         cursor = conn.execute(
             """
-            SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
-                   r1.timestamp, r1.operator_id, r1.operator_latitude, r1.operator_longitude,
-                   r1.source, r1.computed_session_id
-            FROM remoteid r1
-            INNER JOIN (
-                SELECT uas_id, MAX(timestamp) as max_ts
-                FROM remoteid
-                WHERE timestamp BETWEEN ? AND ?
-                AND computed_session_id IS NULL
-                AND timestamp > ?
-                GROUP BY uas_id
-            ) r2 ON r1.uas_id = r2.uas_id AND r1.timestamp = r2.max_ts
-            ORDER BY r1.uas_id
+            SELECT
+                uas_id,
+                NULLIF(computed_session_id, '') as computed_session_id,
+                max_ts as timestamp, min_ts as session_start,
+                latitude, longitude, altitude, operator_id,
+                operator_latitude, operator_longitude, source,
+                collector_latitude, collector_longitude
+            FROM latest_positions
+            WHERE max_ts BETWEEN ? AND ?
+              AND max_ts > ?
+            ORDER BY uas_id, computed_session_id
         """,
             (start_time, end_time, oldest_known),
         )
         for row in cursor.fetchall():
-            key = f"{row['uas_id']}:unknown"
+            sid = row['computed_session_id'] or 'unknown'
+            key = f"{row['uas_id']}:{sid}"
             if key not in known_uas_sessions:
                 results.append(row)
 
@@ -1267,6 +1329,9 @@ class WebDatabase:
             ))
             uas_sessions[uas_id] = (timestamp, computed_session_id)
 
+        # Collect UAS IDs with new data for latest_positions rebuild
+        affected_uas_ids = list(dict.fromkeys(r[3] for r in rows))
+
         conn.executemany(
             """
             INSERT OR IGNORE INTO remoteid
@@ -1283,6 +1348,10 @@ class WebDatabase:
 
         after = conn.execute("SELECT COUNT(*) FROM remoteid").fetchone()[0]
         inserted = after - before
+
+        # Update materialized latest_positions for affected UAS IDs
+        if inserted > 0:
+            self.rebuild_latest_positions(affected_uas_ids)
 
         return inserted, errors, most_recent
 

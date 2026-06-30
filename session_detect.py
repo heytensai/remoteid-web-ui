@@ -200,7 +200,7 @@ def process_database(
 
     if not db_path.exists():
         logger.error("Database not found: %s", db_path)
-        return "database not found"
+        return "database not found", []
 
     logger.debug("Processing database: %s", db_path)
     logger.debug("Gap threshold: %i seconds", gap_threshold)
@@ -248,7 +248,7 @@ def process_database(
     if dry_run:
         logger.debug("(Dry run - no changes made)")
 
-    return f"{len(uas_list)} UAS, {total_records} records, {total_sessions} sessions detected"
+    return f"{len(uas_list)} UAS, {total_records} records, {total_sessions} sessions detected", uas_list
 
 
 def main():

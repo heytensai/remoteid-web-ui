@@ -9,6 +9,7 @@ import pytest
 @pytest.fixture
 def mock_process_database():
     with patch("session_scheduler.process_database") as mock:
+        mock.return_value = ("0 UAS, 0 records, 0 sessions detected", [])
         yield mock
 
 

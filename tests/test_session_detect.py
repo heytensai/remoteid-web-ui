@@ -204,14 +204,16 @@ class TestAnalyzeSessions:
 
 class TestProcessDatabase:
     def test_process_database(self, populated_db):
-        result = process_database(populated_db, 600)
+        result, uas_list = process_database(populated_db, 600)
         assert "UAS" in result
         assert "sessions" in result
+        assert isinstance(uas_list, list)
 
     def test_process_database_dry_run(self, populated_db):
         """Dry run doesn't modify the DB."""
-        result = process_database(populated_db, 600, dry_run=True)
+        result, uas_list = process_database(populated_db, 600, dry_run=True)
         assert "dry" not in result or "dry" not in result.lower()
+        assert isinstance(uas_list, list)
         import sqlite3
         conn = sqlite3.connect(populated_db, detect_types=sqlite3.PARSE_DECLTYPES)
         cursor = conn.execute("SELECT computed_session_id FROM remoteid LIMIT 1")
@@ -220,18 +222,22 @@ class TestProcessDatabase:
         assert val is None
 
     def test_process_database_force(self, populated_db):
-        result = process_database(populated_db, 600, force=True)
+        result, uas_list = process_database(populated_db, 600, force=True)
         assert "UAS" in result
+        assert isinstance(uas_list, list)
 
     def test_process_database_since(self, populated_db):
         now = datetime.now(timezone.utc)
-        result = process_database(populated_db, 600, since=now - timedelta(minutes=20))
+        result, uas_list = process_database(populated_db, 600, since=now - timedelta(minutes=20))
         assert "UAS" in result
+        assert isinstance(uas_list, list)
 
     def test_process_database_not_found(self):
-        result = process_database("/nonexistent/db.sqlite", 600)
+        result, uas_list = process_database("/nonexistent/db.sqlite", 600)
         assert result == "database not found"
+        assert uas_list == []
 
     def test_process_database_empty(self, empty_db):
-        result = process_database(empty_db, 600)
+        result, uas_list = process_database(empty_db, 600)
         assert "0 UAS" in result
+        assert isinstance(uas_list, list)
