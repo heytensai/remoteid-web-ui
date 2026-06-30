@@ -296,6 +296,7 @@ class WebDatabase:
             conn = sqlite3.connect(
                 self.db_path,
                 detect_types=sqlite3.PARSE_DECLTYPES,
+                timeout=5,
             )
             conn.execute("PRAGMA journal_mode=WAL")
             self._tlocal.conn = conn
@@ -421,7 +422,7 @@ class WebDatabase:
             )
 
             with sqlite3.connect(
-                source_db_path, detect_types=sqlite3.PARSE_DECLTYPES
+                source_db_path, detect_types=sqlite3.PARSE_DECLTYPES, timeout=5
             ) as src_conn:
                 if last_sync:
                     cursor = src_conn.execute(
@@ -681,7 +682,11 @@ class WebDatabase:
         conn.commit()
 
     def get_all_sources(self) -> List[Dict]:
-        """Get all unique data sources from sync_log and remoteid tables"""
+        """Get all unique data sources from sync_log and remoteid tables.
+
+        Each entry includes ``last_data`` (most recent position timestamp)
+        so callers don't need an extra per-source query.
+        """
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
         # Get sources from sync_log
@@ -711,13 +716,20 @@ class WebDatabase:
                     return None
             return None
 
+        # Build last_data lookup from remoteid data
+        data_lookup = {}
+        for row in data_rows:
+            data_lookup[row["source"]] = _parse_ts(row["last_ts"])
+
         # Merge: sync_log entries take priority, supplement with remoteid-only sources
         source_map = {}
         for row in sync_rows:
-            source_map[row["source"]] = {
-                "source": row["source"],
+            name = row["source"]
+            source_map[name] = {
+                "source": name,
                 "last_sync": _parse_ts(row["last_sync"]),
                 "total_records": row["total_records"],
+                "last_data": data_lookup.get(name),
             }
 
         for row in data_rows:
@@ -727,6 +739,7 @@ class WebDatabase:
                     "source": name,
                     "last_sync": _parse_ts(row["last_ts"]),
                     "total_records": None,
+                    "last_data": _parse_ts(row["last_ts"]),
                 }
 
         return sorted(source_map.values(), key=lambda s: s["source"])
@@ -812,6 +825,15 @@ class WebDatabase:
         if not known_timestamps:
             return self._get_drones_query(start_time, end_time)
 
+        # Early exit: if the database has no data newer than the client's
+        # latest known timestamp, nothing has changed at all.
+        most_recent = self.get_most_recent_timestamp()
+        if most_recent and isinstance(most_recent, datetime):
+            most_recent_str = most_recent.isoformat()
+            known_vals = list(known_timestamps.values())
+            if known_vals and most_recent_str <= max(known_vals):
+                return []
+
         # Build WHERE conditions for known timestamps
         session_conditions = []
         session_params = [start_time, end_time]
@@ -887,11 +909,16 @@ class WebDatabase:
             )
             results.extend(cursor.fetchall())
 
-        # Also include drones that are NEW (not in known_timestamps at all)
-        # We need to find drones in the time window that aren't in known_timestamps
+        # Find new sessions not in known_timestamps at all.
+        # Restrict the scan to data newer than the client's oldest known
+        # timestamp — sessions with data only before this point would
+        # already be known to the client.
         known_uas_sessions = set(known_timestamps.keys())
+        oldest_known = (
+            min(known_timestamps.values()) if known_timestamps
+            else start_time.isoformat()
+        )
 
-        # Get all drones in time window, then filter out known ones
         cursor = conn.execute(
             """
             SELECT r1.uas_id, r1.latitude, r1.longitude, r1.altitude,
@@ -903,13 +930,14 @@ class WebDatabase:
                 FROM remoteid
                 WHERE timestamp BETWEEN ? AND ?
                 AND computed_session_id IS NOT NULL
+                AND timestamp > ?
                 GROUP BY uas_id, computed_session_id
             ) r2 ON r1.uas_id = r2.uas_id
                 AND r1.computed_session_id = r2.computed_session_id
                 AND r1.timestamp = r2.max_ts
             ORDER BY r1.uas_id, r1.computed_session_id
         """,
-            (start_time, end_time),
+            (start_time, end_time, oldest_known),
         )
         for row in cursor.fetchall():
             key = f"{row['uas_id']}:{row['computed_session_id']}"
@@ -927,11 +955,12 @@ class WebDatabase:
                 FROM remoteid
                 WHERE timestamp BETWEEN ? AND ?
                 AND computed_session_id IS NULL
+                AND timestamp > ?
                 GROUP BY uas_id
             ) r2 ON r1.uas_id = r2.uas_id AND r1.timestamp = r2.max_ts
             ORDER BY r1.uas_id
         """,
-            (start_time, end_time),
+            (start_time, end_time, oldest_known),
         )
         for row in cursor.fetchall():
             key = f"{row['uas_id']}:unknown"
@@ -1292,27 +1321,21 @@ class WebDatabase:
         active_alerts, and total_alerts_in_window.
         """
         conn = self._get_conn()
-        # Total unique drones
+        # Total unique drones, distinct sessions, and total positions in one pass
         cursor = conn.execute(
-            "SELECT COUNT(DISTINCT uas_id) FROM remoteid WHERE timestamp BETWEEN ? AND ?",
+            """
+            SELECT
+                COUNT(DISTINCT uas_id),
+                COUNT(DISTINCT CASE WHEN computed_session_id IS NOT NULL THEN computed_session_id END),
+                COUNT(*)
+            FROM remoteid WHERE timestamp BETWEEN ? AND ?
+            """,
             (start_time, end_time),
         )
-        total_drones = cursor.fetchone()[0] or 0
-
-        # Total distinct sessions
-        cursor = conn.execute(
-            "SELECT COUNT(DISTINCT computed_session_id) FROM remoteid "
-            "WHERE timestamp BETWEEN ? AND ? AND computed_session_id IS NOT NULL",
-            (start_time, end_time),
-        )
-        total_sessions = cursor.fetchone()[0] or 0
-
-        # Total positions
-        cursor = conn.execute(
-            "SELECT COUNT(*) FROM remoteid WHERE timestamp BETWEEN ? AND ?",
-            (start_time, end_time),
-        )
-        total_positions = cursor.fetchone()[0] or 0
+        row = cursor.fetchone()
+        total_drones = row[0] or 0
+        total_sessions = row[1] or 0
+        total_positions = row[2] or 0
 
         # Active geozone events
         cursor = conn.execute(

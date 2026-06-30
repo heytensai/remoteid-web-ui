@@ -45,7 +45,7 @@ def get_uas_list(db_path: str, since: Optional[datetime] = None) -> List[str]:
     When *since* is provided, only UAS with at least one position
     at or after that timestamp are returned.
     """
-    with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES) as conn:
+    with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES, timeout=5) as conn:
         if since is not None:
             cursor = conn.execute(
                 "SELECT DISTINCT uas_id FROM remoteid WHERE uas_id IS NOT NULL AND timestamp >= ?",
@@ -63,7 +63,7 @@ def get_positions_for_uas(db_path: str, uas_id: str) -> List[Tuple[int, datetime
 
     Returns list of (id, timestamp) tuples
     """
-    with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES) as conn:
+    with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES, timeout=5) as conn:
         cursor = conn.execute(
             "SELECT id, timestamp FROM remoteid WHERE uas_id = ? ORDER BY timestamp",
             (uas_id,)
@@ -111,7 +111,7 @@ def update_session_ids(db_path: str, updates: List[Tuple[str, datetime, int]]):
     Args:
         updates: List of (session_id, detected_at, id) tuples
     """
-    with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES) as conn:
+    with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES, timeout=5) as conn:
         conn.executemany(
             """UPDATE remoteid
                SET computed_session_id = ?,
@@ -127,7 +127,7 @@ def analyze_sessions(db_path: str, uas_id: Optional[str] = None) -> dict:
 
     Returns dictionary with session statistics
     """
-    with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES) as conn:
+    with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES, timeout=5) as conn:
         conn.row_factory = sqlite3.Row
 
         if uas_id:

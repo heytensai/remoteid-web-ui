@@ -516,16 +516,13 @@ def _format_utc_ts(dt):
 def get_sources():
     """Get status of all data sources (API submitters and collectors)"""
     sources = []
+    collector_names = {c.name for c in _get_config().collectors}
     for source_info in DATABASE.get_all_sources():
-        name = source_info["source"]
-        last_data = DATABASE.get_most_recent_timestamp(source=name)
-        last_sync = source_info["last_sync"]
-        is_collector = name in {c.name for c in _get_config().collectors}
         sources.append({
-            "name": name,
-            "last_sync": _format_utc_ts(last_sync),
-            "last_data": _format_utc_ts(last_data),
-            "type": "collector" if is_collector else "api",
+            "name": source_info["source"],
+            "last_sync": _format_utc_ts(source_info["last_sync"]),
+            "last_data": _format_utc_ts(source_info["last_data"]),
+            "type": "collector" if source_info["source"] in collector_names else "api",
         })
 
     return jsonify({"sources": sources})
@@ -585,14 +582,11 @@ def get_refresh():
             sources = []
             collector_names = {c.name for c in _get_config().collectors}
             for source_info in DATABASE.get_all_sources():
-                name = source_info["source"]
-                last_data = DATABASE.get_most_recent_timestamp(source=name)
-                last_sync = source_info["last_sync"]
                 sources.append({
-                    "name": name,
-                    "last_sync": _format_utc_ts(last_sync),
-                    "last_data": _format_utc_ts(last_data),
-                    "type": "collector" if name in collector_names else "api",
+                    "name": source_info["source"],
+                    "last_sync": _format_utc_ts(source_info["last_sync"]),
+                    "last_data": _format_utc_ts(source_info["last_data"]),
+                    "type": "collector" if source_info["source"] in collector_names else "api",
                 })
         except sqlite3.Error:
             logger.exception("Error getting sources in refresh")

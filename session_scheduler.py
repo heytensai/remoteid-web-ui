@@ -20,7 +20,7 @@ def _oldest_undetected_timestamp(db_path: str) -> Optional[datetime]:
     exist yet.
     """
     try:
-        with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES) as conn:
+        with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES, timeout=5) as conn:
             cursor = conn.execute(
                 "SELECT MIN(timestamp) FROM remoteid WHERE computed_session_id IS NULL"
             )
