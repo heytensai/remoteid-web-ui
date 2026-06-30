@@ -22,6 +22,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 from werkzeug.exceptions import BadRequest
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from config import WebConfig, M_PER_DEG_LAT
 from database import WebDatabase
@@ -63,6 +64,7 @@ def _get_config() -> WebConfig:
     return _config_snapshot
 
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY")
 if not app.secret_key:
     if os.environ.get("FLASK_ENV") == "production":
@@ -1012,7 +1014,7 @@ def submit_ping():
                     DATABASE.update_collector_position(source, lat_f, lon_f)
             except (ValueError, TypeError):
                 pass
-        logger.info("Heartbeat from %s", source)
+        logger.info("Heartbeat from %s (IP=%s)", source, request.remote_addr)
         return jsonify({"success": True, "source": source})
     except sqlite3.Error:
         logger.exception("Error logging heartbeat from %s", source)
