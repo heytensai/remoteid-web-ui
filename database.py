@@ -826,6 +826,69 @@ class WebDatabase:
         )
         conn.commit()
 
+    def cleanup_expired_auth_tokens(self) -> int:
+        """Delete session tokens whose expiry has passed.
+
+        Returns the number of rows deleted.
+        """
+        conn = self._get_conn()
+        count = conn.execute(
+            "DELETE FROM auth_tokens WHERE expires_at < ?",
+            (datetime.now(timezone.utc),),
+        ).rowcount
+        conn.commit()
+        return count
+
+    def cleanup_expired_login_tokens(self) -> int:
+        """Delete pre-created user records whose one-time login token has expired.
+
+        This covers both:
+        - Users with an expired login_token_expires_at (login window closed)
+        - Deactivated users (is_active = 0) whose accounts were soft-deleted
+
+        Returns the number of rows deleted.
+        """
+        conn = self._get_conn()
+        count = conn.execute(
+            "DELETE FROM users WHERE login_token_expires_at < ?",
+            (datetime.now(timezone.utc),),
+        ).rowcount
+        # Also clean up dangling auth_tokens for the deleted users
+        # (SQLite ON DELETE CASCADE is not set, so we do it manually)
+        conn.commit()
+        return count
+
+    def cleanup_orphaned_ephemeral_users(self) -> int:
+        """Delete ephemeral (guest) users whose session tokens have all expired.
+
+        A guest user with no valid session tokens can never authenticate again,
+        so its record and any leftover auth_tokens are safe to remove.
+
+        Returns the number of users deleted.
+        """
+        conn = self._get_conn()
+        now = datetime.now(timezone.utc)
+        # Find ephemeral users whose MAX(expires_at) < now (no valid tokens)
+        count = conn.execute(
+            """
+            DELETE FROM users WHERE id IN (
+                SELECT u.id FROM users u
+                LEFT JOIN auth_tokens t ON t.user_id = u.id
+                WHERE u.is_ephemeral = 1
+                GROUP BY u.id
+                HAVING MAX(t.expires_at) IS NULL
+                    OR MAX(t.expires_at) < ?
+            )
+            """,
+            (now,),
+        ).rowcount
+        # Clean up any orphaned auth_tokens (users deleted but tokens remain)
+        conn.execute(
+            "DELETE FROM auth_tokens WHERE user_id NOT IN (SELECT id FROM users)"
+        )
+        conn.commit()
+        return count
+
     def get_all_sources(self) -> List[Dict]:
         """Get all unique data sources from sync_log and remoteid tables.
 

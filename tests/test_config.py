@@ -6,7 +6,9 @@ import tempfile
 import pytest
 import yaml
 
-from config import WebConfig, MapConfig, WaypointConfig, RoleConfig
+from config import (
+    WebConfig, MapConfig, WaypointConfig, RoleConfig, MaintenanceConfig,
+)
 
 
 def test_map_config_defaults():
@@ -819,3 +821,103 @@ class TestRolesHotReload:
             cfg.reload_hot_config()
 
         assert not any("Reloaded roles" in msg for msg in caplog.messages)
+
+
+# ---------------------------------------------------------------------------
+# MaintenanceConfig
+# ---------------------------------------------------------------------------
+
+
+def test_maintenance_config_defaults():
+    """MaintenanceConfig uses all-default values when no data is given."""
+    mc = MaintenanceConfig()
+    assert mc.enabled is False
+    assert mc.interval == 3600
+    assert mc.delete_expired_tokens is True
+    assert mc.delete_expired_login_tokens is True
+    assert mc.delete_orphaned_ephemeral_users is True
+
+
+def test_maintenance_config_with_data():
+    """MaintenanceConfig parses provided values correctly."""
+    mc = MaintenanceConfig({
+        "enabled": True,
+        "interval": 7200,
+        "delete_expired_tokens": False,
+        "delete_expired_login_tokens": True,
+        "delete_orphaned_ephemeral_users": False,
+    })
+    assert mc.enabled is True
+    assert mc.interval == 7200
+    assert mc.delete_expired_tokens is False
+    assert mc.delete_expired_login_tokens is True
+    assert mc.delete_orphaned_ephemeral_users is False
+
+
+def test_maintenance_config_from_yaml():
+    """MaintenanceConfig is parsed from the web_config YAML."""
+    config_data = {
+        "web_interface": {
+            "database_path": "/tmp",
+            "maintenance": {
+                "enabled": True,
+                "interval": 1800,
+                "delete_expired_login_tokens": False,
+            },
+        }
+    }
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        yaml.dump(config_data, f)
+        path = f.name
+    try:
+        cfg = WebConfig(path)
+        assert cfg.maintenance.enabled is True
+        assert cfg.maintenance.interval == 1800
+        assert cfg.maintenance.delete_expired_tokens is True  # default
+        assert cfg.maintenance.delete_expired_login_tokens is False
+        assert cfg.maintenance.delete_orphaned_ephemeral_users is True  # default
+    finally:
+        os.unlink(path)
+
+
+def test_maintenance_config_empty_yaml():
+    """No maintenance block in YAML gives all-default values."""
+    config_data = {"web_interface": {"database_path": "/tmp"}}
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        yaml.dump(config_data, f)
+        path = f.name
+    try:
+        cfg = WebConfig(path)
+        assert cfg.maintenance.enabled is False
+        assert cfg.maintenance.interval == 3600
+        assert cfg.maintenance.delete_expired_tokens is True
+    finally:
+        os.unlink(path)
+
+
+def test_maintenance_hot_reload_logs_change(sample_config_yaml, caplog):
+    """reload_hot_config logs when maintenance config changes."""
+    config_path, _ = sample_config_yaml
+    cfg = WebConfig(config_path)
+
+    with open(config_path, encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    data["web_interface"]["maintenance"] = {"enabled": True, "interval": 7200}
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f)
+
+    with caplog.at_level("INFO"):
+        cfg.reload_hot_config()
+
+    assert any("Reloaded maintenance" in msg for msg in caplog.messages)
+
+
+def test_maintenance_no_log_when_unchanged(sample_config_yaml, caplog):
+    """reload_hot_config does not log when maintenance hasn't changed."""
+    config_path, _ = sample_config_yaml
+    cfg = WebConfig(config_path)
+
+    with caplog.at_level("INFO"):
+        cfg.reload_hot_config()
+
+    assert not any("Reloaded maintenance" in msg for msg in caplog.messages)

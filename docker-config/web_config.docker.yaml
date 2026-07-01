@@ -124,6 +124,14 @@ web_interface:
     stale_timeout: 300
     skip_known_drones: false
 
+  # Background maintenance tasks
+  maintenance:
+    enabled: false
+    interval: 3600
+    delete_expired_tokens: true
+    delete_expired_login_tokens: true
+    delete_orphaned_ephemeral_users: true
+
   # Collector positions
   collectors:
     - name: "Dev Car"

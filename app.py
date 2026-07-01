@@ -28,6 +28,7 @@ from config import WebConfig, M_PER_DEG_LAT
 from database import WebDatabase
 from session_detect import process_database as redetect_sessions
 from session_scheduler import SessionScheduler
+from maintenance_scheduler import MaintenanceScheduler
 from alert_engine import AlertEngine
 from push_service import PushService, _ensure_vapid_keys
 
@@ -41,6 +42,7 @@ logger = logging.getLogger(__name__)
 CONFIG: WebConfig = None
 DATABASE: WebDatabase = None
 SESSION_SCHEDULER: Optional[SessionScheduler] = None
+MAINTENANCE_SCHEDULER: Optional[MaintenanceScheduler] = None
 ALERT_ENGINE: Optional[AlertEngine] = None
 PUSH_SERVICE: Optional[PushService] = None
 PUSH_VAPID_PUBLIC_KEY: Optional[str] = None
@@ -1329,7 +1331,7 @@ def _init_app(config_path: str):
     ``main()`` for dev server).
     """
     # pylint: disable=global-statement
-    global CONFIG, DATABASE, SESSION_SCHEDULER, ALERT_ENGINE, PUSH_SERVICE, PUSH_VAPID_PUBLIC_KEY
+    global CONFIG, DATABASE, SESSION_SCHEDULER, MAINTENANCE_SCHEDULER, ALERT_ENGINE, PUSH_SERVICE, PUSH_VAPID_PUBLIC_KEY
 
     logger.info("Loading configuration from %s", config_path)
     CONFIG = WebConfig(config_path)
@@ -1355,6 +1357,7 @@ def _init_app(config_path: str):
         logger.info("Push notification service not available")
 
     SESSION_SCHEDULER = SessionScheduler(CONFIG, CONFIG.database_path, alert_engine=ALERT_ENGINE, database=DATABASE)
+    MAINTENANCE_SCHEDULER = MaintenanceScheduler(CONFIG, DATABASE)
 
     global _config_snapshot  # noqa: PLW0603  # pylint: disable=global-statement
     _config_snapshot = CONFIG
@@ -1465,8 +1468,10 @@ def start_background_services():
     only one instance of each runs, or from ``main()`` for the dev server.
     """
     if SESSION_SCHEDULER:
-
         SESSION_SCHEDULER.start()
+
+    if MAINTENANCE_SCHEDULER:
+        MAINTENANCE_SCHEDULER.start()
 
     start_config_watcher()
 
@@ -1502,6 +1507,8 @@ def main():
     finally:
         if SESSION_SCHEDULER:
             SESSION_SCHEDULER.stop()
+        if MAINTENANCE_SCHEDULER:
+            MAINTENANCE_SCHEDULER.stop()
 
 
 if __name__ == "__main__":

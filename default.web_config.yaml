@@ -190,6 +190,21 @@ web_interface:
     #   color: "#3498db"
     #   timezone: "America/New_York"
 
+  # Background maintenance tasks
+  # Periodically cleans up stale auth data (expired tokens, orphaned users).
+  # Disabled by default; enable if you accumulate auth records over time.
+  # Config is hot-reloadable — changes take effect within one interval.
+  maintenance:
+    enabled: false
+    # Seconds between maintenance runs (default: 3600 = 1 hour, hot-reloadable)
+    interval: 3600
+    # Delete session tokens whose expiry has passed (hot-reloadable)
+    delete_expired_tokens: true
+    # Delete pre-created user records with expired one-time login tokens (hot-reloadable)
+    delete_expired_login_tokens: true
+    # Delete ephemeral (guest) users whose session tokens have all expired (hot-reloadable)
+    delete_orphaned_ephemeral_users: true
+
   # Minutes after which a collector's marker turns gray on the map
   # when it hasn't pinged via /api/submit/ping. (hot-reloadable)
   position_stale_minutes: 30

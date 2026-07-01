@@ -114,6 +114,28 @@ class AlertsConfig:
 
 
 @dataclass
+class MaintenanceConfig:
+    """Background maintenance task configuration.
+
+    Runs periodic cleanup of stale auth data (expired tokens, orphaned users).
+    """
+
+    enabled: bool = False
+    interval: int = 3600  # seconds between runs (default 1 hour)
+    delete_expired_tokens: bool = True
+    delete_expired_login_tokens: bool = True
+    delete_orphaned_ephemeral_users: bool = True
+
+    def __init__(self, data: dict = None):
+        if data:
+            self.enabled = data.get("enabled", False)
+            self.interval = data.get("interval", 3600)
+            self.delete_expired_tokens = data.get("delete_expired_tokens", True)
+            self.delete_expired_login_tokens = data.get("delete_expired_login_tokens", True)
+            self.delete_orphaned_ephemeral_users = data.get("delete_orphaned_ephemeral_users", True)
+
+
+@dataclass
 class WebConfig:  # pylint: disable=too-many-instance-attributes
     """Web interface configuration"""
 
@@ -130,6 +152,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
     manufacturer_prefixes: dict = field(default_factory=dict)
     use_metric: bool = True
     session_detection: SessionDetectionConfig = field(default_factory=SessionDetectionConfig)
+    maintenance: MaintenanceConfig = field(default_factory=MaintenanceConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
     collectors: List[CollectorConfig] = field(default_factory=list)
     position_stale_minutes: int = 30
@@ -191,6 +214,10 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         # Session detection configuration
         sd_data = web_data.get("session_detection") or {}
         self.session_detection = SessionDetectionConfig(sd_data)
+
+        # Maintenance configuration
+        maint_data = web_data.get("maintenance") or {}
+        self.maintenance = MaintenanceConfig(maint_data)
 
         # Alerts configuration
         alerts_data = web_data.get("alerts") or {}
@@ -331,6 +358,11 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         if self.alerts.stale_timeout is not None and self.alerts.stale_timeout <= 0:
             errors.append(f"alerts.stale_timeout must be positive, got {self.alerts.stale_timeout}")
 
+        # Maintenance validation
+        maint = self.maintenance
+        if maint.interval is not None and maint.interval <= 0:
+            errors.append(f"maintenance.interval must be positive, got {maint.interval}")
+
         # Session detection validation
         sd = self.session_detection
         if sd.interval is not None and sd.interval <= 0:
@@ -458,6 +490,24 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 new_config.session_detection.interval,
                 new_config.session_detection.gap_threshold,
                 new_config.session_detection.log_level,
+            )
+            changed = True
+
+        if (new_config.maintenance.enabled != self.maintenance.enabled
+                or new_config.maintenance.interval != self.maintenance.interval
+                or new_config.maintenance.delete_expired_tokens != self.maintenance.delete_expired_tokens
+                or new_config.maintenance.delete_expired_login_tokens != self.maintenance.delete_expired_login_tokens
+                or new_config.maintenance.delete_orphaned_ephemeral_users
+                != self.maintenance.delete_orphaned_ephemeral_users):
+            logger.info(
+                "Reloaded maintenance from %s (enabled=%s, interval=%s, "
+                "delete_expired_tokens=%s, delete_expired_login_tokens=%s, "
+                "delete_orphaned_ephemeral_users=%s)",
+                self.config_path, new_config.maintenance.enabled,
+                new_config.maintenance.interval,
+                new_config.maintenance.delete_expired_tokens,
+                new_config.maintenance.delete_expired_login_tokens,
+                new_config.maintenance.delete_orphaned_ephemeral_users,
             )
             changed = True
 

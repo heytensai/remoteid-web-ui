@@ -831,3 +831,155 @@ def test_create_user_defaults(tmp_path):
     assert user["role_name"] == "guest"
     assert user["auth_method"] == "login_link"
     assert user["is_active"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Auth cleanup tests
+# ---------------------------------------------------------------------------
+
+
+def test_cleanup_expired_auth_tokens(tmp_path):
+    """cleanup_expired_auth_tokens removes tokens past expires_at."""
+    import sqlite3
+    db_path = tmp_path / "test_cleanup_tokens.db"
+    db = WebDatabase(str(db_path))
+    token, uid = db.create_ephemeral_user()
+
+    # Token is valid (just created, expires in 90d)
+    assert db.get_user_by_auth_token(token) is not None
+
+    # Manually expire the token
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "UPDATE auth_tokens SET expires_at = ? WHERE user_id = ?",
+        (datetime.now(timezone.utc) - timedelta(hours=1), uid),
+    )
+    conn.commit()
+    conn.close()
+
+    assert db.cleanup_expired_auth_tokens() == 1
+
+    # Token should be gone
+    assert db.get_user_by_auth_token(token) is None
+
+
+def test_cleanup_expired_auth_tokens_none(tmp_path):
+    """cleanup_expired_auth_tokens returns 0 when nothing is expired."""
+    db_path = tmp_path / "test_cleanup_tokens_none.db"
+    db = WebDatabase(str(db_path))
+    db.create_ephemeral_user()  # 90d into the future
+    assert db.cleanup_expired_auth_tokens() == 0
+
+
+def test_cleanup_expired_login_tokens(tmp_path):
+    """cleanup_expired_login_tokens removes users with expired login tokens."""
+    import hashlib
+    import sqlite3
+    db_path = tmp_path / "test_cleanup_login.db"
+    db = WebDatabase(str(db_path))
+
+    expires_at = datetime.now(timezone.utc) - timedelta(hours=1)  # already expired
+    db.create_user("OldUser", "old@example.com", "operator", "old-token", expires_at)
+
+    token_hash = hashlib.sha256("old-token".encode()).hexdigest()
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.execute(
+        "SELECT id FROM users WHERE login_token_hash = ?", (token_hash,)
+    )
+    assert cursor.fetchone() is not None
+    conn.close()
+
+    assert db.cleanup_expired_login_tokens() == 1
+
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.execute(
+        "SELECT id FROM users WHERE login_token_hash = ?", (token_hash,)
+    )
+    assert cursor.fetchone() is None
+    conn.close()
+
+
+def test_cleanup_expired_login_tokens_skips_valid(tmp_path):
+    """cleanup_expired_login_tokens does not remove users with valid tokens."""
+    import hashlib
+    import sqlite3
+    db_path = tmp_path / "test_cleanup_login_skip.db"
+    db = WebDatabase(str(db_path))
+
+    expires_at = datetime.now(timezone.utc) + timedelta(days=1)  # still valid
+    db.create_user("ValidUser", "v@example.com", "operator", "valid-token", expires_at)
+
+    assert db.cleanup_expired_login_tokens() == 0
+
+    token_hash = hashlib.sha256("valid-token".encode()).hexdigest()
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.execute(
+        "SELECT id FROM users WHERE login_token_hash = ?", (token_hash,)
+    )
+    assert cursor.fetchone() is not None
+    conn.close()
+
+
+def test_cleanup_orphaned_ephemeral_users(tmp_path):
+    """cleanup_orphaned_ephemeral_users removes guests with no valid tokens."""
+    import sqlite3
+    db_path = tmp_path / "test_cleanup_orphan.db"
+    db = WebDatabase(str(db_path))
+    _token, uid = db.create_ephemeral_user()
+
+    # Expire all tokens for this user
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "UPDATE auth_tokens SET expires_at = ? WHERE user_id = ?",
+        (datetime.now(timezone.utc) - timedelta(hours=1), uid),
+    )
+    conn.commit()
+    conn.close()
+
+    assert db.cleanup_orphaned_ephemeral_users() == 1
+
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.execute("SELECT id FROM users WHERE id = ?", (uid,))
+    assert cursor.fetchone() is None
+    cursor = conn.execute("SELECT id FROM auth_tokens WHERE user_id = ?", (uid,))
+    assert cursor.fetchone() is None  # no orphaned tokens
+    conn.close()
+
+
+def test_cleanup_orphaned_ephemeral_skips_active(tmp_path):
+    """cleanup_orphaned_ephemeral_users does not remove users with valid tokens."""
+    import sqlite3
+    db_path = tmp_path / "test_cleanup_orphan_skip.db"
+    db = WebDatabase(str(db_path))
+    _token, uid = db.create_ephemeral_user()  # 90d into the future
+
+    assert db.cleanup_orphaned_ephemeral_users() == 0
+
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.execute("SELECT id FROM users WHERE id = ?", (uid,))
+    assert cursor.fetchone() is not None
+    conn.close()
+
+
+def test_cleanup_orphaned_ephemeral_no_tokens(tmp_path):
+    """cleanup_orphaned_ephemeral_users removes guests that have zero tokens."""
+    import sqlite3
+    db_path = tmp_path / "test_cleanup_orphan_notokens.db"
+    db = WebDatabase(str(db_path))
+
+    # Create a guest user directly with no tokens
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.execute(
+        """INSERT INTO users (name, role_name, is_ephemeral, is_active, auth_method)
+           VALUES ('Ghost', 'guest', 1, 1, 'ephemeral')"""
+    )
+    uid = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    assert db.cleanup_orphaned_ephemeral_users() == 1
+
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.execute("SELECT id FROM users WHERE id = ?", (uid,))
+    assert cursor.fetchone() is None
+    conn.close()

@@ -44,6 +44,7 @@
 - `drone_aliases` - Map UAS IDs to friendly names
 - `waypoints` - Custom map markers (name, lat, lon, icon, color, description, enabled, category)
 - `session_detection` - Background session detection settings (enabled, interval, gap_threshold, log_level)
+- `maintenance` - Background maintenance settings (enabled, interval, delete_expired_tokens, delete_expired_login_tokens, delete_orphaned_ephemeral_users)
 - `collectors` - Collector positions (name, api_key, color, type, lat, lon, timezone); use GET /api/submit/ping?lat=&lon= for position reporting
 - `timezone` (per-collector) - IANA timezone name (e.g. "America/Denver"). If set, naive timestamps from that collector are converted from this timezone to UTC before storing. (default: None — naive assumed UTC)
 - `position_stale_minutes` - Minutes without ping before collector marker turns gray (hot-reloadable)
