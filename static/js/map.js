@@ -751,7 +751,7 @@ const MapController = {
             const response = await API.getTrack(uasId, start, end, true, sessionId);
             if (response.sessions && response.sessions.length > 0) {
                 const session = response.sessions[0];
-                if (session.positions && session.positions.length > 1) {
+                if (session.positions && session.positions.length > 0) {
                     const color = this.getDroneColor(uasId);
                     this._drawTrackSegment(uasId, sessionId, session.positions, color);
                     this.loadedTrackSessions.add(sessionKey);
@@ -789,7 +789,7 @@ const MapController = {
             for (const entry of pending) {
                 const key = `${entry.uas_id}:${entry.session_id}`;
                 const data = trackData[key];
-                if (data && data.positions && data.positions.length > 1) {
+                if (data && data.positions && data.positions.length > 0) {
                     const color = this.getDroneColor(entry.uas_id);
                     this._drawTrackSegment(entry.uas_id, entry.session_id, data.positions, color);
                     this.loadedTrackSessions.add(key);
@@ -890,6 +890,27 @@ const MapController = {
     _addSessionMarkers(uasId, sessionId, positions, color, sessionKey) {
         if (!positions || positions.length === 0) return;
 
+        const trackKey = sessionKey || `${uasId}:${sessionId}`;
+        if (!this.tracks[trackKey]) {
+            this.tracks[trackKey] = [];
+        }
+        if (!this.tracks[trackKey].markers) {
+            this.tracks[trackKey].markers = [];
+        }
+
+        // Single-position session: draw a drone icon directly
+        if (positions.length === 1) {
+            const pos = positions[0];
+            const hasAlert = this.alertUasIds.has(uasId);
+            const marker = L.marker([pos.latitude, pos.longitude], {
+                icon: this.createDroneIcon(color, hasAlert),
+                opacity: 0.9
+            }).addTo(this.layers.tracks);
+            marker.bindPopup(this._createSessionPointPopup(uasId, sessionId, pos, 'Position', color));
+            this.tracks[trackKey].markers.push(marker);
+            return;
+        }
+
         const startPos = positions[0];
         const endPos = positions[positions.length - 1];
 
@@ -900,30 +921,21 @@ const MapController = {
         }).addTo(this.layers.tracks);
 
         startMarker.bindPopup(this._createSessionPointPopup(uasId, sessionId, startPos, 'Start', color));
-
-        // Store the markers with the track using session key
-        const trackKey = sessionKey || `${uasId}:${sessionId}`;
-        if (!this.tracks[trackKey].markers) {
-            this.tracks[trackKey].markers = [];
-        }
         this.tracks[trackKey].markers.push(startMarker);
 
-        // Add end marker (only if different from start)
-        // Use a drone icon if the position is recent (within stale timeout)
-        if (positions.length > 1) {
-            const isActive = this._isPositionActive(endPos.timestamp);
-            const hasAlert = isActive && this.alertUasIds.has(uasId);
-            const endIcon = isActive
-                ? this.createDroneIcon(color, hasAlert)
-                : this.createSessionEndIcon(color);
-            const endMarker = L.marker([endPos.latitude, endPos.longitude], {
-                icon: endIcon,
-                opacity: 0.9
-            }).addTo(this.layers.tracks);
+        // Add end marker — use a drone icon if the position is recent
+        const isActive = this._isPositionActive(endPos.timestamp);
+        const hasAlert = isActive && this.alertUasIds.has(uasId);
+        const endIcon = isActive
+            ? this.createDroneIcon(color, hasAlert)
+            : this.createSessionEndIcon(color);
+        const endMarker = L.marker([endPos.latitude, endPos.longitude], {
+            icon: endIcon,
+            opacity: 0.9
+        }).addTo(this.layers.tracks);
 
-            endMarker.bindPopup(this._createSessionPointPopup(uasId, sessionId, endPos, 'End', color));
-            this.tracks[trackKey].markers.push(endMarker);
-        }
+        endMarker.bindPopup(this._createSessionPointPopup(uasId, sessionId, endPos, 'End', color));
+        this.tracks[trackKey].markers.push(endMarker);
     },
 
     /**
