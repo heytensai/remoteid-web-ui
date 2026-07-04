@@ -22,7 +22,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
 
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="{{ url_prefix }}{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_prefix }}{{ static_url('css/style.css') }}">
 </head>
 <body data-base-url="{{ url_prefix }}">
     <!-- App Container wraps sidebar and main content -->
@@ -377,10 +377,10 @@
     <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
 
     <!-- Application JS -->
-    <script src="{{ url_prefix }}{{ url_for('static', filename='js/units.js') }}"></script>
-    <script src="{{ url_prefix }}{{ url_for('static', filename='js/api.js') }}"></script>
-    <script src="{{ url_prefix }}{{ url_for('static', filename='js/map.js') }}"></script>
-    <script src="{{ url_prefix }}{{ url_for('static', filename='js/ui.js') }}"></script>
+    <script src="{{ url_prefix }}{{ static_url('js/units.js') }}"></script>
+    <script src="{{ url_prefix }}{{ static_url('js/api.js') }}"></script>
+    <script src="{{ url_prefix }}{{ static_url('js/map.js') }}"></script>
+    <script src="{{ url_prefix }}{{ static_url('js/ui.js') }}"></script>
 
 </body>
 </html>

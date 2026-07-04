@@ -3,6 +3,7 @@
 
 import argparse
 import csv
+import hashlib
 import io
 import logging
 import os
@@ -17,7 +18,7 @@ from typing import Dict, List, Optional
 import xml.etree.ElementTree as ET
 
 import click
-from flask import Flask, g, jsonify, make_response, request, render_template, Response
+from flask import Flask, g, jsonify, make_response, request, render_template, Response, url_for
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect, generate_csrf
@@ -238,6 +239,21 @@ def load_current_user():
     # Token absent or invalid — allow through, route/permissions will decide
     g.current_user = None
     g.permissions = []
+
+
+@app.context_processor
+def _static_url_with_hash():
+    """Inject a ``static_url`` function that appends a content-hash for cache busting."""
+
+    def static_url(filename):
+        path = Path(app.static_folder) / filename
+        try:
+            h = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+        except OSError:
+            h = '0'
+        return url_for('static', filename=filename, v=h)
+
+    return {"static_url": static_url}
 
 
 @app.route("/")
