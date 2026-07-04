@@ -41,6 +41,11 @@ const UIController = {
     permissions: [],
     currentUser: null,
 
+    // Load More state for UAS view
+    uasExtraSessions: {}, // { [uasId]: [drone, ...] } - extra sessions loaded via Load More
+    uasExtraTotal: {},    // { [uasId]: total_count } - total sessions available
+    uasExtraLoading: {},  // { [uasId]: true/false } - currently loading
+
     // Adaptive polling
     _initialized: false,
     pollTimer: null,
@@ -1914,12 +1919,31 @@ const UIController = {
 
         let html = '';
         sortedUasIds.forEach(uasId => {
-            const flightCount = groups[uasId].length;
-            const sortedSessions = groups[uasId].sort((a, b) =>
-                new Date(b.timestamp) - new Date(a.timestamp)
-            );
+            // Combine time-window sessions with extra loaded sessions, deduplicate
+            const allSeen = new Set();
+            const combined = [];
 
-            const uasSessionKeys = sortedSessions.map(d => `${d.uas_id}:${d.computed_session_id || 'unknown'}`);
+            const timelineSessions = groups[uasId] || [];
+            const extraSessions = this.uasExtraSessions[uasId] || [];
+
+            timelineSessions.concat(extraSessions).forEach(d => {
+                const key = `${d.uas_id}:${d.computed_session_id || 'unknown'}`;
+                if (!allSeen.has(key)) {
+                    allSeen.add(key);
+                    combined.push(d);
+                }
+            });
+
+            combined.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+            const flightCount = combined.length;
+            const totalSessions = this.uasExtraTotal[uasId];
+            const loadedExtra = this.uasExtraSessions[uasId] ? this.uasExtraSessions[uasId].length : 0;
+            const timeWindowCount = timelineSessions.length;
+            const hasMore = totalSessions === undefined || (loadedExtra + timeWindowCount < totalSessions);
+            const isLoading = this.uasExtraLoading[uasId];
+
+            const uasSessionKeys = combined.map(d => `${d.uas_id}:${d.computed_session_id || 'unknown'}`);
             const allVisible = uasSessionKeys.every(key => this.visibleSessions.has(key));
             const someVisible = uasSessionKeys.some(key => this.visibleSessions.has(key));
             const isIndeterminate = someVisible && !allVisible;
@@ -1942,7 +1966,12 @@ const UIController = {
                         <i class="fas fa-chevron-${isExpanded ? 'down' : 'right'} date-chevron"></i>
                     </div>
                     <div class="date-items ${isExpanded ? '' : 'collapsed'}">
-                        ${sortedSessions.map(drone => this._renderDroneItem(drone, alertedUasIds)).join('')}
+                        ${combined.map(drone => this._renderDroneItem(drone, alertedUasIds)).join('')}
+                        ${hasMore
+                            ? `<button class="load-more-btn" data-load-more-uas="${esc(uasId)}" ${isLoading ? 'disabled' : ''}>${isLoading ? 'Loading...' : 'Load More'}</button>`
+                            : totalSessions !== undefined
+                                ? '<div class="load-more-end">All results loaded</div>'
+                                : ''}
                     </div>
                 </div>
             `;
@@ -1960,8 +1989,52 @@ const UIController = {
             this._batchLoadTracks(groups[mostActiveUasId]);
         }
 
+        // Load More button handlers
+        list.querySelectorAll('.load-more-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const uasId = e.currentTarget.dataset.loadMoreUas;
+                this._loadMoreUas(uasId);
+            });
+        });
+
         this._updateReplayButtonState();
         this._attachListEventHandlers();
+    },
+
+    /**
+     * Load more sessions for a UAS ID (ignores time constraints).
+     * Fetches 10 at a time, appends to the extra sessions cache, re-renders.
+     */
+    async _loadMoreUas(uasId) {
+        if (this.uasExtraLoading[uasId]) return;
+        this.uasExtraLoading[uasId] = true;
+
+        const currentExtra = this.uasExtraSessions[uasId] || [];
+        const offset = currentExtra.length;
+
+        try {
+            const data = await API.getUASSessions(uasId, offset, 10);
+            const newSessions = data.sessions || [];
+
+            this.uasExtraSessions[uasId] = currentExtra.concat(newSessions);
+            this.uasExtraTotal[uasId] = data.total;
+        } catch (e) {
+            console.error('Failed to load more sessions for', uasId, e);
+        } finally {
+            this.uasExtraLoading[uasId] = false;
+            this._updateReplayButtonState();
+        }
+
+        // Re-render the UAS view
+        const allDrones = Object.values(this.droneMap);
+        const filtered = allDrones.filter(d => {
+            const isKnown = !!this.droneAliases[d.uas_id];
+            if (isKnown && !this.showKnownDrones) return false;
+            if (!isKnown && !this.showUnknownDrones) return false;
+            return true;
+        });
+        this._droneListCacheKey = null;
+        this._renderUASView(filtered);
     },
 
     /**

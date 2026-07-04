@@ -984,6 +984,39 @@ class WebDatabase:
         """Get list of unique drones seen in time window with latest positions"""
         return self._get_drones_query(start_time, end_time)
 
+    def get_sessions_for_uas(
+        self, uas_id: str, limit: int = 10, offset: int = 0
+    ) -> Tuple[List[Dict], int]:
+        """Get all sessions for a UAS ID with pagination, ignoring time constraints."""
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+
+        cursor = conn.execute(
+            "SELECT COUNT(*) FROM latest_positions WHERE uas_id = ?",
+            (uas_id,),
+        )
+        total = cursor.fetchone()[0]
+
+        cursor = conn.execute(
+            """
+            SELECT
+                uas_id,
+                NULLIF(computed_session_id, '') as computed_session_id,
+                max_ts as timestamp,
+                min_ts as session_start,
+                latitude, longitude, altitude, operator_id,
+                operator_latitude, operator_longitude, source,
+                collector_latitude, collector_longitude
+            FROM latest_positions
+            WHERE uas_id = ?
+            ORDER BY max_ts DESC
+            LIMIT ? OFFSET ?
+            """,
+            (uas_id, limit, offset),
+        )
+        sessions = [self._sanitize_record(dict(row)) for row in cursor.fetchall()]
+        return sessions, total
+
     def get_drones_incremental(
         self,
         start_time: datetime,

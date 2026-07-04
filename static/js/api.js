@@ -143,6 +143,20 @@ const API = {
     },
 
     /**
+     * Get sessions for a UAS ID with pagination, ignoring time constraints.
+     * @param {string} uasId - UAS ID
+     * @param {number} offset - Offset for pagination
+     * @param {number} limit - Max results per page
+     * @returns {Promise<Object>} {uas_id, sessions[], total, limit, offset}
+     */
+    async getUASSessions(uasId, offset = 0, limit = 10) {
+        const params = new URLSearchParams();
+        params.append('offset', String(offset));
+        params.append('limit', String(limit));
+        return this._get(`/api/uas/${encodeURIComponent(uasId)}/sessions?${params}`);
+    },
+
+    /**
      * Batch fetch tracks for multiple sessions
      * @param {Array<{uas_id: string, session_id: string}>} sessions
      * @returns {Promise<Object>} Map of "uas_id:session_id" -> {uas_id, session_id, positions}

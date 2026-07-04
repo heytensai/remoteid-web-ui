@@ -673,6 +673,26 @@ def get_track(uas_id):
         return jsonify({"error": "Internal server error"}), 500
 
 
+@app.route("/api/uas/<uas_id>/sessions")
+@limiter.limit("30/minute")
+def get_uas_sessions(uas_id):
+    """Get all sessions for a UAS ID with pagination, ignoring time constraints."""
+    try:
+        limit = min(int(request.args.get("limit", 10)), 100)
+        offset = int(request.args.get("offset", 0))
+        sessions, total = DATABASE.get_sessions_for_uas(uas_id, limit, offset)
+        return jsonify({
+            "uas_id": uas_id,
+            "sessions": sessions,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        })
+    except (ValueError, TypeError, sqlite3.Error):
+        logger.exception("Error getting UAS sessions")
+        return jsonify({"error": "Internal server error"}), 500
+
+
 @app.route("/api/tracks/batch", methods=["POST"])
 def get_tracks_batch():
     """Batch fetch tracks for multiple sessions in one request.

@@ -139,6 +139,44 @@ html, body {
     overflow: visible;
 }
 
+.load-more-btn {
+    display: block;
+    width: 100%;
+    padding: 6px 8px;
+    background: none;
+    border: 1px dashed #dee2e6;
+    border-radius: 4px;
+    color: #6c757d;
+    cursor: pointer;
+    font-size: 0.78rem;
+    text-align: center;
+    transition: all 0.2s;
+    margin-top: 4px;
+}
+
+.load-more-btn:hover {
+    background: #e9ecef;
+    color: #495057;
+    border-color: #adb5bd;
+}
+
+.load-more-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.load-more-btn.loading {
+    pointer-events: none;
+}
+
+.load-more-end {
+    text-align: center;
+    font-size: 0.75rem;
+    color: #6c757d;
+    padding: 6px 8px;
+    margin-top: 4px;
+}
+
 .drone-item {
     display: flex;
     align-items: center;
@@ -1714,6 +1752,21 @@ body.dark-mode .drone-item.replay-active::after {
 }
 
 body.dark-mode .drone-meta {
+    color: #8a8aaa;
+}
+
+body.dark-mode .load-more-btn {
+    border-color: #2a2a4a;
+    color: #8a8aaa;
+}
+
+body.dark-mode .load-more-btn:hover {
+    background: #16213e;
+    color: #e0e0e0;
+    border-color: #4a4a6a;
+}
+
+body.dark-mode .load-more-end {
     color: #8a8aaa;
 }
 
