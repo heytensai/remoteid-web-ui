@@ -14,7 +14,7 @@ import argparse
 import uuid
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Tuple, Optional
 
@@ -37,6 +37,13 @@ def _convert_datetime(s: bytes) -> datetime:
 # Register adapters for datetime handling
 sqlite3.register_adapter(datetime, _adapt_datetime)
 sqlite3.register_converter("DATETIME", _convert_datetime)
+
+
+def _ensure_tz(dt: datetime) -> datetime:
+    """Make a datetime offset-aware (naive → UTC)."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def get_uas_list(db_path: str, since: Optional[datetime] = None) -> List[str]:
@@ -68,7 +75,7 @@ def get_positions_for_uas(db_path: str, uas_id: str) -> List[Tuple[int, datetime
             "SELECT id, timestamp FROM remoteid WHERE uas_id = ? ORDER BY timestamp",
             (uas_id,)
         )
-        return cursor.fetchall()
+        return [(row[0], _ensure_tz(row[1])) for row in cursor.fetchall()]
 
 
 def detect_sessions(positions: List[Tuple[int, datetime]], gap_threshold: int) -> List[Tuple[int, str]]:

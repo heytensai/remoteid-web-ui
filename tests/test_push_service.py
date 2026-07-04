@@ -44,7 +44,7 @@ class TestPushServiceInit:
         assert service._vapid_private_key is None
         assert service._vapid_public_key is None
 
-    def test_init_converts_pem_to_der(self):
+    def test_init_keeps_pem_as_string(self):
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric import ec
         from cryptography.hazmat.backends import default_backend
@@ -58,12 +58,12 @@ class TestPushServiceInit:
 
         mock_db = MagicMock()
         service = PushService(mock_db, pem, "public-key")
-        # Should have been converted to DER
-        assert service._vapid_private_key != pem
-        assert isinstance(service._vapid_private_key, bytes)
+        # Should remain as the PEM string — pywebpush expects a str
+        assert service._vapid_private_key == pem
+        assert isinstance(service._vapid_private_key, str)
 
-    def test_init_invalid_pem_falls_back(self):
-        """Invalid PEM is kept as-is (falls back from DER conversion)."""
+    def test_init_invalid_pem_stays_as_string(self):
+        """Invalid PEM is kept as-is (no DER conversion attempted)."""
         mock_db = MagicMock()
         service = PushService(mock_db, "not-a-valid-pem", "pub")
         assert service._vapid_private_key == "not-a-valid-pem"

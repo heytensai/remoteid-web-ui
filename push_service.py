@@ -113,21 +113,9 @@ class PushService:
         self._db = db
         self._vapid_public_key = vapid_public_key
         self._claims = {"sub": f"mailto:{email}"}
-        # Pre-convert PEM to DER so the installed py_vapid's from_string →
-        # from_der path works correctly (some versions don't decode PEM properly).
+        # Keep the PEM string as-is — pywebpush / py_vapid's ``from_string``
+        # expects a ``str`` (it calls ``.encode()`` internally).
         self._vapid_private_key = vapid_private_key
-        if vapid_private_key and serialization is not None:
-            try:
-                key = serialization.load_pem_private_key(
-                    vapid_private_key.encode("utf-8"), password=None
-                )
-                self._vapid_private_key = key.private_bytes(
-                    encoding=serialization.Encoding.DER,
-                    format=serialization.PrivateFormat.PKCS8,
-                    encryption_algorithm=serialization.NoEncryption(),
-                )
-            except Exception:  # pylint: disable=broad-exception-caught
-                logger.warning("Failed to pre-parse VAPID private key, falling back to raw PEM")
 
     def subscribe(self, endpoint, p256dh_key, auth_key, user_agent=None):
         """Store a push subscription."""
