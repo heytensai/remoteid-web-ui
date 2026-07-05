@@ -2536,4 +2536,8 @@ body.dark-mode .stat-card-label {
 .toast-notification.show {
     opacity: 1;
     transform: translateX(-50%) translateY(0);
+}
+
+body.dark-mode .leaflet-tile-pane {
+    filter: invert(1) hue-rotate(180deg) saturate(0.6);
 } 

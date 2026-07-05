@@ -180,11 +180,6 @@ const UIController = {
             }
             if (this._pendingSettings.darkMode !== undefined) {
                 document.body.classList.toggle('dark-mode', this._pendingSettings.darkMode);
-                if (this._pendingSettings.darkMode) {
-                    MapController.setTileProvider('carto-dark');
-                } else {
-                    MapController.setTileProvider('osm');
-                }
             }
             this._pendingSettings = null;
         }
@@ -842,11 +837,6 @@ const UIController = {
 
     _toggleDarkMode(enabled) {
         document.body.classList.toggle('dark-mode', enabled);
-        if (enabled) {
-            MapController.setTileProvider('carto-dark');
-        } else {
-            MapController.setTileProvider('osm');
-        }
     },
 
     _toggleKeepScreenOn(enabled) {
