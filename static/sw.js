@@ -49,9 +49,16 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache-first for same-origin static assets
+  // Network-first for same-origin static assets, fall back to cache when offline
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    fetch(event.request).then((response) => {
+      // Cache successful same-origin responses for offline use
+      if (response.ok && url.origin === self.location.origin) {
+        const clone = response.clone();
+        caches.open(CACHE).then((cache) => cache.put(event.request, clone));
+      }
+      return response;
+    }).catch(() => caches.match(event.request))
   );
 });
 
