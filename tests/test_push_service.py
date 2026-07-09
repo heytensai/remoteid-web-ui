@@ -6,6 +6,20 @@ from unittest.mock import MagicMock, patch, call
 import pytest
 
 from push_service import PushService, _vapid_keys_path, _validate_vapid_key
+from pywebpush import Vapid01
+
+
+def _valid_pem():
+    """Generate a real EC private key PEM for tests that exercise notify_all."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.backends import default_backend
+    key = ec.generate_private_key(ec.SECP256R1(), default_backend())
+    return key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
 
 
 class TestVapidHelpers:
@@ -322,7 +336,7 @@ class TestPushServiceNotifyAll:
     def test_notify_all_no_subscribers(self):
         mock_db = MagicMock()
         mock_db.get_all_push_subscriptions.return_value = []
-        service = PushService(mock_db, "priv", "pub")
+        service = PushService(mock_db, _valid_pem(), "pub")
         service.notify_all("Title", "Body")
         mock_db.get_all_push_subscriptions.assert_called_once()
 
@@ -332,21 +346,22 @@ class TestPushServiceNotifyAll:
             {"endpoint": "https://ep1", "p256dh_key": "k1", "auth_key": "a1"},
             {"endpoint": "https://ep2", "p256dh_key": "k2", "auth_key": "a2"},
         ]
-        service = PushService(mock_db, "priv", "pub")
+        pem = _valid_pem()
+        service = PushService(mock_db, pem, "pub")
 
         with patch("push_service.webpush") as mock_webpush:
             service.notify_all("Hello", "World", data={"key": "val"})
             assert mock_webpush.call_count == 2
             first_call = mock_webpush.call_args_list[0]
             assert first_call.kwargs["subscription_info"]["endpoint"] == "https://ep1"
-            assert first_call.kwargs["vapid_private_key"] == "priv"
+            assert isinstance(first_call.kwargs["vapid_private_key"], Vapid01)
 
     def test_notify_all_removes_gone_subscription(self):
         mock_db = MagicMock()
         mock_db.get_all_push_subscriptions.return_value = [
             {"endpoint": "https://ep-gone", "p256dh_key": "k1", "auth_key": "a1"},
         ]
-        service = PushService(mock_db, "priv", "pub")
+        service = PushService(mock_db, _valid_pem(), "pub")
 
         with patch("push_service.webpush") as mock_webpush:
             from pywebpush import WebPushException
@@ -363,7 +378,7 @@ class TestPushServiceNotifyAll:
         mock_db.get_all_push_subscriptions.return_value = [
             {"endpoint": "https://ep", "p256dh_key": "k", "auth_key": "a"},
         ]
-        service = PushService(mock_db, "priv", "pub")
+        service = PushService(mock_db, _valid_pem(), "pub")
 
         from pywebpush import WebPushException
 
@@ -378,7 +393,18 @@ class TestPushServiceNotifyAll:
         mock_db.get_all_push_subscriptions.return_value = [
             {"endpoint": "https://ep", "p256dh_key": "k", "auth_key": "a"},
         ]
-        service = PushService(mock_db, "priv", "pub")
+        service = PushService(mock_db, _valid_pem(), "pub")
         with patch("push_service.webpush", None):
             service.notify_all("Title", "Body")
+        mock_db.get_all_push_subscriptions.assert_not_called()
+
+    def test_notify_all_no_vapid_instance(self):
+        """When Vapid01 instance is None (invalid PEM), notify_all returns early."""
+        mock_db = MagicMock()
+        mock_db.get_all_push_subscriptions.return_value = [
+            {"endpoint": "https://ep", "p256dh_key": "k", "auth_key": "a"},
+        ]
+        service = PushService(mock_db, "not-a-valid-pem", "pub")
+        assert service._vapid is None
+        service.notify_all("Title", "Body")
         mock_db.get_all_push_subscriptions.assert_not_called()

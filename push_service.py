@@ -113,9 +113,19 @@ class PushService:
         self._db = db
         self._vapid_public_key = vapid_public_key
         self._claims = {"sub": f"mailto:{email}"}
-        # Keep the PEM string as-is — pywebpush / py_vapid's ``from_string``
-        # expects a ``str`` (it calls ``.encode()`` internally).
         self._vapid_private_key = vapid_private_key
+        # pywebpush's ``webpush()`` calls ``Vapid.from_string()`` which does
+        # NOT handle PEM headers (it base64-decodes the raw input).  Pre-parse
+        # the PEM into a ``Vapid01`` instance so ``webpush()`` takes the
+        # ``isinstance(vapid_private_key, Vapid01)`` fast-path at line 547.
+        if vapid_private_key and Vapid01 is not None:
+            try:
+                self._vapid = Vapid01.from_pem(vapid_private_key.encode("utf-8"))
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.warning("Failed to create Vapid01 from PEM", exc_info=True)
+                self._vapid = None
+        else:
+            self._vapid = None
 
     def subscribe(self, endpoint, p256dh_key, auth_key, user_agent=None):
         """Store a push subscription."""
@@ -131,6 +141,9 @@ class PushService:
         """Send a push notification to all subscribers."""
         if webpush is None:
             logger.debug("pywebpush not available, skipping push")
+            return
+        if self._vapid is None:
+            logger.debug("VAPID instance not available, skipping push")
             return
 
         payload = json.dumps({
@@ -154,7 +167,7 @@ class PushService:
                         },
                     },
                     data=payload,
-                    vapid_private_key=self._vapid_private_key,
+                    vapid_private_key=self._vapid,
                     vapid_claims=self._claims,
                 )
             except WebPushException as e:  # pylint: disable=broad-exception-caught
