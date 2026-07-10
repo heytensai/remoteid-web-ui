@@ -100,6 +100,10 @@ class SessionScheduler:
                     # Rebuild materialized latest_positions for affected UAS only
                     if self._database and affected_uas:
                         self._database.rebuild_latest_positions(affected_uas)
+                    # Sync alert engine's session tracking so it doesn't refire
+                    # on_new_session for sessions we just updated.
+                    if self._alert_engine:
+                        self._alert_engine.sync_sessions()
                 except sqlite3.Error:
                     logger.exception("Session detection run failed")
             else:

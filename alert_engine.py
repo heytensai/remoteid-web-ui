@@ -107,6 +107,24 @@ class AlertEngine:
         self._config = config
         self._rebuild_geozone_list()
 
+    def sync_sessions(self):
+        """Re-read all current session IDs from the database.
+
+        Updates the internal session tracking so that subsequent calls to
+        :meth:`evaluate` will not re-fire ``on_new_session`` for sessions
+        that are already known.  Useful after session detection re-runs
+        and assigns new session IDs.
+        """
+        try:
+            current = self._db.get_all_current_sessions()
+            for uas_id, session_id in current.items():
+                old = self._known_sessions.get(uas_id)
+                if old is not None and old != session_id:
+                    logger.debug("Session changed for %s: %s -> %s", uas_id, old, session_id)
+            self._known_sessions = current
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.exception("AlertEngine: failed to sync sessions")
+
     # --- Public entry point ---
 
     def evaluate(self, uas_id: str, positions: List[Dict]):
