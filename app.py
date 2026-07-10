@@ -1503,6 +1503,7 @@ def _on_new_alert(uas_id: str, geozone_name: str):
         uas_id=uas_id,
         name=name,
         geozone_name=geozone_name,
+        use_metric=CONFIG.use_metric,
     )
 
 
@@ -1513,6 +1514,7 @@ def _on_new_session(uas_id: str, session_id: str, first_position: Optional[Dict]
         "uas_id": uas_id,
         "name": name,
         "session_id": session_id,
+        "use_metric": CONFIG.use_metric,
     }
     if first_position:
         ctx["altitude"] = first_position.get("altitude")

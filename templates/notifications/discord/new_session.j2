@@ -1,13 +1,20 @@
+{% if altitude is not none %}
+{% set _alt = (altitude * 3.28084) | int %}
+{% set _unit = "ft" %}
+{% else %}
+{% set _alt = 0 %}
+{% set _unit = "" %}
+{% endif %}
 {
   "embeds": [{
     "title": "New Flight Detected",
     "color": 3447003,
-    "description": "{{ name }} started a new flight{% if altitude is not none %} at {{ altitude | int }}m{% endif %}",
+    "description": "{{ name }} started a new flight{% if altitude is not none %} at {{ '%.0f' % (altitude if use_metric else altitude * 3.28084) }}{{ 'm' if use_metric else 'ft' }}{% endif %}",
     "fields": [
       {"name": "Drone", "value": "{{ name }}", "inline": true},
       {"name": "Session", "value": "{{ session_id[:8] }}", "inline": true}
       {% if altitude is not none -%}
-      ,{"name": "Altitude", "value": "{{ altitude | int }}m", "inline": true}
+      ,{"name": "Altitude", "value": "{{ '%.0f' % (altitude if use_metric else altitude * 3.28084) }}{{ 'm' if use_metric else 'ft' }}", "inline": true}
       {% endif -%}
     ],
     "timestamp": "{{ timestamp }}"{% if server_url %},
