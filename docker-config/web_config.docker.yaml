@@ -92,8 +92,7 @@ web_interface:
         - add_alias
         - edit_alias
         - delete_alias
-        - push_notifications
-        - manage_collectors
+        - receive_notifications
     viewer:
       permissions:
         - view_map
@@ -103,7 +102,7 @@ web_interface:
         - view_waypoints
         - view_alert_history
         - use_replay
-        - push_notifications
+        - receive_notifications
     guest:
       permissions:
         - view_map
@@ -142,3 +141,12 @@ web_interface:
       # timezone: "America/Denver"
 
   position_stale_minutes: 30
+
+  server_url: "http://localhost:5000"
+
+  notifications:
+    - name: "Browser Push"
+      type: "push"
+      events:
+        - alert
+        - new_session

@@ -121,8 +121,7 @@ web_interface:
         - add_alias
         - edit_alias
         - delete_alias
-        - push_notifications
-        - manage_collectors
+        - receive_notifications
     viewer:
       permissions:
         - view_map
@@ -132,7 +131,7 @@ web_interface:
         - view_waypoints
         - view_alert_history
         - use_replay
-        - push_notifications
+        - receive_notifications
     guest:
       permissions:
         - view_map
@@ -208,3 +207,43 @@ web_interface:
   # Minutes after which a collector's marker turns gray on the map
   # when it hasn't pinged via /api/submit/ping. (hot-reloadable)
   position_stale_minutes: 30
+
+  # Public URL of this instance (used in notification embeds like Discord)
+  # Must be a full URL with scheme, e.g. "https://tracker.example.com"
+  server_url: ""
+
+  # Notification targets — dispatch alert events via configured backends.
+  # Each target has a name, type, event filter, and type-specific config.
+  #
+  # Supported types:
+  #   - "push"     — browser Web Push notifications (requires pywebpush)
+  #   - "discord"  — Discord webhook (embeds) — set webhook_url
+  #
+  # Event filters (subset of ["alert", "new_session"]):
+  #   - alert       — drone enters an alert-enabled geozone
+  #   - new_session — drone starts a new flight
+  #
+  # Templates live in templates/notifications/<type>/<event>.j2
+  # and can be customized per deployment.
+  #
+  # If no notification targets are configured, notifications are disabled.
+  # (hot-reloadable)
+  notifications:
+    # Browser push example (keep enabled only if pywebpush is installed):
+    # - name: "Browser Push"
+    #   type: "push"
+    #   events:
+    #     - alert
+    #     - new_session
+    #
+    # Discord webhook example:
+    # - name: "Alert Channel"
+    #   type: "discord"
+    #   webhook_url: "https://discord.com/api/webhooks/..."
+    #   events:
+    #     - alert
+    # - name: "Flight Log"
+    #   type: "discord"
+    #   webhook_url: "https://discord.com/api/webhooks/..."
+    #   events:
+    #     - new_session
