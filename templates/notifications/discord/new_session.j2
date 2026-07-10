@@ -1,0 +1,16 @@
+{
+  "embeds": [{
+    "title": "New Flight Detected",
+    "color": 3447003,
+    "description": "{{ name }} started a new flight{% if altitude is not none %} at {{ altitude | int }}m{% endif %}",
+    "fields": [
+      {"name": "Drone", "value": "{{ name }}", "inline": true},
+      {"name": "Session", "value": "{{ session_id[:8] }}", "inline": true}
+      {% if altitude is not none -%}
+      ,{"name": "Altitude", "value": "{{ altitude | int }}m", "inline": true}
+      {% endif -%}
+    ],
+    "timestamp": "{{ timestamp }}"{% if server_url %},
+    "url": "{{ server_url }}"{% endif %}
+  }]
+}

@@ -31,6 +31,7 @@ from session_detect import process_database as redetect_sessions
 from session_scheduler import SessionScheduler
 from maintenance_scheduler import MaintenanceScheduler
 from alert_engine import AlertEngine
+from notifier import NotifierService
 from push_service import PushService, _ensure_vapid_keys
 
 # Configure logging
@@ -47,6 +48,7 @@ MAINTENANCE_SCHEDULER: Optional[MaintenanceScheduler] = None
 ALERT_ENGINE: Optional[AlertEngine] = None
 PUSH_SERVICE: Optional[PushService] = None
 PUSH_VAPID_PUBLIC_KEY: Optional[str] = None
+NOTIFIER_SERVICE: Optional[NotifierService] = None
 
 # Thread-safe config snapshot — swapped atomically on hot reload.
 # Readers should always call get_config() instead of accessing CONFIG directly.
@@ -1355,6 +1357,22 @@ def _hot_reload_config():
             CONFIG = new_config
             global _config_snapshot  # noqa: PLW0603  # pylint: disable=global-statement
             _config_snapshot = new_config
+        # Rebuild notifier if notifications changed
+        _rebuild_notifier()
+
+def _rebuild_notifier():
+    """Recreate NotifierService from current config and rewire callbacks."""
+    global NOTIFIER_SERVICE  # noqa: PLW0603  # pylint: disable=global-statement
+    NOTIFIER_SERVICE = NotifierService(
+        CONFIG.notifications, CONFIG.server_url,
+        url_prefix=CONFIG.url_prefix, push_service=PUSH_SERVICE,
+    )
+    if NOTIFIER_SERVICE.has_targets():
+        ALERT_ENGINE.on_new_alert = _on_new_alert
+        ALERT_ENGINE.on_new_session = _on_new_session
+    else:
+        ALERT_ENGINE.on_new_alert = None
+        ALERT_ENGINE.on_new_session = None
 
 
 def _init_app(config_path: str):
@@ -1366,8 +1384,8 @@ def _init_app(config_path: str):
     ready to start them (gunicorn master via ``when_ready``, or
     ``main()`` for dev server).
     """
-    # pylint: disable=global-statement
-    global CONFIG, DATABASE, SESSION_SCHEDULER, MAINTENANCE_SCHEDULER, ALERT_ENGINE, PUSH_SERVICE, PUSH_VAPID_PUBLIC_KEY
+    # pylint: disable=global-statement,line-too-long
+    global CONFIG, DATABASE, SESSION_SCHEDULER, MAINTENANCE_SCHEDULER, ALERT_ENGINE, PUSH_SERVICE, PUSH_VAPID_PUBLIC_KEY, NOTIFIER_SERVICE
 
     logger.info("Loading configuration from %s", config_path)
     CONFIG = WebConfig(config_path)
@@ -1385,12 +1403,19 @@ def _init_app(config_path: str):
     logger.info("PUSH_VAPID_PUBLIC_KEY=%s", vapid_public[:20] + "..." if vapid_public else "None")
     if vapid_private and vapid_public:
         PUSH_SERVICE = PushService(DATABASE, vapid_private, vapid_public)
-        ALERT_ENGINE.on_new_alert = _on_new_alert
-        ALERT_ENGINE.on_new_session = _on_new_session
         logger.info("Push notification service initialized")
     else:
         PUSH_SERVICE = None
         logger.info("Push notification service not available")
+
+    # Build notifier service from config (dispatches to all targets)
+    NOTIFIER_SERVICE = NotifierService(
+        CONFIG.notifications, CONFIG.server_url,
+        url_prefix=CONFIG.url_prefix, push_service=PUSH_SERVICE,
+    )
+    if NOTIFIER_SERVICE.has_targets():
+        ALERT_ENGINE.on_new_alert = _on_new_alert
+        ALERT_ENGINE.on_new_session = _on_new_session
 
     SESSION_SCHEDULER = SessionScheduler(CONFIG, CONFIG.database_path, alert_engine=ALERT_ENGINE, database=DATABASE)
     MAINTENANCE_SCHEDULER = MaintenanceScheduler(CONFIG, DATABASE)
@@ -1471,30 +1496,29 @@ def revoke_tokens(user_id, config):
 
 
 def _on_new_alert(uas_id: str, geozone_name: str):
-    """Callback fired when a new geozone alert is triggered. Sends push notification."""
-    if PUSH_SERVICE is None:
-        return
+    """Callback fired when a new geozone alert is triggered. Dispatches to notifier."""
     name = CONFIG.drone_aliases.get(uas_id, uas_id)
-    PUSH_SERVICE.notify_all(
-        "Geozone Alert",
-        f"{name} entered {geozone_name}",
-        data={"uas_id": uas_id, "geozone": geozone_name},
+    NOTIFIER_SERVICE.dispatch(
+        "alert",
+        uas_id=uas_id,
+        name=name,
+        geozone_name=geozone_name,
     )
 
 
 def _on_new_session(uas_id: str, session_id: str, first_position: Optional[Dict] = None):
-    """Callback fired when a new drone session/flight is detected. Sends push notification."""
-    if PUSH_SERVICE is None:
-        return
+    """Callback fired when a new drone session/flight is detected. Dispatches to notifier."""
     name = CONFIG.drone_aliases.get(uas_id, uas_id)
-    body = f"{name} — new flight detected"
-    if first_position and first_position.get("altitude") is not None:
-        body += f" • Alt: {first_position['altitude']:.0f}m"
-    PUSH_SERVICE.notify_all(
-        "New Drone",
-        body,
-        data={"uas_id": uas_id, "session_id": session_id, "type": "new_session"},
-    )
+    ctx = {
+        "uas_id": uas_id,
+        "name": name,
+        "session_id": session_id,
+    }
+    if first_position:
+        ctx["altitude"] = first_position.get("altitude")
+        ctx["lat"] = first_position.get("latitude")
+        ctx["lon"] = first_position.get("longitude")
+    NOTIFIER_SERVICE.dispatch("new_session", **ctx)
 
 
 def start_background_services():

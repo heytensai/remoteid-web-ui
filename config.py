@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 import yaml
 
+VALID_EVENTS = {"alert", "new_session"}
+VALID_NOTIFIER_TYPES = {"push", "discord"}
+
 logger = logging.getLogger(__name__)
 
 
@@ -78,6 +81,20 @@ class RoleConfig:
 
     name: str
     permissions: List[str]
+
+
+@dataclass
+class NotificationTargetConfig:
+    """A configured notification target (push, discord, etc.).
+
+    Each target specifies its type, which events trigger it, and any
+    type-specific configuration (e.g. webhook URL for discord).
+    """
+
+    name: str
+    type: str  # "push" or "discord"
+    events: List[str]  # subset of ["alert", "new_session"]
+    webhook_url: str = ""
 
 
 VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
@@ -157,6 +174,8 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
     collectors: List[CollectorConfig] = field(default_factory=list)
     position_stale_minutes: int = 30
     roles: Dict[str, RoleConfig] = field(default_factory=dict)
+    server_url: str = ""
+    notifications: List[NotificationTargetConfig] = field(default_factory=list)
 
     def __init__(self, yaml_file: str):
         self.config_path = yaml_file
@@ -231,6 +250,10 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         self.collectors = self._parse_collectors(web_data.get("collectors") or [])
         self.collectors_by_key = {c.api_key: c.name for c in self.collectors if c.api_key}
 
+        # Notification targets
+        self.server_url = web_data.get("server_url", "")
+        self.notifications = self._parse_notifications(web_data.get("notifications") or [])
+
     def _parse_roles(self, roles_data: dict) -> Dict[str, RoleConfig]:
         """Parse role configuration from raw data."""
         roles = {}
@@ -300,6 +323,26 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 timezone=c_data.get("timezone") or None,
             ))
         return collectors
+
+    def _parse_notifications(self, data: list) -> list:
+        """Parse notification target configuration from raw data."""
+        targets = []
+        for nt in data:
+            events = nt.get("events", [])
+            unknown = [e for e in events if e not in VALID_EVENTS]
+            if unknown:
+                logger.warning(
+                    "Notification target %r: unknown event(s): %s",
+                    nt.get("name"), unknown,
+                )
+                events = [e for e in events if e in VALID_EVENTS]
+            targets.append(NotificationTargetConfig(
+                name=nt["name"],
+                type=nt.get("type", ""),
+                events=events,
+                webhook_url=nt.get("webhook_url", ""),
+            ))
+        return targets
 
     def _validate(self): # pylint: disable=too-many-branches
         """Validate configuration values, raising ValueError on invalid input."""
@@ -435,6 +478,16 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 for c in self.collectors
             ],
             "position_stale_minutes": self.position_stale_minutes,
+            "server_url": self.server_url,
+            "notifications": [
+                {
+                    "name": n.name,
+                    "type": n.type,
+                    "events": n.events,
+                    "webhook_url": n.webhook_url,
+                }
+                for n in self.notifications
+            ],
             "roles": {
                 name: {"name": r.name, "permissions": r.permissions}
                 for name, r in self.roles.items()
@@ -532,6 +585,17 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         new_col = {c.name: c for c in new_config.collectors}
         if old_col != new_col:
             logger.info("Reloaded collectors from %s", self.config_path)
+            changed = True
+
+        if new_config.server_url != self.server_url:
+            logger.info("Reloaded server_url from %s (was %r, now %r)",
+                        self.config_path, self.server_url, new_config.server_url)
+            changed = True
+
+        old_nt = {n.name: (n.type, n.events, n.webhook_url) for n in self.notifications}
+        new_nt = {n.name: (n.type, n.events, n.webhook_url) for n in new_config.notifications}
+        if old_nt != new_nt:
+            logger.info("Reloaded notifications from %s", self.config_path)
             changed = True
 
         if not changed:

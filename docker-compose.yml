@@ -20,6 +20,7 @@ services:
       - ./config:/app/config:ro
       # Database persistence (bind mount to host directory)
       - ./data:/app/data
+      - ./templates/notifications:/app/templates/notifications
     env_file:
       - .env
     environment:

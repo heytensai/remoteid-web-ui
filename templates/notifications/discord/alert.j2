@@ -1,0 +1,13 @@
+{
+  "embeds": [{
+    "title": "Geozone Alert",
+    "color": 15158332,
+    "description": "{{ name }} entered {{ geozone_name }}",
+    "fields": [
+      {"name": "Drone", "value": "{{ name }}", "inline": true},
+      {"name": "Zone", "value": "{{ geozone_name }}", "inline": true}
+    ],
+    "timestamp": "{{ timestamp }}"{% if server_url %},
+    "url": "{{ server_url }}"{% endif %}
+  }]
+}

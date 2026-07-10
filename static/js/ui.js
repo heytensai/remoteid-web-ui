@@ -218,7 +218,7 @@ const UIController = {
         if (notifyCheckbox) {
             const container = notifyCheckbox.closest('.settings-item');
             if (container) {
-                container.style.display = this.hasPermission('push_notifications') ? '' : 'none';
+                container.style.display = this.hasPermission('receive_notifications') ? '' : 'none';
             }
         }
     },
