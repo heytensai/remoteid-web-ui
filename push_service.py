@@ -4,18 +4,20 @@ import base64
 import json
 import logging
 import os
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
 try:
     from pywebpush import webpush, WebPushException
-    from pywebpush import Vapid01
+    from pywebpush import Vapid01, Vapid
     from cryptography.hazmat.primitives import serialization
 except ImportError as e:
     logger.error("pywebpush import failed: %s", e)
     webpush = None
     WebPushException = Exception
     Vapid01 = None
+    Vapid = None
     serialization = None
 
 
@@ -116,13 +118,14 @@ class PushService:
         self._vapid_private_key = vapid_private_key
         # pywebpush's ``webpush()`` calls ``Vapid.from_string()`` which does
         # NOT handle PEM headers (it base64-decodes the raw input).  Pre-parse
-        # the PEM into a ``Vapid01`` instance so ``webpush()`` takes the
-        # ``isinstance(vapid_private_key, Vapid01)`` fast-path at line 547.
-        if vapid_private_key and Vapid01 is not None:
+        # the PEM into a ``Vapid`` (Vapid02 / RFC8292) instance so
+        # ``webpush()`` takes the ``isinstance(vapid_private_key, Vapid01)``
+        # fast-path at line 547 and uses RFC8292-compatible signing.
+        if vapid_private_key and Vapid is not None:
             try:
-                self._vapid = Vapid01.from_pem(vapid_private_key.encode("utf-8"))
+                self._vapid = Vapid.from_pem(vapid_private_key.encode("utf-8"))
             except Exception:  # pylint: disable=broad-exception-caught
-                logger.warning("Failed to create Vapid01 from PEM", exc_info=True)
+                logger.warning("Failed to create Vapid instance from PEM", exc_info=True)
                 self._vapid = None
         else:
             self._vapid = None
@@ -154,10 +157,19 @@ class PushService:
 
         subs = self._db.get_all_push_subscriptions()
         if not subs:
+            logger.debug("No push subscriptions to notify")
             return
 
+        logger.info("Sending push notification to %d subscription(s)", len(subs))
         for sub in subs:
             try:
+                if logger.isEnabledFor(logging.DEBUG):
+                    url = urlparse(sub["endpoint"])
+                    aud = f"{url.scheme}://{url.netloc}"
+                    logger.debug(
+                        "Sending push to endpoint=%s... aud=%s",
+                        sub["endpoint"][:60], aud,
+                    )
                 webpush(
                     subscription_info={
                         "endpoint": sub["endpoint"],
@@ -170,11 +182,18 @@ class PushService:
                     vapid_private_key=self._vapid,
                     vapid_claims=self._claims,
                 )
+                logger.info("Push sent to %s...", sub["endpoint"][:60])
             except WebPushException as e:  # pylint: disable=broad-exception-caught
                 # When pywebpush is absent, WebPushException = Exception but
                 # the except branch is unreachable (guard at top of method).
-                if getattr(e, 'response', None) and e.response.status_code == 410:
+                status = None
+                if hasattr(e, 'response') and e.response is not None:
+                    status = getattr(e.response, 'status_code', None)
+                    logger.debug("Push failed with status=%s", status)
+                if status in (410, 403) or '410' in str(e):
                     self._db.remove_push_subscription(sub["endpoint"])
-                    logger.info("Removed expired push subscription (410 Gone)")
+                    logger.info(
+                        "Removed push subscription (%s)", status or "410"
+                    )
                 else:
                     logger.warning("Push send failed: %s", e)

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch, call
 import pytest
 
 from push_service import PushService, _vapid_keys_path, _validate_vapid_key
-from pywebpush import Vapid01
+from pywebpush import Vapid01, Vapid
 
 
 def _valid_pem():
@@ -354,7 +354,7 @@ class TestPushServiceNotifyAll:
             assert mock_webpush.call_count == 2
             first_call = mock_webpush.call_args_list[0]
             assert first_call.kwargs["subscription_info"]["endpoint"] == "https://ep1"
-            assert isinstance(first_call.kwargs["vapid_private_key"], Vapid01)
+            assert isinstance(first_call.kwargs["vapid_private_key"], Vapid)
 
     def test_notify_all_removes_gone_subscription(self):
         mock_db = MagicMock()

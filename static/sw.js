@@ -1,4 +1,4 @@
-const CACHE = 'drone-tracker-v2';
+const CACHE = 'drone-tracker-v3';
 
 const PRECACHE = [
   './',
@@ -72,6 +72,7 @@ self.addEventListener('push', (event) => {
       data.body = event.data.text();
     }
   }
+  console.log('SW push received:', data.title, data.body);
   const options = {
     body: data.body,
     icon: '__URL_PREFIX__/icons/icon-192x192.png',
@@ -79,7 +80,11 @@ self.addEventListener('push', (event) => {
     data: data.data || {},
     vibrate: [200, 100, 200],
   };
-  event.waitUntil(self.registration.showNotification(data.title, options));
+  event.waitUntil(self.registration.showNotification(data.title, options).then(() => {
+    console.log('SW notification shown');
+  }).catch((err) => {
+    console.error('SW notification failed:', err);
+  }));
 });
 
 // Notification click: focus or open the app

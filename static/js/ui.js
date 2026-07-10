@@ -969,16 +969,34 @@ const UIController = {
             }
             console.log('_subscribePush: service worker ready');
             let sub = await registration.pushManager.getSubscription();
-            if (!sub) {
+            if (sub) {
+                const knownKey = localStorage.getItem('vapidKeyFingerprint');
+                if (knownKey === this.vapidPublicKey) {
+                    console.log('_subscribePush: reusing existing subscription:', sub.endpoint);
+                } else {
+                    // VAPID key changed (e.g. server regenerated keys).
+                    // Unsubscribe first so the new subscription is bound to
+                    // the current key, otherwise push services will reject
+                    // with BadJwtToken (key mismatch).
+                    console.log('_subscribePush: removing stale subscription:', sub.endpoint);
+                    await API._post('/api/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {});
+                    await sub.unsubscribe();
+                    console.log('_subscribePush: subscribing with current VAPID key...');
+                    sub = await registration.pushManager.subscribe({
+                        userVisibleOnly: true,
+                        applicationServerKey: this._urlBase64ToUint8Array(this.vapidPublicKey),
+                    });
+                    console.log('Push subscribed:', sub.endpoint);
+                }
+            } else {
                 console.log('_subscribePush: no existing subscription, subscribing...');
                 sub = await registration.pushManager.subscribe({
                     userVisibleOnly: true,
                     applicationServerKey: this._urlBase64ToUint8Array(this.vapidPublicKey),
                 });
                 console.log('Push subscribed:', sub.endpoint);
-            } else {
-                console.log('_subscribePush: reusing existing subscription:', sub.endpoint);
             }
+            localStorage.setItem('vapidKeyFingerprint', this.vapidPublicKey);
             const p256dh = sub.getKey('p256dh');
             const auth = sub.getKey('auth');
             if (!p256dh || !auth) {
