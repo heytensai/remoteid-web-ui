@@ -780,6 +780,7 @@ def _export_csv(positions, filename):
     writer.writerow([
         "timestamp", "latitude", "longitude",
         "altitude_m", "altitude_ft",
+        "height", "height_type",
         "operator_id", "session_id"
     ])
 
@@ -792,6 +793,8 @@ def _export_csv(positions, filename):
             pos.get("longitude", ""),
             alt_m if alt_m is not None else "",
             alt_ft,
+            pos.get("height", "") if pos.get("height") is not None else "",
+            pos.get("height_type", "") or "",
             _safe_csv_val(pos.get("operator_id", "")),
             _safe_csv_val(pos.get("computed_session_id", "")),
         ])
@@ -1518,6 +1521,8 @@ def _on_new_session(uas_id: str, session_id: str, first_position: Optional[Dict]
     }
     if first_position:
         ctx["altitude"] = first_position.get("altitude")
+        ctx["height"] = first_position.get("height")
+        ctx["height_type"] = first_position.get("height_type")
         ctx["lat"] = first_position.get("latitude")
         ctx["lon"] = first_position.get("longitude")
     NOTIFIER_SERVICE.dispatch("new_session", **ctx)

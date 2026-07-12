@@ -1,2 +1,2 @@
 title: New Drone
-body: {{ name }} — new flight detected{% if altitude is not none %} • Alt: {{ '%.0f' % (altitude if use_metric else altitude * 3.28084) }}{{ 'm' if use_metric else 'ft' }}{% endif %}
+body: {{ name }} — new flight detected{% if altitude is not none %} • Alt: {{ '%.0f' % (altitude if use_metric else altitude * 3.28084) }}{{ 'm' if use_metric else 'ft' }}{% endif %}{% if height is not none %} • Ht: {{ '%.0f' % (height if use_metric else height * 3.28084) }}{{ 'm' if use_metric else 'ft' }}{% if height_type %}({{ height_type }}){% endif %}{% endif %}

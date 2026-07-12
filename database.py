@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger(__name__)
 
 # Current schema version — bump this and add a migration in _migrate()
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _adapt_datetime(dt: datetime) -> str:
@@ -63,6 +63,8 @@ class WebDatabase:
             latitude REAL,
             longitude REAL,
             altitude REAL,
+            height REAL,
+            height_type TEXT,
             operator_id TEXT,
             operator_latitude REAL,
             operator_longitude REAL,
@@ -225,6 +227,8 @@ class WebDatabase:
             latitude REAL,
             longitude REAL,
             altitude REAL,
+            height REAL,
+            height_type TEXT,
             operator_id TEXT,
             operator_latitude REAL,
             operator_longitude REAL,
@@ -316,6 +320,18 @@ class WebDatabase:
             WebDatabase._backfill_latest_positions(conn)
             from_version = 3
 
+        if from_version == 3:
+            for table in ("remoteid", "latest_positions"):
+                try:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN height REAL")
+                except sqlite3.OperationalError:
+                    pass  # column already exists
+                try:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN height_type TEXT")
+                except sqlite3.OperationalError:
+                    pass
+            from_version = 4
+
     @staticmethod
     def _ensure_latest_positions_table(conn: sqlite3.Connection):
         """Create the latest_positions table and index (idempotent)."""
@@ -329,6 +345,8 @@ class WebDatabase:
             latitude REAL,
             longitude REAL,
             altitude REAL,
+            height REAL,
+            height_type TEXT,
             operator_id TEXT,
             operator_latitude REAL,
             operator_longitude REAL,
@@ -351,8 +369,8 @@ class WebDatabase:
         """
         INSERT INTO latest_positions
             (uas_id, computed_session_id, max_ts, min_ts,
-             latitude, longitude, altitude, operator_id,
-             operator_latitude, operator_longitude, source,
+             latitude, longitude, altitude, height, height_type,
+             operator_id, operator_latitude, operator_longitude, source,
              collector_latitude, collector_longitude)
         SELECT
             uas_id,
@@ -361,8 +379,8 @@ class WebDatabase:
             MIN(timestamp) OVER (
                 PARTITION BY uas_id, COALESCE(computed_session_id, '')
             ),
-            latitude, longitude, altitude, operator_id,
-            operator_latitude, operator_longitude, source,
+            latitude, longitude, altitude, height, height_type,
+            operator_id, operator_latitude, operator_longitude, source,
             collector_latitude, collector_longitude
         FROM (
             SELECT *,
@@ -392,8 +410,8 @@ class WebDatabase:
                 f"""
                 INSERT INTO latest_positions
                     (uas_id, computed_session_id, max_ts, min_ts,
-                     latitude, longitude, altitude, operator_id,
-                     operator_latitude, operator_longitude, source,
+                     latitude, longitude, altitude, height, height_type,
+                     operator_id, operator_latitude, operator_longitude, source,
                      collector_latitude, collector_longitude)
                 SELECT
                     uas_id,
@@ -402,8 +420,8 @@ class WebDatabase:
                     MIN(timestamp) OVER (
                         PARTITION BY uas_id, COALESCE(computed_session_id, '')
                     ),
-                    latitude, longitude, altitude, operator_id,
-                    operator_latitude, operator_longitude, source,
+                    latitude, longitude, altitude, height, height_type,
+                    operator_id, operator_latitude, operator_longitude, source,
                     collector_latitude, collector_longitude
                 FROM (
                     SELECT *,
@@ -446,7 +464,7 @@ class WebDatabase:
         """Validate and sanitize a record before import.
 
         Returns sanitized tuple or None if record is invalid.
-        row: (id, timestamp, mac_address, uas_id, session_id, lat, lon, alt, op_id, op_lat, op_lon)
+        row: (id, timestamp, mac_address, uas_id, session_id, lat, lon, alt, op_id, op_lat, op_lon, height, height_type)
         """
         # pylint: disable=too-many-return-statements,too-many-branches
 
@@ -515,6 +533,24 @@ class WebDatabase:
             except (TypeError, ValueError):
                 op_lon = None
 
+        # height is optional but must be numeric if present
+        height = None
+        if len(row) > 11 and row[11] is not None:
+            try:
+                height = float(row[11])
+            except (TypeError, ValueError):
+                logger.debug(
+                    "Non-numeric height %s for uas_id %s, skipping", row[11], row[3]
+                )
+                return None
+
+        # height_type is optional text
+        height_type = None
+        if len(row) > 12 and row[12] is not None:
+            height_type = str(row[12]).strip()
+            if not height_type:
+                height_type = None
+
         return (
             row[1],  # timestamp
             row[2] if len(row) > 2 else None,  # mac_address
@@ -526,6 +562,8 @@ class WebDatabase:
             row[8] if len(row) > 8 else None,  # operator_id
             op_lat,  # operator_latitude
             op_lon,  # operator_longitude
+            height,  # height
+            height_type,  # height_type
         )
 
     def import_from_collector(
@@ -614,12 +652,14 @@ class WebDatabase:
                             """
                             INSERT INTO remoteid
                             (source, timestamp, mac_address, uas_id, session_id,
-                             latitude, longitude, altitude, operator_id,
+                             latitude, longitude, altitude, height, height_type,
+                             operator_id,
                              operator_latitude, operator_longitude,
                              computed_session_id, session_detected_at,
                              collector_latitude, collector_longitude)
                             VALUES (:source, :timestamp, :mac_address, :uas_id, :session_id,
-                                    :latitude, :longitude, :altitude, :operator_id,
+                                    :latitude, :longitude, :altitude, :height, :height_type,
+                                    :operator_id,
                                     :operator_latitude, :operator_longitude,
                                     :computed_session_id, :session_detected_at,
                                     :collector_latitude, :collector_longitude)
@@ -633,6 +673,8 @@ class WebDatabase:
                                 "latitude": validated[4],
                                 "longitude": validated[5],
                                 "altitude": validated[6],
+                                "height": validated[10],
+                                "height_type": validated[11],
                                 "operator_id": validated[7],
                                 "operator_latitude": validated[8],
                                 "operator_longitude": validated[9],
@@ -745,6 +787,7 @@ class WebDatabase:
             "latitude",
             "longitude",
             "altitude",
+            "height",
             "operator_latitude",
             "operator_longitude",
         ]
@@ -969,7 +1012,8 @@ class WebDatabase:
                 NULLIF(computed_session_id, '') as computed_session_id,
                 max_ts as timestamp,
                 min_ts as session_start,
-                latitude, longitude, altitude, operator_id,
+                latitude, longitude, altitude, height, height_type,
+                operator_id,
                 operator_latitude, operator_longitude, source,
                 collector_latitude, collector_longitude
             FROM latest_positions
@@ -1004,8 +1048,8 @@ class WebDatabase:
                 NULLIF(computed_session_id, '') as computed_session_id,
                 max_ts as timestamp,
                 min_ts as session_start,
-                latitude, longitude, altitude, operator_id,
-                operator_latitude, operator_longitude, source,
+                latitude, longitude, altitude, height, height_type,
+                operator_id, operator_latitude, operator_longitude, source,
                 collector_latitude, collector_longitude
             FROM latest_positions
             WHERE uas_id = ?
@@ -1090,7 +1134,8 @@ class WebDatabase:
                     uas_id,
                     NULLIF(computed_session_id, '') as computed_session_id,
                     max_ts as timestamp, min_ts as session_start,
-                    latitude, longitude, altitude, operator_id,
+                    latitude, longitude, altitude, height, height_type,
+                    operator_id,
                     operator_latitude, operator_longitude, source,
                     collector_latitude, collector_longitude
                 FROM latest_positions
@@ -1109,7 +1154,8 @@ class WebDatabase:
                 uas_id,
                 NULLIF(computed_session_id, '') as computed_session_id,
                 max_ts as timestamp, min_ts as session_start,
-                latitude, longitude, altitude, operator_id,
+                latitude, longitude, altitude, height, height_type,
+                operator_id,
                 operator_latitude, operator_longitude, source,
                 collector_latitude, collector_longitude
             FROM latest_positions
@@ -1170,7 +1216,7 @@ class WebDatabase:
 
         cursor = conn.execute(
             """
-            SELECT latitude, longitude, altitude, timestamp,
+            SELECT latitude, longitude, altitude, height, height_type, timestamp,
                    operator_id, operator_latitude, operator_longitude,
                    computed_session_id
             FROM remoteid
@@ -1195,7 +1241,7 @@ class WebDatabase:
 
         cursor = conn.execute(
             """
-            SELECT latitude, longitude, altitude, timestamp,
+            SELECT latitude, longitude, altitude, height, height_type, timestamp,
                    operator_id, operator_latitude, operator_longitude,
                    computed_session_id, collector_latitude, collector_longitude
             FROM remoteid
@@ -1221,7 +1267,7 @@ class WebDatabase:
         # Get all positions with session info
         cursor = conn.execute(
             """
-            SELECT latitude, longitude, altitude, timestamp,
+            SELECT latitude, longitude, altitude, height, height_type, timestamp,
                    operator_id, operator_latitude, operator_longitude,
                    computed_session_id
             FROM remoteid
@@ -1369,6 +1415,8 @@ class WebDatabase:
                 if record.get("altitude") is not None and alt is None:
                     errors.append({"index": idx, "reason": "Invalid altitude"})
                     continue
+                height = self._sanitize_float(record.get("height"), "height")
+                height_type = record.get("height_type")
                 # Operator coordinates: permissive (set to None if invalid)
                 op_lat = self._sanitize_float(
                     record.get("operator_latitude"), "operator_latitude"
@@ -1386,6 +1434,8 @@ class WebDatabase:
                     "latitude": lat,
                     "longitude": lon,
                     "altitude": alt,
+                    "height": height,
+                    "height_type": height_type,
                     "operator_id": record.get("operator_id"),
                     "operator_latitude": op_lat,
                     "operator_longitude": op_lon,
@@ -1418,7 +1468,8 @@ class WebDatabase:
             rows.append((
                 rec["source"], rec["timestamp"], rec["mac_address"],
                 rec["uas_id"], rec["session_id"], rec["latitude"],
-                rec["longitude"], rec["altitude"], rec["operator_id"],
+                rec["longitude"], rec["altitude"], rec["height"],
+                rec["height_type"], rec["operator_id"],
                 rec["operator_latitude"], rec["operator_longitude"],
                 rec["computed_session_id"], rec["session_detected_at"],
                 rec["collector_latitude"], rec["collector_longitude"],
@@ -1432,11 +1483,11 @@ class WebDatabase:
             """
             INSERT OR IGNORE INTO remoteid
             (source, timestamp, mac_address, uas_id, session_id,
-             latitude, longitude, altitude, operator_id,
-             operator_latitude, operator_longitude,
+             latitude, longitude, altitude, height, height_type,
+             operator_id, operator_latitude, operator_longitude,
              computed_session_id, session_detected_at,
              collector_latitude, collector_longitude)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )

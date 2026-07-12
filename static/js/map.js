@@ -946,6 +946,9 @@ const MapController = {
         const altitude = pos.altitude !== null && pos.altitude !== undefined
             ? Units.formatAltitude(pos.altitude, true, 1)
             : 'N/A';
+        const height = pos.height !== null && pos.height !== undefined
+            ? Units.formatAltitude(pos.height, true, 1)
+            : null;
         const time = new Date(pos.timestamp);
         const dateStr = time.toLocaleDateString('en-CA');
         const timeStr = time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -971,6 +974,10 @@ const MapController = {
                 <span class="popup-label">Altitude:</span>
                 <span class="popup-value">${altitude}</span>
             </div>
+            ${height ? `<div class="popup-row">
+                <span class="popup-label">Height${pos.height_type ? ' (' + esc(pos.height_type) + ')' : ''}:</span>
+                <span class="popup-value">${height}</span>
+            </div>` : ''}
             <div class="popup-row">
                 <span class="popup-label">Position:</span>
                 <span class="popup-value">${pos.latitude.toFixed(6)}, ${pos.longitude.toFixed(6)}</span>

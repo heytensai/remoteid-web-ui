@@ -1751,6 +1751,9 @@ const UIController = {
         const altitude = drone.altitude !== null && drone.altitude !== undefined
             ? Units.formatAltitude(drone.altitude, true, 0)
             : 'N/A';
+        const height = drone.height !== null && drone.height !== undefined
+            ? Units.formatAltitude(drone.height, true, 0)
+            : null;
         const time = new Date(drone.timestamp);
         const timeStr = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 
@@ -1778,7 +1781,7 @@ const UIController = {
                     <div class="drone-meta-row">
                         ${this._getManufacturerBadgeHtml(drone.uas_id)}
                         <div class="session-id">${esc(sessionId)}</div>
-                        <div class="drone-meta">Alt: ${altitude} | ${timeStr} | ${durationStr}</div>
+                        <div class="drone-meta">Alt: ${altitude}${height ? ` Ht: ${height}` : ''} | ${timeStr} | ${durationStr}</div>
                     </div>
                 </div>
                 <div class="drone-actions">
