@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 import yaml
 
 VALID_EVENTS = {"alert", "new_session"}
-VALID_NOTIFIER_TYPES = {"push", "discord", "ntfy"}
+VALID_NOTIFIER_TYPES = {"push", "discord", "ntfy", "teams"}
 
 logger = logging.getLogger(__name__)
 

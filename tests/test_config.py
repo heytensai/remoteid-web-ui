@@ -933,6 +933,7 @@ def test_valid_notifier_types_includes_ntfy():
     assert "ntfy" in VALID_NOTIFIER_TYPES
     assert "discord" in VALID_NOTIFIER_TYPES
     assert "push" in VALID_NOTIFIER_TYPES
+    assert "teams" in VALID_NOTIFIER_TYPES
 
 
 def test_notification_target_config_defaults():

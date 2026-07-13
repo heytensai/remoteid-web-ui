@@ -150,3 +150,9 @@ web_interface:
       events:
         - alert
         - new_session
+    # - name: "Teams Alerts"
+    #   type: "teams"
+    #   webhook_url: "https://*.webhook.office.com/botid/..."
+    #   events:
+    #     - alert
+    #     - new_session

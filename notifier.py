@@ -10,6 +10,8 @@ The rendered output is dispatched differently per type:
   configured ``webhook_url``.
 - **ntfy**: the template renders the plain-text message body. Metadata
   (title, priority, tags, click URL) is sent as ntfy HTTP headers.
+- **teams**: the template renders an Adaptive Card JSON payload that is
+  POSTed to the configured Incoming Webhook URL.
 """
 
 import base64
@@ -100,6 +102,42 @@ def _send_discord(webhook_url: str, payload: str):
         )
     except urllib.error.URLError as e:
         logger.warning("Discord webhook connection failed: %s", e.reason)
+
+
+def _send_teams(webhook_url: str, payload: str, token: str = ""):
+    """POST a JSON payload to a Microsoft Teams Incoming Webhook URL.
+
+    Optionally sends a Bearer token for tenant-restricted webhooks.
+    """
+    data = payload.encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": NOTIFIER_USER_AGENT,
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(
+        webhook_url,
+        data=data,
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            resp_body = resp.read().decode("utf-8", errors="replace")
+            logger.debug("Teams webhook response %s: %s", resp.status, resp_body)
+            if not 200 <= resp.status < 300:
+                logger.warning(
+                    "Teams webhook returned %s: %s", resp.status, resp_body,
+                )
+    except urllib.error.HTTPError as e:
+        resp_body = e.read().decode("utf-8", errors="replace") if e.fp else ""
+        logger.warning(
+            "Teams webhook HTTP %s (headers=%s): body=%s",
+            e.code, dict(e.headers), resp_body,
+        )
+    except urllib.error.URLError as e:
+        logger.warning("Teams webhook connection failed: %s", e.reason)
 
 
 class _IPv4HTTPSConnection(http.client.HTTPSConnection):
@@ -371,12 +409,14 @@ class NotifierService:
                             rendered["body"],
                             data=ctx,
                         )
+                        logger.info("Sent %s notification via %s (%s)", event, nt.type, nt.name)
                     else:
                         logger.debug("Push service unavailable, skipping push target %r", nt.name)
                 elif nt.type == "discord":
                     payload = template.render(**ctx)
                     logger.debug("Discord payload for %s: %s", nt.name, payload)
                     _send_discord(nt.webhook_url, payload)
+                    logger.info("Sent %s notification via %s (%s)", event, nt.type, nt.name)
                 elif nt.type == "ntfy":
                     payload = template.render(**ctx)
                     ntfy_headers = dict(_NTFY_EVENT_HEADERS.get(event, {}))
@@ -386,6 +426,12 @@ class NotifierService:
                     _send_ntfy(nt.webhook_url, payload, token=nt.token,
                                username=nt.username, password=nt.password,
                                **ntfy_headers)
+                    logger.info("Sent %s notification via %s (%s)", event, nt.type, nt.name)
+                elif nt.type == "teams":
+                    payload = template.render(**ctx)
+                    logger.debug("Teams payload for %s: %s", nt.name, payload)
+                    _send_teams(nt.webhook_url, payload, token=nt.token)
+                    logger.info("Sent %s notification via %s (%s)", event, nt.type, nt.name)
                 else:
                     logger.warning("Unknown notification type %r for target %r", nt.type, nt.name)
             except TemplateError as e:

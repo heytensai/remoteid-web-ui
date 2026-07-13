@@ -221,6 +221,8 @@ web_interface:
   #   - "ntfy"     — ntfy push notification service (ntfy.sh or self-hosted)
   #                  set webhook_url to the full publish URL, e.g.
   #                  "https://ntfy.sh/mytopic" or "https://ntfy.example.com/alerts"
+  #   - "teams"    — Microsoft Teams Incoming Webhook (Adaptive Cards)
+  #                  set webhook_url to the Incoming Webhook URL
   #
   # Optional fields:
   #   - enabled    — true/false, defaults to true. Set to false to temporarily
@@ -275,6 +277,23 @@ web_interface:
     #   webhook_url: "https://ntfy.example.com/alerts"
     #   username: "myuser"
     #   password: "mypassword"
+    #   events:
+    #     - alert
+    #     - new_session
+    #
+    # Microsoft Teams Incoming Webhook:
+    # - name: "Teams Alerts"
+    #   type: "teams"
+    #   webhook_url: "https://*.webhook.office.com/botid/..."
+    #   events:
+    #     - alert
+    #     - new_session
+    #
+    # Teams with Bearer token (tenant-restricted webhooks):
+    # - name: "Teams Secure"
+    #   type: "teams"
+    #   webhook_url: "https://*.logic.azure.com:443/..."
+    #   token: "eyJ0eXAiOi..."
     #   events:
     #     - alert
     #     - new_session
