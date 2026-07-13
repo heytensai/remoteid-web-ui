@@ -338,7 +338,7 @@ docker-compose up -d
 docker-compose -f docker-compose.dev.yml up
 ```
 
-See `docker-config/README.md` for detailed Docker configuration.
+See `default.web_config.yaml` for configuration options.
 
 ### Option B: Manual Installation
 

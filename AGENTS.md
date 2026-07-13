@@ -13,7 +13,6 @@
 
 1. **Always edit `default.web_config.yaml`** - This is the template file that IS tracked in git
 2. **Never edit `config/web_config.yaml`** - This is the user's local config (not tracked)
-3. **Also update `docker-config/web_config.docker.yaml`** - Docker-specific config
 
 ### Config Files Overview
 
@@ -21,15 +20,13 @@
 |------|---------|-----------------|
 | `default.web_config.yaml` | Template with defaults and documentation | Yes |
 | `config/web_config.yaml` | User's actual configuration | No (in .gitignore) |
-| `docker-config/web_config.docker.yaml` | Docker development config | Yes |
 
 ### When Adding New Config Options
 
 1. Add the option to `config.py` (WebConfig class)
 2. Add the option to `default.web_config.yaml` with comments
-3. Add the option to `docker-config/web_config.docker.yaml`
-4. Update the API endpoint in `app.py` if needed
-5. Update this AGENTS.md file
+3. Update the API endpoint in `app.py` if needed
+4. Update this AGENTS.md file
 
 ### Current Config Options
 
@@ -206,7 +203,7 @@ The CLI initializes the app internally (`_init_app`), so it requires the `--conf
 
 ### When Adding New Permission-Gated Features
 
-1. Add the permission string to the role definitions in `default.web_config.yaml` and `docker-config/web_config.docker.yaml`
+1. Add the permission string to the role definitions in `default.web_config.yaml`
 2. Add `@require_permission('perm_name')` decorator to backend routes
 3. Use `UIController.hasPermission('perm_name')` in frontend to show/hide UI elements
 4. Update this AGENTS.md

@@ -27,8 +27,8 @@ services:
       - ./alert_engine.py:/app/alert_engine.py:ro
       - ./templates:/app/templates:ro
       - ./static:/app/static:ro
-      # Config file
-      - ./docker-config/web_config.docker.yaml:/app/config/web_config.yaml:ro
+      # Config file (mount your own config/web_config.yaml here to customize)
+      - ./default.web_config.yaml:/app/config/web_config.yaml:ro
       # Database persistence (bind mount to host directory)
       - ./data:/app/data
     env_file:

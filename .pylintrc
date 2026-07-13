@@ -1,5 +1,5 @@
 [MAIN]
-ignore=CVS,env,.git,node_modules,docker-config
+ignore=CVS,env,.git,node_modules
 ignore-paths=tests/
 py-version=3.12
 jobs=0
