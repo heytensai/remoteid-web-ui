@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 import yaml
 
 VALID_EVENTS = {"alert", "new_session"}
-VALID_NOTIFIER_TYPES = {"push", "discord"}
+VALID_NOTIFIER_TYPES = {"push", "discord", "ntfy"}
 
 logger = logging.getLogger(__name__)
 
@@ -85,16 +85,20 @@ class RoleConfig:
 
 @dataclass
 class NotificationTargetConfig:
-    """A configured notification target (push, discord, etc.).
+    """A configured notification target (push, discord, ntfy, etc.).
 
     Each target specifies its type, which events trigger it, and any
-    type-specific configuration (e.g. webhook URL for discord).
+    type-specific configuration (e.g. webhook URL for discord/ntfy).
     """
 
     name: str
-    type: str  # "push" or "discord"
+    type: str  # "push", "discord", or "ntfy"
     events: List[str]  # subset of ["alert", "new_session"]
+    enabled: bool = True
     webhook_url: str = ""
+    token: str = ""  # ntfy Bearer auth token (mutually exclusive with username/password)
+    username: str = ""  # ntfy Basic auth username
+    password: str = ""  # ntfy Basic auth password
 
 
 VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
@@ -340,7 +344,11 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 name=nt["name"],
                 type=nt.get("type", ""),
                 events=events,
+                enabled=nt.get("enabled", True),
                 webhook_url=nt.get("webhook_url", ""),
+                token=nt.get("token", ""),
+                username=nt.get("username", ""),
+                password=nt.get("password", ""),
             ))
         return targets
 
@@ -592,8 +600,11 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                         self.config_path, self.server_url, new_config.server_url)
             changed = True
 
-        old_nt = {n.name: (n.type, n.events, n.webhook_url) for n in self.notifications}
-        new_nt = {n.name: (n.type, n.events, n.webhook_url) for n in new_config.notifications}
+        def _nt_key(n):
+            return (n.type, n.events, n.enabled, n.webhook_url,
+                    n.token, n.username, n.password)
+        old_nt = {n.name: _nt_key(n) for n in self.notifications}
+        new_nt = {n.name: _nt_key(n) for n in new_config.notifications}
         if old_nt != new_nt:
             logger.info("Reloaded notifications from %s", self.config_path)
             changed = True

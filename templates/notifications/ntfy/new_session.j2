@@ -1,0 +1,1 @@
+{{ name }} started a new flight{% if altitude is not none %} at {{ '%.0f' % (altitude if use_metric else altitude * 3.28084) }}{{ 'm' if use_metric else 'ft' }}{% endif %}

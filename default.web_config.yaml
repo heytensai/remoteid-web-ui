@@ -218,6 +218,17 @@ web_interface:
   # Supported types:
   #   - "push"     — browser Web Push notifications (requires pywebpush)
   #   - "discord"  — Discord webhook (embeds) — set webhook_url
+  #   - "ntfy"     — ntfy push notification service (ntfy.sh or self-hosted)
+  #                  set webhook_url to the full publish URL, e.g.
+  #                  "https://ntfy.sh/mytopic" or "https://ntfy.example.com/alerts"
+  #
+  # Optional fields:
+  #   - enabled    — true/false, defaults to true. Set to false to temporarily
+  #                  disable a target without removing its configuration.
+  #
+  # ntfy auth (mutually exclusive, omit both for public topics):
+  #   - token      — Bearer token auth (e.g. "tk_xxx")
+  #   - username/password — Basic auth for self-hosted servers
   #
   # Event filters (subset of ["alert", "new_session"]):
   #   - alert       — drone enters an alert-enabled geozone
@@ -244,6 +255,26 @@ web_interface:
     #     - alert
     # - name: "Flight Log"
     #   type: "discord"
+    #   enabled: false             # temporarily disabled
     #   webhook_url: "https://discord.com/api/webhooks/..."
     #   events:
+    #     - new_session
+    #
+    # ntfy with Bearer token (ntfy.sh or self-hosted):
+    # - name: "Phone Alerts"
+    #   type: "ntfy"
+    #   webhook_url: "https://ntfy.sh/mytopic"
+    #   token: "tk_xxx"
+    #   events:
+    #     - alert
+    #     - new_session
+    #
+    # ntfy with Basic auth (self-hosted):
+    # - name: "Self-Hosted Alerts"
+    #   type: "ntfy"
+    #   webhook_url: "https://ntfy.example.com/alerts"
+    #   username: "myuser"
+    #   password: "mypassword"
+    #   events:
+    #     - alert
     #     - new_session

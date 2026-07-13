@@ -8,6 +8,7 @@ import yaml
 
 from config import (
     WebConfig, MapConfig, WaypointConfig, RoleConfig, MaintenanceConfig,
+    NotificationTargetConfig, VALID_NOTIFIER_TYPES,
 )
 
 
@@ -921,3 +922,212 @@ def test_maintenance_no_log_when_unchanged(sample_config_yaml, caplog):
         cfg.reload_hot_config()
 
     assert not any("Reloaded maintenance" in msg for msg in caplog.messages)
+
+
+# ---------------------------------------------------------------------------
+# Notification target config
+# ---------------------------------------------------------------------------
+
+
+def test_valid_notifier_types_includes_ntfy():
+    assert "ntfy" in VALID_NOTIFIER_TYPES
+    assert "discord" in VALID_NOTIFIER_TYPES
+    assert "push" in VALID_NOTIFIER_TYPES
+
+
+def test_notification_target_config_defaults():
+    nt = NotificationTargetConfig(name="Test", type="push", events=["alert"])
+    assert nt.enabled is True
+    assert nt.webhook_url == ""
+    assert nt.token == ""
+    assert nt.username == ""
+    assert nt.password == ""
+
+
+def test_notification_target_config_disabled():
+    nt = NotificationTargetConfig(
+        name="Disabled", type="discord", events=["alert"], enabled=False,
+    )
+    assert nt.enabled is False
+
+
+def test_notification_target_config_with_token():
+    nt = NotificationTargetConfig(
+        name="ntfy-test", type="ntfy", events=["alert"],
+        webhook_url="https://ntfy.sh/topic", token="tk_abc123",
+    )
+    assert nt.token == "tk_abc123"
+    assert nt.webhook_url == "https://ntfy.sh/topic"
+    assert nt.username == ""
+
+
+def test_notification_target_config_with_basic_auth():
+    nt = NotificationTargetConfig(
+        name="ntfy-basic", type="ntfy", events=["alert"],
+        webhook_url="https://ntfy.example.com/t", username="admin", password="secret",
+    )
+    assert nt.username == "admin"
+    assert nt.password == "secret"
+    assert nt.token == ""
+
+
+def test_parse_notifications_ntfy():
+    config_data = {
+        "database_path": "/tmp",
+        "notifications": [
+            {
+                "name": "Phone Alerts",
+                "type": "ntfy",
+                "webhook_url": "https://ntfy.sh/mytopic",
+                "token": "tk_secret",
+                "events": ["alert", "new_session"],
+            },
+        ],
+    }
+    path = _write_config(config_data)
+    try:
+        cfg = WebConfig(path)
+        assert len(cfg.notifications) == 1
+        nt = cfg.notifications[0]
+        assert nt.name == "Phone Alerts"
+        assert nt.type == "ntfy"
+        assert nt.webhook_url == "https://ntfy.sh/mytopic"
+        assert nt.token == "tk_secret"
+        assert nt.events == ["alert", "new_session"]
+    finally:
+        os.unlink(path)
+
+
+def test_parse_notifications_ntfy_no_token():
+    """ntfy target without token is valid (public topic)."""
+    config_data = {
+        "database_path": "/tmp",
+        "notifications": [
+            {
+                "name": "Public ntfy",
+                "type": "ntfy",
+                "webhook_url": "https://ntfy.sh/public-topic",
+                "events": ["alert"],
+            },
+        ],
+    }
+    path = _write_config(config_data)
+    try:
+        cfg = WebConfig(path)
+        assert cfg.notifications[0].token == ""
+        assert cfg.notifications[0].username == ""
+    finally:
+        os.unlink(path)
+
+
+def test_parse_notifications_ntfy_basic_auth():
+    config_data = {
+        "database_path": "/tmp",
+        "notifications": [
+            {
+                "name": "Self-Hosted",
+                "type": "ntfy",
+                "webhook_url": "https://ntfy.example.com/alerts",
+                "username": "myuser",
+                "password": "mypassword",
+                "events": ["alert"],
+            },
+        ],
+    }
+    path = _write_config(config_data)
+    try:
+        cfg = WebConfig(path)
+        nt = cfg.notifications[0]
+        assert nt.username == "myuser"
+        assert nt.password == "mypassword"
+        assert nt.token == ""
+    finally:
+        os.unlink(path)
+
+
+def test_parse_notifications_disabled():
+    config_data = {
+        "database_path": "/tmp",
+        "notifications": [
+            {
+                "name": "Paused",
+                "type": "discord",
+                "webhook_url": "https://discord.com/api/webhooks/...",
+                "enabled": False,
+                "events": ["alert"],
+            },
+        ],
+    }
+    path = _write_config(config_data)
+    try:
+        cfg = WebConfig(path)
+        assert cfg.notifications[0].enabled is False
+    finally:
+        os.unlink(path)
+
+
+def test_parse_notifications_enabled_defaults_true():
+    config_data = {
+        "database_path": "/tmp",
+        "notifications": [
+            {"name": "Active", "type": "push", "events": ["alert"]},
+        ],
+    }
+    path = _write_config(config_data)
+    try:
+        cfg = WebConfig(path)
+        assert cfg.notifications[0].enabled is True
+    finally:
+        os.unlink(path)
+
+
+def test_parse_notifications_multiple_types():
+    config_data = {
+        "database_path": "/tmp",
+        "notifications": [
+            {"name": "Push", "type": "push", "events": ["alert"]},
+            {"name": "Discord", "type": "discord", "webhook_url": "https://discord.com/api/webhooks/...", "events": ["new_session"]},
+            {"name": "ntfy", "type": "ntfy", "webhook_url": "https://ntfy.sh/t", "token": "tk_x", "events": ["alert", "new_session"]},
+        ],
+    }
+    path = _write_config(config_data)
+    try:
+        cfg = WebConfig(path)
+        assert len(cfg.notifications) == 3
+        types = {nt.type for nt in cfg.notifications}
+        assert types == {"push", "discord", "ntfy"}
+    finally:
+        os.unlink(path)
+
+
+def test_notification_hot_reload_detects_token_change(sample_config_yaml):
+    config_path, _ = sample_config_yaml
+    cfg = WebConfig(config_path)
+
+    with open(config_path, encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    data["web_interface"]["notifications"] = [
+        {
+            "name": "ntfy",
+            "type": "ntfy",
+            "webhook_url": "https://ntfy.sh/t",
+            "token": "tk_old",
+            "events": ["alert"],
+        },
+    ]
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f)
+
+    cfg = cfg.reload_hot_config() or cfg
+    assert cfg.notifications[0].token == "tk_old"
+
+    # Change the token
+    with open(config_path, encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    data["web_interface"]["notifications"][0]["token"] = "tk_new"
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f)
+
+    new_cfg = cfg.reload_hot_config()
+    assert new_cfg is not None
+    assert new_cfg.notifications[0].token == "tk_new"
