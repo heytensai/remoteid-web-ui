@@ -977,6 +977,21 @@ def submit_data():
             {"success": True, "inserted": 0, "errors": [], "last_timestamp": None}
         )
 
+    # Log every incoming record for debugging
+    for idx, rec in enumerate(data):
+        logger.info(
+            "Packet %d/%d from %s: uas_id=%s timestamp=%s lat=%s lon=%s "
+            "alt=%s height=%s height_type=%s mac=%s session_id=%s "
+            "operator_id=%s operator_lat=%s operator_lon=%s",
+            idx + 1, len(data), source,
+            rec.get("uas_id"), rec.get("timestamp"),
+            rec.get("latitude"), rec.get("longitude"),
+            rec.get("altitude"), rec.get("height"), rec.get("height_type"),
+            rec.get("mac_address"), rec.get("session_id"),
+            rec.get("operator_id"),
+            rec.get("operator_latitude"), rec.get("operator_longitude"),
+        )
+
     try:
         # Look up collector-specific timezone and fixed position for this source
         source_tz = None
@@ -995,6 +1010,10 @@ def submit_data():
             source, data, source_tz=source_tz,
             collector_lat=collector_lat, collector_lon=collector_lon,
         )
+
+        if errors:
+            for err in errors:
+                logger.warning("Submit error from %s: %s", source, err)
 
         # Log the submission to sync_log
         DATABASE.log_submission(source, inserted)

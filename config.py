@@ -127,11 +127,13 @@ class AlertsConfig:
 
     stale_timeout: int = 300  # seconds without position before marking as left
     skip_known_drones: bool = False  # skip alerts for drones with aliases
+    new_session_cooldown: int = 300  # seconds before same (uas_id, session_id) can fire again
 
     def __init__(self, data: dict = None):
         if data:
             self.stale_timeout = data.get("stale_timeout", 300)
             self.skip_known_drones = data.get("skip_known_drones", False)
+            self.new_session_cooldown = data.get("new_session_cooldown", 300)
 
 
 @dataclass

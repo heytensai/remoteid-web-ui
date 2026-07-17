@@ -10,6 +10,7 @@ check methods added to ``evaluate()``.
 
 import logging
 import math
+import time
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Callable
 
@@ -75,6 +76,7 @@ class AlertEngine:
         self._rebuild_geozone_list()
         # Session tracking
         self._known_sessions: Dict[str, str] = {}
+        self._session_alert_cooldown: Dict[str, float] = {}  # key → monotonic timestamp of last fire
         self._load_known_sessions()
         # Callbacks
         self.on_new_alert: Optional[Callable] = None
@@ -122,8 +124,23 @@ class AlertEngine:
                 if old is not None and old != session_id:
                     logger.debug("Session changed for %s: %s -> %s", uas_id, old, session_id)
             self._known_sessions = current
+            self._prune_cooldowns()
         except Exception:  # pylint: disable=broad-exception-caught
             logger.exception("AlertEngine: failed to sync sessions")
+
+    def _prune_cooldowns(self):
+        """Remove cooldown entries older than 2× the cooldown period.
+
+        Prevents unbounded memory growth from stale keys that will never
+        match again (session IDs that changed long ago).
+        """
+        now = time.monotonic()
+        cutoff = now - (self._config.alerts.new_session_cooldown * 2)
+        stale = [k for k, t in self._session_alert_cooldown.items() if t < cutoff]
+        for k in stale:
+            del self._session_alert_cooldown[k]
+        if stale:
+            logger.debug("Pruned %d stale session alert cooldown entries", len(stale))
 
     # --- Public entry point ---
 
@@ -146,17 +163,31 @@ class AlertEngine:
         Queries the latest ``computed_session_id`` from the database and
         compares it against the internally tracked value for this UAS.
         A difference means either a first flight or a new flight after a gap.
+        Uses a per-uas_id cooldown to prevent duplicate alerts when session
+        detection regenerates IDs (the scheduler runs every ~30s, changing
+        all session UUIDs).
         """
         session_id = self._db.get_latest_session_id(uas_id)
         if session_id is None:
             return
-        if self._known_sessions.get(uas_id) != session_id:
-            self._known_sessions[uas_id] = session_id
-            first_pos = positions[0] if positions else None
-            logger.info(
-                "New session for %s: %s", uas_id, session_id,
+        if self._known_sessions.get(uas_id) == session_id:
+            return
+        now = time.monotonic()
+        cooldown = self._config.alerts.new_session_cooldown
+        last_fired = self._session_alert_cooldown.get(uas_id)
+        if last_fired is not None and (now - last_fired) < cooldown:
+            logger.debug(
+                "Skipping duplicate new session alert for %s: %s (cooldown %ds)",
+                uas_id, session_id, cooldown,
             )
-            self._fire(self.on_new_session, uas_id, session_id, first_pos)
+            return
+        self._known_sessions[uas_id] = session_id
+        self._session_alert_cooldown[uas_id] = now
+        first_pos = positions[0] if positions else None
+        logger.info(
+            "New session for %s: %s", uas_id, session_id,
+        )
+        self._fire(self.on_new_session, uas_id, session_id, first_pos)
 
     # --- Geozone evaluation ---
 
