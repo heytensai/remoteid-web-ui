@@ -46,7 +46,7 @@ def sample_config_yaml():
                         "view_stats", "view_alert_history", "view_settings",
                         "use_replay", "export_data", "add_waypoint",
                         "edit_waypoint", "delete_waypoint", "add_alias",
-                        "edit_alias", "delete_alias", "push_notifications",
+                        "edit_alias", "delete_alias", "receive_notifications",
                         "manage_collectors",
                     ],
                 },
@@ -55,7 +55,7 @@ def sample_config_yaml():
                         "view_map", "view_drones", "view_tracks",
                         "view_operators", "view_waypoints",
                         "view_alert_history", "use_replay",
-                        "push_notifications",
+                        "receive_notifications",
                     ],
                 },
                 "guest": {

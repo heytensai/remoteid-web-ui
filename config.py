@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 import yaml
 
 VALID_EVENTS = {"alert", "new_session"}
-VALID_NOTIFIER_TYPES = {"push", "discord", "ntfy", "teams"}
+VALID_NOTIFIER_TYPES = {"discord", "ntfy", "teams"}
 
 logger = logging.getLogger(__name__)
 
@@ -85,14 +85,14 @@ class RoleConfig:
 
 @dataclass
 class NotificationTargetConfig:
-    """A configured notification target (push, discord, ntfy, etc.).
+    """A configured notification target (discord, ntfy, teams, etc.).
 
     Each target specifies its type, which events trigger it, and any
     type-specific configuration (e.g. webhook URL for discord/ntfy).
     """
 
     name: str
-    type: str  # "push", "discord", or "ntfy"
+    type: str  # "discord", "ntfy", or "teams"
     events: List[str]  # subset of ["alert", "new_session"]
     enabled: bool = True
     webhook_url: str = ""

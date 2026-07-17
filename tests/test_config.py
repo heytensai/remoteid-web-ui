@@ -932,12 +932,11 @@ def test_maintenance_no_log_when_unchanged(sample_config_yaml, caplog):
 def test_valid_notifier_types_includes_ntfy():
     assert "ntfy" in VALID_NOTIFIER_TYPES
     assert "discord" in VALID_NOTIFIER_TYPES
-    assert "push" in VALID_NOTIFIER_TYPES
     assert "teams" in VALID_NOTIFIER_TYPES
 
 
 def test_notification_target_config_defaults():
-    nt = NotificationTargetConfig(name="Test", type="push", events=["alert"])
+    nt = NotificationTargetConfig(name="Test", type="discord", events=["alert"])
     assert nt.enabled is True
     assert nt.webhook_url == ""
     assert nt.token == ""
@@ -1071,7 +1070,7 @@ def test_parse_notifications_enabled_defaults_true():
     config_data = {
         "database_path": "/tmp",
         "notifications": [
-            {"name": "Active", "type": "push", "events": ["alert"]},
+            {"name": "Active", "type": "discord", "events": ["alert"]},
         ],
     }
     path = _write_config(config_data)
@@ -1086,17 +1085,18 @@ def test_parse_notifications_multiple_types():
     config_data = {
         "database_path": "/tmp",
         "notifications": [
-            {"name": "Push", "type": "push", "events": ["alert"]},
-            {"name": "Discord", "type": "discord", "webhook_url": "https://discord.com/api/webhooks/...", "events": ["new_session"]},
+            {"name": "Discord", "type": "discord", "webhook_url": "https://discord.com/api/webhooks/...", "events": ["alert"]},
+            {"name": "Discord2", "type": "discord", "webhook_url": "https://discord.com/api/webhooks/...", "events": ["new_session"]},
+            {"name": "Teams", "type": "teams", "webhook_url": "https://example.webhook.office.com/webhookb2/...", "events": ["alert", "new_session"]},
             {"name": "ntfy", "type": "ntfy", "webhook_url": "https://ntfy.sh/t", "token": "tk_x", "events": ["alert", "new_session"]},
         ],
     }
     path = _write_config(config_data)
     try:
         cfg = WebConfig(path)
-        assert len(cfg.notifications) == 3
+        assert len(cfg.notifications) == 4
         types = {nt.type for nt in cfg.notifications}
-        assert types == {"push", "discord", "ntfy"}
+        assert types == {"discord", "ntfy", "teams"}
     finally:
         os.unlink(path)
 

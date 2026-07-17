@@ -21,7 +21,7 @@ def test_schema_version_created(db):
         "SELECT MAX(version) FROM _schema_version"
     ).fetchone()[0]
     conn.close()
-    assert version == 4
+    assert version == 5
 
 
 def test_schema_version_upgrade(tmp_path):
@@ -585,38 +585,6 @@ def test_update_and_get_collector_positions(db):
     db.update_collector_position("Node2", 38.0, -123.0)
     positions = db.get_collector_positions()
     assert len(positions) == 2
-
-
-# --- Push subscription CRUD ---
-
-def test_push_subscription_save_and_get(db):
-    subs = db.get_all_push_subscriptions()
-    assert subs == []
-
-    db.save_push_subscription("https://push.example.com/1", "p256dh_1", "auth_1")
-    subs = db.get_all_push_subscriptions()
-    assert len(subs) == 1
-    assert subs[0]["endpoint"] == "https://push.example.com/1"
-
-    db.save_push_subscription("https://push.example.com/2", "p256dh_2", "auth_2", user_agent="TestAgent")
-    subs = db.get_all_push_subscriptions()
-    assert len(subs) == 2
-
-
-def test_push_subscription_remove(db):
-    db.save_push_subscription("https://push.example.com/remove", "pk", "ak")
-    db.remove_push_subscription("https://push.example.com/remove")
-    subs = db.get_all_push_subscriptions()
-    assert len(subs) == 0
-
-
-def test_push_subscription_replace(db):
-    """Same endpoint replaces existing subscription."""
-    db.save_push_subscription("https://push.example.com/ep", "old_key", "old_auth")
-    db.save_push_subscription("https://push.example.com/ep", "new_key", "new_auth")
-    subs = db.get_all_push_subscriptions()
-    assert len(subs) == 1
-    assert subs[0]["p256dh_key"] == "new_key"
 
 
 # --- log_submission ---

@@ -46,18 +46,18 @@
 - `timezone` (per-collector) - IANA timezone name (e.g. "America/Denver"). If set, naive timestamps from that collector are converted from this timezone to UTC before storing. (default: None — naive assumed UTC)
 - `position_stale_minutes` - Minutes without ping before collector marker turns gray (hot-reloadable)
 - `server_url` - Public base URL for notification embeds (hot-reloadable)
-- `notifications` - List of notification targets (name, type, events[], webhook_url). Supported types: push, discord. Events: alert, new_session. If empty, notifications disabled. (hot-reloadable)
+- `notifications` - List of notification targets (name, type, events[], webhook_url). Supported types: discord, ntfy, teams. Events: alert, new_session. If empty, notifications disabled. (hot-reloadable)
 
 ## Database Schema Versioning
 
-The database uses a lightweight integer-based versioning system tracked in the `_schema_version` table. Current schema version: **1**.
+The database uses a lightweight integer-based versioning system tracked in the `_schema_version` table. Current schema version: **5**.
 
 ### How It Works
 
 1. `WebDatabase.__init__()` calls `_init_db()` which creates all tables via `CREATE TABLE IF NOT EXISTS`
 2. `_ensure_schema_version()` then checks or creates the `_schema_version` table:
-   - **Fresh database** — `_schema_version` is created at version 1
-   - **Pre-versioning database** (no `_schema_version` table) — created at version 1 (all columns already exist)
+   - **Fresh database** — `_schema_version` is created at version 5
+   - **Pre-versioning database** (no `_schema_version` table) — created at version 5 (all columns already exist)
    - **Up-to-date database** (version == `SCHEMA_VERSION`) — no action
    - **Stale database** (version < `SCHEMA_VERSION`) — `_migrate()` runs each missing step, then version is bumped
 3. The `SCHEMA_VERSION` constant at the top of `database.py` defines the current version
@@ -81,6 +81,9 @@ def _migrate(conn, from_version, to_version):
         from_version = 2
     if from_version == 2:
         ...
+    if from_version == 4:
+        conn.execute("DROP TABLE IF EXISTS push_subscriptions")
+        from_version = 5
 ```
 
 The `_schema_version` table records each migration step so any gap between the current version and the target is closed in order.
@@ -229,7 +232,7 @@ The CLI initializes the app internally (`_init_app`), so it requires the `--conf
 | `add_alias` | Create drone aliases |
 | `edit_alias` | Modify aliases |
 | `delete_alias` | Remove aliases |
-| `receive_notifications` | Enable push notifications |
+| `receive_notifications` | Enable notifications |
 | `manage_collectors` | Collector management |
 
 ### Token Storage

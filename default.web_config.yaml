@@ -220,7 +220,6 @@ web_interface:
   # Each target has a name, type, event filter, and type-specific config.
   #
   # Supported types:
-  #   - "push"     — browser Web Push notifications (requires pywebpush)
   #   - "discord"  — Discord webhook (embeds) — set webhook_url
   #   - "ntfy"     — ntfy push notification service (ntfy.sh or self-hosted)
   #                  set webhook_url to the full publish URL, e.g.
@@ -246,13 +245,6 @@ web_interface:
   # If no notification targets are configured, notifications are disabled.
   # (hot-reloadable)
   notifications:
-    # Browser push example (keep enabled only if pywebpush is installed):
-    # - name: "Browser Push"
-    #   type: "push"
-    #   events:
-    #     - alert
-    #     - new_session
-    #
     # Discord webhook example:
     # - name: "Alert Channel"
     #   type: "discord"

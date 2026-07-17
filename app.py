@@ -32,7 +32,6 @@ from session_scheduler import SessionScheduler
 from maintenance_scheduler import MaintenanceScheduler
 from alert_engine import AlertEngine
 from notifier import NotifierService
-from push_service import PushService, _ensure_vapid_keys
 
 # Configure logging
 logging.basicConfig(
@@ -46,8 +45,6 @@ DATABASE: WebDatabase = None
 SESSION_SCHEDULER: Optional[SessionScheduler] = None
 MAINTENANCE_SCHEDULER: Optional[MaintenanceScheduler] = None
 ALERT_ENGINE: Optional[AlertEngine] = None
-PUSH_SERVICE: Optional[PushService] = None
-PUSH_VAPID_PUBLIC_KEY: Optional[str] = None
 NOTIFIER_SERVICE: Optional[NotifierService] = None
 
 # Thread-safe config snapshot — swapped atomically on hot reload.
@@ -480,7 +477,6 @@ def api_config():
             "collectors": cfg.to_dict().get("collectors", []),
             "position_stale_minutes": cfg.position_stale_minutes,
             "m_per_deg_lat": M_PER_DEG_LAT,
-            "vapid_public_key": PUSH_VAPID_PUBLIC_KEY,
             "csrf_token": generate_csrf(),
             "auth": {
                 "authenticated": user is not None,
@@ -488,37 +484,6 @@ def api_config():
             },
         }
     )
-
-
-@app.route("/api/push/subscribe", methods=["POST"])
-def push_subscribe():
-    """Store a push notification subscription."""
-    if PUSH_SERVICE is None:
-        return jsonify({"success": False, "error": "Push not configured"}), 503
-    try:
-        data = request.get_json(force=True)
-        PUSH_SERVICE.subscribe(
-            data["endpoint"],
-            data["keys"]["p256dh"],
-            data["keys"]["auth"],
-            request.headers.get("User-Agent"),
-        )
-        return jsonify({"success": True})
-    except (KeyError, TypeError, ValueError):
-        return jsonify({"success": False, "error": "Invalid subscription data"}), 400
-
-
-@app.route("/api/push/unsubscribe", methods=["POST"])
-def push_unsubscribe():
-    """Remove a push notification subscription."""
-    if PUSH_SERVICE is None:
-        return jsonify({"success": False, "error": "Push not configured"}), 503
-    try:
-        data = request.get_json(force=True)
-        PUSH_SERVICE.unsubscribe(data["endpoint"])
-        return jsonify({"success": True})
-    except (KeyError, TypeError, ValueError):
-        return jsonify({"success": False, "error": "Invalid request"}), 400
 
 
 def _format_utc_ts(dt):
@@ -1387,7 +1352,7 @@ def _rebuild_notifier():
     global NOTIFIER_SERVICE  # noqa: PLW0603  # pylint: disable=global-statement
     NOTIFIER_SERVICE = NotifierService(
         CONFIG.notifications, CONFIG.server_url,
-        url_prefix=CONFIG.url_prefix, push_service=PUSH_SERVICE,
+        url_prefix=CONFIG.url_prefix,
     )
     if NOTIFIER_SERVICE.has_targets():
         ALERT_ENGINE.on_new_alert = _on_new_alert
@@ -1401,13 +1366,13 @@ def _init_app(config_path: str):
     """Initialize application components. Returns Flask app ready to serve.
 
     Creates configuration, database, session scheduler, alert engine,
-    and push notification service objects but does **not** start any
+    and notification service objects but does **not** start any
     background threads.  Call :func:`start_background_services` when
     ready to start them (gunicorn master via ``when_ready``, or
     ``main()`` for dev server).
     """
     # pylint: disable=global-statement,line-too-long
-    global CONFIG, DATABASE, SESSION_SCHEDULER, MAINTENANCE_SCHEDULER, ALERT_ENGINE, PUSH_SERVICE, PUSH_VAPID_PUBLIC_KEY, NOTIFIER_SERVICE
+    global CONFIG, DATABASE, SESSION_SCHEDULER, MAINTENANCE_SCHEDULER, ALERT_ENGINE, NOTIFIER_SERVICE
 
     logger.info("Loading configuration from %s", config_path)
     CONFIG = WebConfig(config_path)
@@ -1417,23 +1382,10 @@ def _init_app(config_path: str):
 
     ALERT_ENGINE = AlertEngine(DATABASE, CONFIG)
 
-    # Initialize push notification service
-    # Keys are stored alongside the database so they survive container rebuilds
-    logger.info("Initializing push notification service (database_path=%s)", CONFIG.database_path)
-    vapid_private, vapid_public = _ensure_vapid_keys(CONFIG.database_path)
-    PUSH_VAPID_PUBLIC_KEY = vapid_public
-    logger.info("PUSH_VAPID_PUBLIC_KEY=%s", vapid_public[:20] + "..." if vapid_public else "None")
-    if vapid_private and vapid_public:
-        PUSH_SERVICE = PushService(DATABASE, vapid_private, vapid_public)
-        logger.info("Push notification service initialized")
-    else:
-        PUSH_SERVICE = None
-        logger.info("Push notification service not available")
-
     # Build notifier service from config (dispatches to all targets)
     NOTIFIER_SERVICE = NotifierService(
         CONFIG.notifications, CONFIG.server_url,
-        url_prefix=CONFIG.url_prefix, push_service=PUSH_SERVICE,
+        url_prefix=CONFIG.url_prefix,
     )
     if NOTIFIER_SERVICE.has_targets():
         ALERT_ENGINE.on_new_alert = _on_new_alert

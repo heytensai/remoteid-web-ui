@@ -4,8 +4,6 @@ Each target type has a directory at ``templates/notifications/<type>/``
 containing Jinja2 templates for each event (``alert.j2``, ``new_session.j2``).
 The rendered output is dispatched differently per type:
 
-- **push**: the template renders a two-line ``title: ...\\nbody: ...`` string
-  that is parsed and sent via ``PushService.notify_all()``.
 - **discord**: the template renders a JSON payload that is POSTed to the
   configured ``webhook_url``.
 - **ntfy**: the template renders the plain-text message body. Metadata
@@ -47,27 +45,6 @@ _NTFY_EVENT_HEADERS = {
         "tags": "drone",
     },
 }
-
-
-def _render_push(template: Template, ctx: dict) -> dict:
-    """Render a push template and extract title/body.
-
-    The template produces two lines::
-
-        title: Geozone Alert
-        body: ...
-
-    Returns a dict ``{"title": ..., "body": ...}``.
-    """
-    text = template.render(**ctx)
-    title = ""
-    body = ""
-    for line in text.strip().splitlines():
-        if line.startswith("title:"):
-            title = line[len("title:"):].strip()
-        elif line.startswith("body:"):
-            body = line[len("body:"):].strip()
-    return {"title": title, "body": body}
 
 
 NOTIFIER_USER_AGENT = \
@@ -292,12 +269,10 @@ class NotifierService:
         notifications: List,
         server_url: str,
         url_prefix: str = "",
-        push_service=None,
     ):
         base = server_url.rstrip("/")
         prefix = url_prefix.rstrip("/")
         self._server_url = base + prefix
-        self._push_service = push_service
         self._targets: List[Dict] = []
         self._templates: Dict[str, Template] = {}
         self._template_mtimes: Dict[str, float] = {}
@@ -401,18 +376,7 @@ class NotifierService:
                 continue
 
             try:
-                if nt.type == "push":
-                    rendered = _render_push(template, ctx)
-                    if self._push_service:
-                        self._push_service.notify_all(
-                            rendered["title"],
-                            rendered["body"],
-                            data=ctx,
-                        )
-                        logger.info("Sent %s notification via %s (%s)", event, nt.type, nt.name)
-                    else:
-                        logger.debug("Push service unavailable, skipping push target %r", nt.name)
-                elif nt.type == "discord":
+                if nt.type == "discord":
                     payload = template.render(**ctx)
                     logger.debug("Discord payload for %s: %s", nt.name, payload)
                     _send_discord(nt.webhook_url, payload)

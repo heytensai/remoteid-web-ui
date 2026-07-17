@@ -996,64 +996,6 @@ class TestPwa:
         assert resp.status_code == 404
 
 
-class TestApiPush:
-    def test_push_subscribe_invalid(self, client):
-        """Missing fields return 400."""
-        resp = client.post(
-            "/api/push/subscribe",
-            data=json.dumps({"endpoint": "https://example.com"}),
-            content_type="application/json",
-            headers={"X-CSRFToken": "test"},
-        )
-        assert resp.status_code == 400
-        data = resp.get_json()
-        assert "Invalid subscription data" in data.get("error", "")
-
-    def test_push_subscribe_valid(self, client):
-        resp = client.post(
-            "/api/push/subscribe",
-            data=json.dumps({
-                "endpoint": "https://push.example.com/abc",
-                "keys": {"p256dh": "key123", "auth": "auth456"},
-            }),
-            content_type="application/json",
-            headers={"X-CSRFToken": "test"},
-        )
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data["success"] is True
-
-    def test_push_unsubscribe_invalid(self, client):
-        resp = client.post(
-            "/api/push/unsubscribe",
-            data=json.dumps({}),
-            content_type="application/json",
-            headers={"X-CSRFToken": "test"},
-        )
-        assert resp.status_code == 400
-
-    def test_push_unsubscribe_valid(self, client):
-        """Subscribe then unsubscribe."""
-        client.post(
-            "/api/push/subscribe",
-            data=json.dumps({
-                "endpoint": "https://push.example.com/remove-me",
-                "keys": {"p256dh": "k1", "auth": "a1"},
-            }),
-            content_type="application/json",
-            headers={"X-CSRFToken": "test"},
-        )
-        resp = client.post(
-            "/api/push/unsubscribe",
-            data=json.dumps({"endpoint": "https://push.example.com/remove-me"}),
-            content_type="application/json",
-            headers={"X-CSRFToken": "test"},
-        )
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data["success"] is True
-
-
 class TestCSRF:
     def test_csrf_present_in_config(self, client):
         resp = client.get("/api/config")

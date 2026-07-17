@@ -10,7 +10,7 @@ import pytest
 
 from config import NotificationTargetConfig
 from notifier import (
-    NotifierService, _send_ntfy, _send_discord, _send_teams, _render_push,
+    NotifierService, _send_ntfy, _send_discord, _send_teams,
 )
 
 

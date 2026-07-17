@@ -19,7 +19,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY app.py config.py database.py session_detect.py session_scheduler.py maintenance_scheduler.py wsgi.py gunicorn.conf.py alert_engine.py import_db.py notifier.py push_service.py ./
+COPY app.py config.py database.py session_detect.py session_scheduler.py maintenance_scheduler.py wsgi.py gunicorn.conf.py alert_engine.py import_db.py notifier.py ./
 COPY templates/ templates/
 COPY static/ static/
 
