@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 import yaml
 
-VALID_EVENTS = {"alert", "new_session"}
+VALID_EVENTS = {"geozone_enter", "new_session"}
 VALID_NOTIFIER_TYPES = {"discord", "ntfy", "teams"}
 
 logger = logging.getLogger(__name__)
@@ -93,7 +93,7 @@ class NotificationTargetConfig:
 
     name: str
     type: str  # "discord", "ntfy", or "teams"
-    events: List[str]  # subset of ["alert", "new_session"]
+    events: List[str]  # subset of ["geozone_enter", "new_session"]
     enabled: bool = True
     webhook_url: str = ""
     token: str = ""  # ntfy Bearer auth token (mutually exclusive with username/password)

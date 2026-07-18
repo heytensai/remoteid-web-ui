@@ -1,7 +1,7 @@
-"""Notification dispatcher — routes alert events to configured targets.
+"""Notification dispatcher — routes events to configured targets.
 
 Each target type has a directory at ``templates/notifications/<type>/``
-containing Jinja2 templates for each event (``alert.j2``, ``new_session.j2``).
+containing Jinja2 templates for each event (``geozone_enter.j2``, ``new_session.j2``).
 The rendered output is dispatched differently per type:
 
 - **discord**: the template renders a JSON payload that is POSTed to the
@@ -31,10 +31,10 @@ logger = logging.getLogger(__name__)
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates", "notifications")
 
-VALID_EVENTS = ("alert", "new_session")
+VALID_EVENTS = ("geozone_enter", "new_session")
 
 _NTFY_EVENT_HEADERS = {
-    "alert": {
+    "geozone_enter": {
         "title": "Geozone Alert",
         "priority": 4,
         "tags": "warning,drone",
@@ -355,7 +355,7 @@ class NotifierService:
     def dispatch(self, event: str, **ctx):
         """Dispatch an event to all configured targets that listen for it.
 
-        ``event`` is ``"alert"`` or ``"new_session"``.
+        ``event`` is ``"geozone_enter"`` or ``"new_session"``.
         Extra keyword arguments are passed to the template context.
 
         Templates are cached in memory and automatically reloaded from

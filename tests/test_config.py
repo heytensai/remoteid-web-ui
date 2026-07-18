@@ -936,7 +936,7 @@ def test_valid_notifier_types_includes_ntfy():
 
 
 def test_notification_target_config_defaults():
-    nt = NotificationTargetConfig(name="Test", type="discord", events=["alert"])
+    nt = NotificationTargetConfig(name="Test", type="discord", events=["geozone_enter"])
     assert nt.enabled is True
     assert nt.webhook_url == ""
     assert nt.token == ""
@@ -946,14 +946,14 @@ def test_notification_target_config_defaults():
 
 def test_notification_target_config_disabled():
     nt = NotificationTargetConfig(
-        name="Disabled", type="discord", events=["alert"], enabled=False,
+        name="Disabled", type="discord", events=["geozone_enter"], enabled=False,
     )
     assert nt.enabled is False
 
 
 def test_notification_target_config_with_token():
     nt = NotificationTargetConfig(
-        name="ntfy-test", type="ntfy", events=["alert"],
+        name="ntfy-test", type="ntfy", events=["geozone_enter"],
         webhook_url="https://ntfy.sh/topic", token="tk_abc123",
     )
     assert nt.token == "tk_abc123"
@@ -963,7 +963,7 @@ def test_notification_target_config_with_token():
 
 def test_notification_target_config_with_basic_auth():
     nt = NotificationTargetConfig(
-        name="ntfy-basic", type="ntfy", events=["alert"],
+        name="ntfy-basic", type="ntfy", events=["geozone_enter"],
         webhook_url="https://ntfy.example.com/t", username="admin", password="secret",
     )
     assert nt.username == "admin"
@@ -980,7 +980,7 @@ def test_parse_notifications_ntfy():
                 "type": "ntfy",
                 "webhook_url": "https://ntfy.sh/mytopic",
                 "token": "tk_secret",
-                "events": ["alert", "new_session"],
+                "events": ["geozone_enter", "new_session"],
             },
         ],
     }
@@ -993,7 +993,7 @@ def test_parse_notifications_ntfy():
         assert nt.type == "ntfy"
         assert nt.webhook_url == "https://ntfy.sh/mytopic"
         assert nt.token == "tk_secret"
-        assert nt.events == ["alert", "new_session"]
+        assert nt.events == ["geozone_enter", "new_session"]
     finally:
         os.unlink(path)
 
@@ -1007,7 +1007,7 @@ def test_parse_notifications_ntfy_no_token():
                 "name": "Public ntfy",
                 "type": "ntfy",
                 "webhook_url": "https://ntfy.sh/public-topic",
-                "events": ["alert"],
+                "events": ["geozone_enter"],
             },
         ],
     }
@@ -1030,7 +1030,7 @@ def test_parse_notifications_ntfy_basic_auth():
                 "webhook_url": "https://ntfy.example.com/alerts",
                 "username": "myuser",
                 "password": "mypassword",
-                "events": ["alert"],
+                "events": ["geozone_enter"],
             },
         ],
     }
@@ -1054,7 +1054,7 @@ def test_parse_notifications_disabled():
                 "type": "discord",
                 "webhook_url": "https://discord.com/api/webhooks/...",
                 "enabled": False,
-                "events": ["alert"],
+                "events": ["geozone_enter"],
             },
         ],
     }
@@ -1070,7 +1070,7 @@ def test_parse_notifications_enabled_defaults_true():
     config_data = {
         "database_path": "/tmp",
         "notifications": [
-            {"name": "Active", "type": "discord", "events": ["alert"]},
+            {"name": "Active", "type": "discord", "events": ["geozone_enter"]},
         ],
     }
     path = _write_config(config_data)
@@ -1085,10 +1085,10 @@ def test_parse_notifications_multiple_types():
     config_data = {
         "database_path": "/tmp",
         "notifications": [
-            {"name": "Discord", "type": "discord", "webhook_url": "https://discord.com/api/webhooks/...", "events": ["alert"]},
+            {"name": "Discord", "type": "discord", "webhook_url": "https://discord.com/api/webhooks/...", "events": ["geozone_enter"]},
             {"name": "Discord2", "type": "discord", "webhook_url": "https://discord.com/api/webhooks/...", "events": ["new_session"]},
-            {"name": "Teams", "type": "teams", "webhook_url": "https://example.webhook.office.com/webhookb2/...", "events": ["alert", "new_session"]},
-            {"name": "ntfy", "type": "ntfy", "webhook_url": "https://ntfy.sh/t", "token": "tk_x", "events": ["alert", "new_session"]},
+            {"name": "Teams", "type": "teams", "webhook_url": "https://example.webhook.office.com/webhookb2/...", "events": ["geozone_enter", "new_session"]},
+            {"name": "ntfy", "type": "ntfy", "webhook_url": "https://ntfy.sh/t", "token": "tk_x", "events": ["geozone_enter", "new_session"]},
         ],
     }
     path = _write_config(config_data)
@@ -1113,7 +1113,7 @@ def test_notification_hot_reload_detects_token_change(sample_config_yaml):
             "type": "ntfy",
             "webhook_url": "https://ntfy.sh/t",
             "token": "tk_old",
-            "events": ["alert"],
+            "events": ["geozone_enter"],
         },
     ]
     with open(config_path, "w", encoding="utf-8") as f:

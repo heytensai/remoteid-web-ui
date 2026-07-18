@@ -235,9 +235,9 @@ web_interface:
   #   - token      — Bearer token auth (e.g. "tk_xxx")
   #   - username/password — Basic auth for self-hosted servers
   #
-  # Event filters (subset of ["alert", "new_session"]):
-  #   - alert       — drone enters an alert-enabled geozone
-  #   - new_session — drone starts a new flight
+  # Event filters (subset of ["geozone_enter", "new_session"]):
+  #   - geozone_enter — drone enters an alert-enabled geozone
+  #   - new_session   — drone starts a new flight
   #
   # Templates live in templates/notifications/<type>/<event>.j2
   # and can be customized per deployment.
@@ -250,7 +250,7 @@ web_interface:
     #   type: "discord"
     #   webhook_url: "https://discord.com/api/webhooks/..."
     #   events:
-    #     - alert
+    #     - geozone_enter
     # - name: "Flight Log"
     #   type: "discord"
     #   enabled: false             # temporarily disabled
@@ -264,7 +264,7 @@ web_interface:
     #   webhook_url: "https://ntfy.sh/mytopic"
     #   token: "tk_xxx"
     #   events:
-    #     - alert
+    #     - geozone_enter
     #     - new_session
     #
     # ntfy with Basic auth (self-hosted):
@@ -274,7 +274,7 @@ web_interface:
     #   username: "myuser"
     #   password: "mypassword"
     #   events:
-    #     - alert
+    #     - geozone_enter
     #     - new_session
     #
     # Microsoft Teams Incoming Webhook:
@@ -282,7 +282,7 @@ web_interface:
     #   type: "teams"
     #   webhook_url: "https://*.webhook.office.com/botid/..."
     #   events:
-    #     - alert
+    #     - geozone_enter
     #     - new_session
     #
     # Teams with Bearer token (tenant-restricted webhooks):
@@ -291,5 +291,5 @@ web_interface:
     #   webhook_url: "https://*.logic.azure.com:443/..."
     #   token: "eyJ0eXAiOi..."
     #   events:
-    #     - alert
+    #     - geozone_enter
     #     - new_session

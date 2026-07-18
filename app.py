@@ -1473,7 +1473,7 @@ def _on_new_alert(uas_id: str, geozone_name: str):
     """Callback fired when a new geozone alert is triggered. Dispatches to notifier."""
     name = CONFIG.drone_aliases.get(uas_id, uas_id)
     NOTIFIER_SERVICE.dispatch(
-        "alert",
+        "geozone_enter",
         uas_id=uas_id,
         name=name,
         geozone_name=geozone_name,

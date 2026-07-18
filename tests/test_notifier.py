@@ -208,7 +208,7 @@ class TestNotifierServiceNtfy:
             "name": "ntfy-test",
             "type": "ntfy",
             "webhook_url": "https://ntfy.sh/test-topic",
-            "events": ["alert"],
+            "events": ["geozone_enter"],
             "token": "",
         }
         defaults.update(kwargs)
@@ -222,7 +222,7 @@ class TestNotifierServiceNtfy:
             server_url="https://example.com",
         )
 
-        svc.dispatch("alert", name="Drone-1", geozone_name="ZoneA")
+        svc.dispatch("geozone_enter", name="Drone-1", geozone_name="ZoneA")
 
         mock_send.assert_called_once()
         payload = mock_send.call_args[0][1]
@@ -264,7 +264,7 @@ class TestNotifierServiceNtfy:
             server_url="https://example.com",
         )
 
-        svc.dispatch("alert", name="Drone", geozone_name="Zone")
+        svc.dispatch("geozone_enter", name="Drone", geozone_name="Zone")
 
         assert mock_send.call_args[1]["token"] == "tk_secret123"
 
@@ -276,7 +276,7 @@ class TestNotifierServiceNtfy:
             server_url="https://example.com",
         )
 
-        svc.dispatch("alert", name="Drone", geozone_name="Zone")
+        svc.dispatch("geozone_enter", name="Drone", geozone_name="Zone")
 
         assert mock_send.call_args[1]["username"] == "admin"
         assert mock_send.call_args[1]["password"] == "secret"
@@ -289,7 +289,7 @@ class TestNotifierServiceNtfy:
             server_url="https://example.com",
         )
 
-        svc.dispatch("alert", name="Drone", geozone_name="Zone")
+        svc.dispatch("geozone_enter", name="Drone", geozone_name="Zone")
 
         assert mock_send.call_args[1]["click_url"] == "https://example.com"
 
@@ -301,13 +301,13 @@ class TestNotifierServiceNtfy:
             server_url="https://example.com",
         )
 
-        svc.dispatch("alert", name="Drone", geozone_name="Zone")
+        svc.dispatch("geozone_enter", name="Drone", geozone_name="Zone")
 
         mock_send.assert_not_called()
 
     @patch("notifier._send_ntfy")
     def test_dispatch_skips_unrelated_events(self, mock_send):
-        target = self._make_target(events=["alert"])
+        target = self._make_target(events=["geozone_enter"])
         svc = NotifierService(
             notifications=[target],
             server_url="https://example.com",
@@ -322,18 +322,18 @@ class TestNotifierServiceNtfy:
     @patch("notifier._send_ntfy")
     @patch("notifier._send_discord")
     def test_dispatch_mixed_types(self, mock_discord, mock_ntfy):
-        ntfy_target = self._make_target(events=["alert", "new_session"])
+        ntfy_target = self._make_target(events=["geozone_enter", "new_session"])
         discord_target = NotificationTargetConfig(
             name="discord", type="discord",
             webhook_url="https://discord.com/api/webhooks/...",
-            events=["alert"],
+            events=["geozone_enter"],
         )
         svc = NotifierService(
             notifications=[ntfy_target, discord_target],
             server_url="https://example.com",
         )
 
-        svc.dispatch("alert", name="Drone", geozone_name="Zone")
+        svc.dispatch("geozone_enter", name="Drone", geozone_name="Zone")
 
         mock_ntfy.assert_called_once()
         mock_discord.assert_called_once()
@@ -441,7 +441,7 @@ class TestNotifierServiceTeams:
             "name": "teams-test",
             "type": "teams",
             "webhook_url": "https://webhook.office.com/test",
-            "events": ["alert"],
+            "events": ["geozone_enter"],
             "token": "",
         }
         defaults.update(kwargs)
@@ -455,7 +455,7 @@ class TestNotifierServiceTeams:
             server_url="https://example.com",
         )
 
-        svc.dispatch("alert", name="Drone-1", geozone_name="ZoneA")
+        svc.dispatch("geozone_enter", name="Drone-1", geozone_name="ZoneA")
 
         mock_send.assert_called_once()
         payload_str = mock_send.call_args[0][1]
@@ -501,7 +501,7 @@ class TestNotifierServiceTeams:
             server_url="https://example.com",
         )
 
-        svc.dispatch("alert", name="Drone", geozone_name="Zone")
+        svc.dispatch("geozone_enter", name="Drone", geozone_name="Zone")
 
         assert mock_send.call_args[1]["token"] == "eyJ0eXAiOi"
 
@@ -513,7 +513,7 @@ class TestNotifierServiceTeams:
             server_url="https://example.com",
         )
 
-        svc.dispatch("alert", name="Drone", geozone_name="Zone")
+        svc.dispatch("geozone_enter", name="Drone", geozone_name="Zone")
 
         payload_str = mock_send.call_args[0][1]
         payload = json.loads(payload_str)
@@ -529,13 +529,13 @@ class TestNotifierServiceTeams:
             server_url="https://example.com",
         )
 
-        svc.dispatch("alert", name="Drone", geozone_name="Zone")
+        svc.dispatch("geozone_enter", name="Drone", geozone_name="Zone")
 
         mock_send.assert_not_called()
 
     @patch("notifier._send_teams")
     def test_dispatch_teams_skips_unrelated_events(self, mock_send):
-        target = self._make_target(events=["alert"])
+        target = self._make_target(events=["geozone_enter"])
         svc = NotifierService(
             notifications=[target],
             server_url="https://example.com",

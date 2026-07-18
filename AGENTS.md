@@ -4,6 +4,10 @@
 
 **IMPORTANT**: The `config/web_config.yaml` file is in `.gitignore` and should NEVER be modified directly. It contains user-specific settings and sensitive data like API keys.
 
+**NEVER MODIFY `config/web_config.yaml` — NOT EVEN ONCE. NOT FOR ANY REASON.**
+
+This file is the user's personal, gitignored configuration. Even if it contains stale references after a code rename, schema change, or feature removal — DO NOT fix it. Instead, warn the user that their local config needs updating and tell them exactly what to change. The agent must not touch this file under any circumstances.
+
 **Security Note**: API keys are stored in plaintext in the configuration file. This is a known design decision — environment variable or secrets manager integration is not implemented. Ensure the config file is protected:
 - Set restrictive permissions: `chmod 600 config/web_config.yaml`
 - Ensure backups of the config directory are encrypted or access-controlled
@@ -13,6 +17,7 @@
 
 1. **Always edit `default.web_config.yaml`** - This is the template file that IS tracked in git
 2. **Never edit `config/web_config.yaml`** - This is the user's local config (not tracked)
+3. **If `config/web_config.yaml` becomes inconsistent after a rename/removal** — tell the user what to change, do NOT change it yourself
 
 ### Config Files Overview
 
@@ -46,7 +51,7 @@
 - `timezone` (per-collector) - IANA timezone name (e.g. "America/Denver"). If set, naive timestamps from that collector are converted from this timezone to UTC before storing. (default: None — naive assumed UTC)
 - `position_stale_minutes` - Minutes without ping before collector marker turns gray (hot-reloadable)
 - `server_url` - Public base URL for notification embeds (hot-reloadable)
-- `notifications` - List of notification targets (name, type, events[], webhook_url). Supported types: discord, ntfy, teams. Events: alert, new_session. If empty, notifications disabled. (hot-reloadable)
+- `notifications` - List of notification targets (name, type, events[], webhook_url). Supported types: discord, ntfy, teams. Events: geozone_enter, new_session. If empty, notifications disabled. (hot-reloadable)
 
 ## Database Schema Versioning
 
