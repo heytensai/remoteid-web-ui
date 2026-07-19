@@ -22,7 +22,7 @@ A standalone web interface for visualizing Remote ID drone data on an interactiv
 
 ## Quick Start
 
-### Option A: Docker (Recommended)
+### Docker (Recommended)
 
 ```bash
 # 1. Create your config
@@ -39,7 +39,22 @@ docker-compose up -d
 # Access at http://localhost:5000
 ```
 
-### Option B: Local Installation
+To update:
+
+```bash
+docker-compose pull && docker-compose up -d
+```
+
+### Development with Docker
+
+```bash
+# Starts with auto-reload and volume mounts for live editing
+docker-compose -f docker-compose.dev.yml up
+```
+
+### Local Installation (Development Only)
+
+For local development without Docker:
 
 ```bash
 # 1. Create a virtual environment
@@ -58,13 +73,6 @@ cp default.web_config.yaml config/web_config.yaml
 python app.py --config config/web_config.yaml
 
 # Access at http://localhost:5000
-```
-
-### Option C: Development with Docker
-
-```bash
-# Starts with auto-reload and volume mounts for live editing
-docker-compose -f docker-compose.dev.yml up
 ```
 
 ## Configuration

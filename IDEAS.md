@@ -139,22 +139,14 @@ Currently only one time window at a time. Allow overlaying two time ranges (e.g.
 
 ## 5. Deployment & Operations
 
-### 5.1 Systemd Service
-**Priority: Medium | Effort: Low**
-
-DESIGN.md notes "Deployment: Manual run." Add a systemd unit file so the app starts on boot and restarts on crash. Include:
-- `remote-id-web.service` unit file
-- Log rotation config
-- Environment file for config path
-
-### 5.2 HTTPS / Reverse Proxy Setup
+### 5.1 HTTPS / Reverse Proxy Setup
 **Priority: Low | Effort: Low**
 
 Even on private networks, HTTPS is a good practice. Provide:
 - Nginx/Caddy reverse proxy config with self-signed cert
 - Instructions for Let's Encrypt if a public domain is available
 
-### 5.3 Configuration Validation
+### 5.2 Configuration Validation
 **Priority: Low | Effort: Low**
 
 Add startup validation for `web_config.yaml`:
@@ -223,12 +215,11 @@ The project has no README. For a project with Docker support, CLI tools (`flask 
 
 1. **Toast notifications** — 1-2 hours
 2. **Local CDN fallbacks** — 1 hour
-4. **Loading overlay during refresh** — 1 hour
-5. **Drone search/filter in sidebar** — 1 hour
-6. **Health check endpoint** — 30 minutes
-7. **Systemd service file** — 30 minutes
-8. **Structured error display** — 1-2 hours
-9. **Data export (tracks, positions)** — 2-3 hours
+3. **Loading overlay during refresh** — 1 hour
+4. **Drone search/filter in sidebar** — 1 hour
+5. **Health check endpoint** — 30 minutes
+6. **Structured error display** — 1-2 hours
+7. **Data export (tracks, positions)** — 2-3 hours
 
 ## Bigger Projects
 
