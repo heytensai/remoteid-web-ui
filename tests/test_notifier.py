@@ -11,6 +11,7 @@ import pytest
 from config import NotificationTargetConfig
 from notifier import (
     NotifierService, _send_ntfy, _send_discord, _send_teams,
+    _jinja_env,
 )
 
 
@@ -546,3 +547,108 @@ class TestNotifierServiceTeams:
                       use_metric=True)
 
         mock_send.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# json_escape filter
+# ---------------------------------------------------------------------------
+
+
+class TestJsonEscape:
+    def test_escapes_quotes(self):
+        f = _jinja_env.filters["json_escape"]
+        assert f('say "hello"') == 'say \\"hello\\"'
+
+    def test_escapes_backslash(self):
+        f = _jinja_env.filters["json_escape"]
+        assert f("path\\to") == "path\\\\to"
+
+    def test_escapes_newlines(self):
+        f = _jinja_env.filters["json_escape"]
+        assert f("line1\nline2") == "line1\\nline2"
+
+    def test_escapes_carriage_return(self):
+        f = _jinja_env.filters["json_escape"]
+        assert f("a\rb") == "a\\rb"
+
+    def test_escapes_tab(self):
+        f = _jinja_env.filters["json_escape"]
+        assert f("a\tb") == "a\\tb"
+
+    def test_safe_string_unchanged(self):
+        f = _jinja_env.filters["json_escape"]
+        assert f("normal-drone-123") == "normal-drone-123"
+
+    def test_empty_string(self):
+        f = _jinja_env.filters["json_escape"]
+        assert f("") == ""
+
+
+# ---------------------------------------------------------------------------
+# Template escaping integration
+# ---------------------------------------------------------------------------
+
+
+class TestTemplateEscaping:
+    """Verify that Discord/Teams templates produce valid JSON with escaped user data."""
+
+    @patch("notifier._send_discord")
+    def test_discord_geozone_enter_escapes_name(self, mock_send):
+        target = NotificationTargetConfig(
+            name="d-test", type="discord",
+            webhook_url="https://discord.com/api/webhooks/test",
+            events=["geozone_enter"],
+        )
+        svc = NotifierService(notifications=[target], server_url="https://example.com")
+        svc.dispatch("geozone_enter", name='Drone "One"', geozone_name="Zone A")
+        raw = mock_send.call_args[0][1]
+        payload = json.loads(raw)
+        assert payload["embeds"][0]["fields"][0]["value"] == 'Drone "One"'
+        assert 'Drone \\"One\\"' in raw
+
+    @patch("notifier._send_discord")
+    def test_discord_proximity_escapes_names(self, mock_send):
+        target = NotificationTargetConfig(
+            name="d-test", type="discord",
+            webhook_url="https://discord.com/api/webhooks/test",
+            events=["drone_proximity"],
+        )
+        svc = NotifierService(notifications=[target], server_url="https://example.com")
+        svc.dispatch("drone_proximity",
+                      name_a='Drone "A"', name_b="Drone B\\C",
+                      distance_m=50.0, distance_str="50 m", use_metric=True)
+        raw = mock_send.call_args[0][1]
+        payload = json.loads(raw)
+        desc = payload["embeds"][0]["description"]
+        assert 'Drone "A"' in desc
+        assert 'Drone B\\C' in desc
+        assert 'Drone \\"A\\"' in raw
+        assert 'Drone B\\\\C' in raw
+
+    @patch("notifier._send_teams")
+    def test_teams_geozone_enter_escapes_name(self, mock_send):
+        target = NotificationTargetConfig(
+            name="t-test", type="teams",
+            webhook_url="https://example.com/teams/webhook",
+            events=["geozone_enter"],
+        )
+        svc = NotifierService(notifications=[target], server_url="https://example.com")
+        svc.dispatch("geozone_enter", name='Drone "One"', geozone_name="Zone A")
+        raw = mock_send.call_args[0][1]
+        payload = json.loads(raw)
+        card = payload["attachments"][0]["content"]
+        text_blocks = [b for b in card["body"] if b.get("type") == "TextBlock"]
+        assert 'Drone "One"' in text_blocks[1]["text"]
+        assert 'Drone \\"One\\"' in raw
+
+    @patch("notifier._send_ntfy")
+    def test_ntfy_not_affected_by_json_escape(self, mock_send):
+        target = NotificationTargetConfig(
+            name="n-test", type="ntfy",
+            webhook_url="https://ntfy.sh/test",
+            events=["geozone_enter"],
+        )
+        svc = NotifierService(notifications=[target], server_url="https://example.com")
+        svc.dispatch("geozone_enter", name='Drone "One"', geozone_name="Zone A")
+        payload = mock_send.call_args[0][1]
+        assert 'Drone "One"' in payload

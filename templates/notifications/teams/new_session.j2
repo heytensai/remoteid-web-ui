@@ -17,18 +17,18 @@
           },
           {
             "type": "TextBlock",
-            "text": "**{{ name }}** started a new flight{% if altitude is not none %} at **{{ '%.0f' % (altitude if use_metric else altitude * 3.28084) }}{{ 'm' if use_metric else 'ft' }}**{% endif %}"
+            "text": "**{{ name|json_escape }}** started a new flight{% if altitude is not none %} at **{{ '%.0f' % (altitude if use_metric else altitude * 3.28084) }}{{ 'm' if use_metric else 'ft' }}**{% endif %}"
           },
           {
             "type": "FactSet",
             "facts": [
-              {"title": "Drone", "value": "{{ name }}"},
-              {"title": "Session", "value": "{{ session_id[:8] }}"}
+              {"title": "Drone", "value": "{{ name|json_escape }}"},
+              {"title": "Session", "value": "{{ session_id[:8]|json_escape }}"}
               {% if altitude is not none -%}
               ,{"title": "Altitude", "value": "{{ '%.0f' % (altitude if use_metric else altitude * 3.28084) }}{{ 'm' if use_metric else 'ft' }}"}
               {% endif -%}
               {% if height is not none -%}
-              ,{"title": "Height{% if height_type %} ({{ height_type }}){% endif %}", "value": "{{ '%.0f' % (height if use_metric else height * 3.28084) }}{{ 'm' if use_metric else 'ft' }}"}
+              ,{"title": "Height{% if height_type %} ({{ height_type|json_escape }}){% endif %}", "value": "{{ '%.0f' % (height if use_metric else height * 3.28084) }}{{ 'm' if use_metric else 'ft' }}"}
               {% endif -%}
             ]
           }{% if server_url %},

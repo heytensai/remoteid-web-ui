@@ -25,11 +25,20 @@ from datetime import datetime, timezone
 from typing import Dict, List
 from urllib.parse import urlparse
 
-from jinja2 import Template, TemplateError
+from jinja2 import Environment, Template, TemplateError
 
 logger = logging.getLogger(__name__)
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates", "notifications")
+
+_jinja_env = Environment(keep_trailing_newline=True)
+_jinja_env.filters["json_escape"] = lambda s: (
+    s.replace("\\", "\\\\")
+     .replace('"', '\\"')
+     .replace("\n", "\\n")
+     .replace("\r", "\\r")
+     .replace("\t", "\\t")
+)
 
 VALID_EVENTS = ("geozone_enter", "geozone_exit", "new_session", "unrecognized_drone",
                 "drone_proximity")
@@ -338,7 +347,7 @@ class NotifierService:
                 try:
                     with open(fpath, encoding="utf-8") as fh:
                         src = fh.read()
-                    self._templates[f"{type_name}/{event_name}"] = Template(src)
+                    self._templates[f"{type_name}/{event_name}"] = _jinja_env.from_string(src)
                     self._template_paths[f"{type_name}/{event_name}"] = fpath
                     self._template_mtimes[f"{type_name}/{event_name}"] = os.path.getmtime(fpath)
                     logger.debug("Loaded template %s", fpath)
@@ -362,7 +371,7 @@ class NotifierService:
         try:
             with open(fpath, encoding="utf-8") as fh:
                 src = fh.read()
-            self._templates[key] = Template(src)
+            self._templates[key] = _jinja_env.from_string(src)
             self._template_mtimes[key] = mtime
             logger.info("Reloaded template %s (mtime changed)", fpath)
         except (OSError, TemplateError) as e:

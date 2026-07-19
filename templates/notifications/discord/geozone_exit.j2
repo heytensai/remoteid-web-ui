@@ -2,10 +2,10 @@
   "embeds": [{
     "title": "Geozone Exit",
     "color": 3066993,
-    "description": "{{ name }} left {{ geozone_name }}",
+    "description": "{{ name|json_escape }} left {{ geozone_name|json_escape }}",
     "fields": [
-      {"name": "Drone", "value": "{{ name }}", "inline": true},
-      {"name": "Zone", "value": "{{ geozone_name }}", "inline": true}
+      {"name": "Drone", "value": "{{ name|json_escape }}", "inline": true},
+      {"name": "Zone", "value": "{{ geozone_name|json_escape }}", "inline": true}
     ],
     "timestamp": "{{ timestamp }}"{% if server_url %},
     "url": "{{ server_url }}"{% endif %}

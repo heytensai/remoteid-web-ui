@@ -17,7 +17,7 @@
           },
           {
             "type": "TextBlock",
-            "text": "Drone **{{ name }}** entered **{{ geozone_name }}**"
+            "text": "Drone **{{ name|json_escape }}** entered **{{ geozone_name|json_escape }}**"
           }{% if server_url %},
           {
             "type": "TextBlock",

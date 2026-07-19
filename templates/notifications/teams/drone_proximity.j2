@@ -17,7 +17,7 @@
           },
           {
             "type": "TextBlock",
-            "text": "**{{ name_a }}** and **{{ name_b }}** are **{{ distance_str }}** apart"
+            "text": "**{{ name_a|json_escape }}** and **{{ name_b|json_escape }}** are **{{ distance_str }}** apart"
           }{% if server_url %},
           {
             "type": "TextBlock",
