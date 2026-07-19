@@ -20,7 +20,10 @@ services:
       - ./config:/app/config:ro
       # Database persistence (bind mount to host directory)
       - ./data:/app/data
-      - ./templates/notifications:/app/templates/notifications
+      # only leave this for dev, not prod
+      - ./templates:/app/templates
+      # only leave this for dev, not prod
+      - ./static:/app/static
     env_file:
       - .env
     environment:

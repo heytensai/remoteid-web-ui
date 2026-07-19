@@ -983,7 +983,10 @@ def submit_data():
         # Log the submission to sync_log
         DATABASE.log_submission(source, inserted)
 
-        # Check submitted positions against alert-enabled geozones
+        # Check submitted positions against alerts (session + geozone).
+        # Session notifications only fire from here — the scheduler's
+        # evaluate_all() is gated by sync_sessions() which pre-marks
+        # sessions as known before evaluation runs.
         if ALERT_ENGINE:
             by_uas: dict = {}
             for record in data:

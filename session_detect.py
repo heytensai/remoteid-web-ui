@@ -11,7 +11,6 @@ The default gap threshold is 600 seconds (10 minutes).
 """
 
 import argparse
-import uuid
 import logging
 import sqlite3
 from datetime import datetime, timezone
@@ -81,6 +80,9 @@ def get_positions_for_uas(db_path: str, uas_id: str) -> List[Tuple[int, datetime
 def detect_sessions(positions: List[Tuple[int, datetime]], gap_threshold: int) -> List[Tuple[int, str]]:
     """Detect sessions based on time gaps
 
+    Session IDs are deterministic — derived from the first position's database
+    ID — so re-running detection on the same data produces identical results.
+
     Args:
         positions: List of (id, timestamp) tuples
         gap_threshold: Gap threshold in seconds
@@ -92,7 +94,8 @@ def detect_sessions(positions: List[Tuple[int, datetime]], gap_threshold: int) -
         return []
 
     sessions = []
-    session_id = f"session_{uuid.uuid4().hex[:12]}"
+    # Use the first position's DB ID for a stable, deterministic session ID
+    session_id = f"session_{positions[0][0]}"
 
     for i, (pos_id, timestamp) in enumerate(positions):
         if i == 0:
@@ -103,8 +106,8 @@ def detect_sessions(positions: List[Tuple[int, datetime]], gap_threshold: int) -
         gap = (timestamp - prev_timestamp).total_seconds()
 
         if gap > gap_threshold:
-            # Start a new session
-            session_id = f"session_{uuid.uuid4().hex[:12]}"
+            # Start a new session — stable ID from this position's DB ID
+            session_id = f"session_{pos_id}"
             logger.debug("New session detected at %s (gap: %.1fs)", timestamp, gap)
 
         sessions.append((pos_id, session_id))
@@ -225,9 +228,9 @@ def process_database(
         positions = get_positions_for_uas(str(db_path), uas_id)
 
         if len(positions) < 2:
-            # Single record - assign an opaque session ID
+            # Single record — stable session ID from the position's DB ID
             if positions and not dry_run:
-                session_id = f"session_{uuid.uuid4().hex[:12]}"
+                session_id = f"session_{positions[0][0]}"
                 update_session_ids(str(db_path), [(session_id, datetime.now(), positions[0][0])])
             continue
 
