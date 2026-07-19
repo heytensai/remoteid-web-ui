@@ -46,12 +46,13 @@ This file is the user's personal, gitignored configuration. Even if it contains 
 - `drone_aliases` - Map UAS IDs to friendly names
 - `waypoints` - Custom map markers (name, lat, lon, icon, color, description, enabled, category)
 - `session_detection` - Background session detection settings (enabled, interval, gap_threshold, log_level)
+- `proximity_distance` - Distance for drone proximity alerts (meters if use_metric true, feet if false; default: 100)
 - `maintenance` - Background maintenance settings (enabled, interval, delete_expired_tokens, delete_expired_login_tokens, delete_orphaned_ephemeral_users)
 - `collectors` - Collector positions (name, api_key, color, type, lat, lon, timezone); use GET /api/submit/ping?lat=&lon= for position reporting
 - `timezone` (per-collector) - IANA timezone name (e.g. "America/Denver"). If set, naive timestamps from that collector are converted from this timezone to UTC before storing. (default: None — naive assumed UTC)
 - `position_stale_minutes` - Minutes without ping before collector marker turns gray (hot-reloadable)
 - `server_url` - Public base URL for notification embeds (hot-reloadable)
-- `notifications` - List of notification targets (name, type, events[], webhook_url). Supported types: discord, ntfy, teams. Events: geozone_enter, geozone_exit, new_session, unrecognized_drone. If empty, notifications disabled. (hot-reloadable)
+- `notifications` - List of notification targets (name, type, events[], webhook_url). Supported types: discord, ntfy, teams. Events: geozone_enter, geozone_exit, new_session, unrecognized_drone, drone_proximity. If empty, notifications disabled. (hot-reloadable)
 
 ## Database Schema Versioning
 
@@ -111,6 +112,17 @@ Units.formatSpeed(metersPerSec)   // Returns "50.0 km/h" or "31.1 mph"
 ```
 
 The underlying data always stays in meters - only display values are converted.
+
+### Python unit conversions
+
+Always use the `FEET_PER_METER` constant from `config.py` — never hardcode conversion factors:
+
+```python
+from config import FEET_PER_METER
+
+feet = meters * FEET_PER_METER   # correct
+feet = meters * 3.28084          # WRONG — use the constant
+```
 
 ## XSS Protection
 

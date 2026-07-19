@@ -167,6 +167,11 @@ web_interface:
     # Skip geozone alerts for drones that have an alias configured in
     # drone_aliases (hot-reloadable)
     skip_known_drones: false
+    # Distance between two drones to trigger a proximity alert.
+    # Unit depends on use_metric: meters (true) or feet (false).
+    # Only considers live positions (both drones must have a position
+    # within stale_timeout seconds). Set to 0 to disable. (hot-reloadable)
+    proximity_distance: 100
     # Seconds before the same alert can fire again, keyed by event type.
     # Each entry is independent — a drone can trigger new_session,
     # geozone_enter, and geozone_exit simultaneously without interference.
@@ -176,6 +181,7 @@ web_interface:
       geozone_enter: 300
       geozone_exit: 300
       unrecognized_drone: 300
+      drone_proximity: 300
 
   # Collector positions and status
   # Each collector can be either:

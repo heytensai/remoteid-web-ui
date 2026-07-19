@@ -74,6 +74,22 @@ def test_alerts_config_skip_known():
     assert ac.skip_known_drones is True
 
 
+def test_alerts_config_proximity_distance_metric():
+    ac = AlertsConfig({"proximity_distance": 200}, use_metric=True)
+    assert ac.proximity_distance == 200
+
+
+def test_alerts_config_proximity_distance_imperial():
+    """Feet value is converted to meters when use_metric=False."""
+    ac = AlertsConfig({"proximity_distance": 328}, use_metric=False)
+    assert abs(ac.proximity_distance - 100.0) < 1.0
+
+
+def test_alerts_config_proximity_distance_default():
+    ac = AlertsConfig()
+    assert ac.proximity_distance == 100.0
+
+
 # --- AlertEngine tests ---
 
 @pytest.fixture
@@ -446,3 +462,237 @@ def test_new_session_fired_after_gap(engine):
     assert calls[0][1] != old_session
     assert calls[0][2] is not None
     assert calls[0][2].get("altitude") == 200
+
+
+# --- Drone proximity tests ---
+
+
+@pytest.fixture
+def proximity_engine():
+    """Create an AlertEngine configured for proximity testing (no geozones)."""
+    config_data = {
+        "web_interface": {
+            "database_path": "/tmp/test.db",
+            "alerts": {
+                "stale_timeout": 300,
+                "proximity_distance": 100,
+                "cooldown": {
+                    "drone_proximity": 300,
+                },
+            },
+        }
+    }
+    fd, path = tempfile.mkstemp(suffix=".yaml")
+    with os.fdopen(fd, "w") as f:
+        yaml.dump(config_data, f)
+    fd2, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd2)
+    config = WebConfig(path)
+    db = WebDatabase(db_path)
+    eng = AlertEngine(db, config)
+    yield eng, db, config
+    os.unlink(path)
+    os.unlink(db_path)
+
+
+def _insert_position(db, uas_id, lat, lon, ts):
+    """Insert a single position record for proximity tests."""
+    db.insert_remoteid_records("test", [{
+        "timestamp": ts.isoformat(),
+        "uas_id": uas_id,
+        "latitude": lat,
+        "longitude": lon,
+        "altitude": 100,
+    }])
+
+
+def test_proximity_two_drones_within_distance(proximity_engine):
+    """Two live drones within proximity_distance fires the callback."""
+    eng, db, config = proximity_engine
+    now = datetime.now(timezone.utc)
+    _insert_position(db, "drone-A", 37.78, -122.42, now)
+    _insert_position(db, "drone-B", 37.7805, -122.42, now)  # ~55m north
+
+    calls = []
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append((uid_a, uid_b, dist))
+    eng._check_drone_proximity()
+
+    assert len(calls) == 1
+    assert "drone-A" in calls[0][:2]
+    assert "drone-B" in calls[0][:2]
+    assert calls[0][2] < 100
+
+
+def test_proximity_two_drones_outside_distance(proximity_engine):
+    """Two live drones beyond proximity_distance does NOT fire the callback."""
+    eng, db, config = proximity_engine
+    now = datetime.now(timezone.utc)
+    _insert_position(db, "drone-A", 37.78, -122.42, now)
+    _insert_position(db, "drone-B", 38.0, -122.0, now)  # ~25km away
+
+    calls = []
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append(1)
+    eng._check_drone_proximity()
+
+    assert len(calls) == 0
+
+
+def test_proximity_ignores_stale_drones(proximity_engine):
+    """Drones with positions older than stale_timeout are ignored."""
+    eng, db, config = proximity_engine
+    now = datetime.now(timezone.utc)
+    # drone-A is live, drone-B is stale (outside stale_timeout)
+    _insert_position(db, "drone-A", 37.78, -122.42, now)
+    _insert_position(db, "drone-B", 37.7805, -122.42, now - timedelta(seconds=600))
+
+    calls = []
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append(1)
+    eng._check_drone_proximity()
+
+    assert len(calls) == 0
+
+
+def test_proximity_single_drone_no_alert(proximity_engine):
+    """Only one live drone means no pair possible — no alert fires."""
+    eng, db, config = proximity_engine
+    now = datetime.now(timezone.utc)
+    _insert_position(db, "drone-A", 37.78, -122.42, now)
+
+    calls = []
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append(1)
+    eng._check_drone_proximity()
+
+    assert len(calls) == 0
+
+
+def test_proximity_cooldown_suppresses_duplicate(proximity_engine):
+    """Same pair within cooldown window only fires once."""
+    eng, db, config = proximity_engine
+    now = datetime.now(timezone.utc)
+    _insert_position(db, "drone-A", 37.78, -122.42, now)
+    _insert_position(db, "drone-B", 37.7805, -122.42, now)
+
+    calls = []
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append(1)
+    eng._check_drone_proximity()
+    eng._check_drone_proximity()
+
+    assert len(calls) == 1
+
+
+def test_proximity_uses_aliases(proximity_engine):
+    """Callback receives resolved alias names when configured."""
+    eng, db, config = proximity_engine
+    config.drone_aliases["drone-A"] = "Alpha"
+    now = datetime.now(timezone.utc)
+    _insert_position(db, "drone-A", 37.78, -122.42, now)
+    _insert_position(db, "drone-B", 37.7805, -122.42, now)
+
+    calls = []
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append((name_a, name_b))
+    eng._check_drone_proximity()
+
+    assert len(calls) == 1
+    names = set(calls[0])
+    assert "Alpha" in names
+
+
+def test_proximity_disabled_when_zero(proximity_engine):
+    """proximity_distance of 0 disables the check entirely."""
+    eng, db, config = proximity_engine
+    config.alerts.proximity_distance = 0
+    now = datetime.now(timezone.utc)
+    _insert_position(db, "drone-A", 37.78, -122.42, now)
+    _insert_position(db, "drone-B", 37.7805, -122.42, now)
+
+    calls = []
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append(1)
+    eng._check_drone_proximity()
+
+    assert len(calls) == 0
+
+
+def test_proximity_three_drones_multiple_pairs(proximity_engine):
+    """Three close drones should fire for each valid pair."""
+    eng, db, config = proximity_engine
+    now = datetime.now(timezone.utc)
+    # All three within ~55m of each other
+    _insert_position(db, "drone-A", 37.78, -122.42, now)
+    _insert_position(db, "drone-B", 37.7805, -122.42, now)
+    _insert_position(db, "drone-C", 37.78, -122.4195, now)
+
+    calls = []
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append((uid_a, uid_b))
+    eng._check_drone_proximity()
+
+    assert len(calls) == 3
+    pairs = {frozenset(c) for c in calls}
+    assert pairs == {frozenset(("drone-A", "drone-B")),
+                     frozenset(("drone-A", "drone-C")),
+                     frozenset(("drone-B", "drone-C"))}
+
+
+def test_proximity_runs_via_evaluate_all(proximity_engine):
+    """evaluate_all triggers the proximity check (not evaluate)."""
+    eng, db, config = proximity_engine
+    now = datetime.now(timezone.utc)
+    _insert_position(db, "drone-A", 37.78, -122.42, now)
+    _insert_position(db, "drone-B", 37.7805, -122.42, now)
+
+    calls = []
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append(1)
+    eng.evaluate_all(since=now - timedelta(hours=1))
+
+    assert len(calls) == 1
+
+
+def test_proximity_does_not_run_via_evaluate(proximity_engine):
+    """evaluate() per-drone does NOT trigger proximity (requires all drones)."""
+    eng, db, config = proximity_engine
+    now = datetime.now(timezone.utc)
+    _insert_position(db, "drone-A", 37.78, -122.42, now)
+    _insert_position(db, "drone-B", 37.7805, -122.42, now)
+
+    calls = []
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append(1)
+    eng.evaluate("drone-A", [{"latitude": 37.78, "longitude": -122.42, "timestamp": now}])
+
+    assert len(calls) == 0
+
+
+def test_proximity_imperial_config():
+    """Imperial config (feet) is converted to meters internally."""
+    config_data = {
+        "web_interface": {
+            "database_path": "/tmp/test.db",
+            "use_metric": False,
+            "alerts": {
+                "stale_timeout": 300,
+                "proximity_distance": 328,  # ~100m in feet
+                "cooldown": {"drone_proximity": 300},
+            },
+        }
+    }
+    fd, path = tempfile.mkstemp(suffix=".yaml")
+    with os.fdopen(fd, "w") as f:
+        yaml.dump(config_data, f)
+    fd2, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd2)
+    config = WebConfig(path)
+    db = WebDatabase(db_path)
+    eng = AlertEngine(db, config)
+
+    # 328 ft ≈ 100 m — drone-A and drone-B are ~55m apart, should trigger
+    now = datetime.now(timezone.utc)
+    _insert_position(db, "drone-A", 37.78, -122.42, now)
+    _insert_position(db, "drone-B", 37.7805, -122.42, now)
+
+    calls = []
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append((uid_a, uid_b, dist))
+    eng._check_drone_proximity()
+
+    assert len(calls) == 1
+    assert calls[0][2] < 110  # distance reported in meters
+
+    os.unlink(path)
+    os.unlink(db_path)

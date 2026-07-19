@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 import yaml
 
-VALID_EVENTS = {"geozone_enter", "geozone_exit", "new_session", "unrecognized_drone"}
+VALID_EVENTS = {"geozone_enter", "geozone_exit", "new_session", "unrecognized_drone", "drone_proximity"}
 VALID_NOTIFIER_TYPES = {"discord", "ntfy", "teams"}
 
 logger = logging.getLogger(__name__)
@@ -123,19 +123,25 @@ class SessionDetectionConfig:
 
 @dataclass
 class AlertsConfig:
-    """Geozone alerting configuration"""
+    """Alerting configuration"""
 
     stale_timeout: int = 300  # seconds without position before marking as left
     skip_known_drones: bool = False  # skip alerts for drones with aliases
     cooldown: dict = None  # per-event cooldowns in seconds
+    proximity_distance: float = 100.0  # meters — drone proximity threshold (converted at init)
 
-    def __init__(self, data: dict = None):
+    def __init__(self, data: dict = None, use_metric: bool = True):
         if data:
             self.stale_timeout = data.get("stale_timeout", 300)
             self.skip_known_drones = data.get("skip_known_drones", False)
             self.cooldown = data.get("cooldown") or {}
+            raw = data.get("proximity_distance", 100.0)
+            if not use_metric:
+                raw /= FEET_PER_METER
+            self.proximity_distance = raw
         else:
             self.cooldown = {}
+            self.proximity_distance = 100.0
 
 
 @dataclass
@@ -248,7 +254,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
 
         # Alerts configuration
         alerts_data = web_data.get("alerts") or {}
-        self.alerts = AlertsConfig(alerts_data)
+        self.alerts = AlertsConfig(alerts_data, use_metric=self.use_metric)
 
         # Roles configuration
         self.roles = self._parse_roles(web_data.get("roles") or {})
@@ -478,6 +484,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
             "alerts": {
                 "stale_timeout": self.alerts.stale_timeout,
                 "skip_known_drones": self.alerts.skip_known_drones,
+                "proximity_distance": self.alerts.proximity_distance,
             },
             "collectors": [
                 {
@@ -577,11 +584,14 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
             changed = True
 
         if (new_config.alerts.stale_timeout != self.alerts.stale_timeout
-                or new_config.alerts.skip_known_drones != self.alerts.skip_known_drones):
+                or new_config.alerts.skip_known_drones != self.alerts.skip_known_drones
+                or new_config.alerts.proximity_distance != self.alerts.proximity_distance):
             logger.info(
-                "Reloaded alerts from %s (stale_timeout=%s, skip_known_drones=%s)",
+                "Reloaded alerts from %s (stale_timeout=%s, skip_known_drones=%s, "
+                "proximity_distance=%s)",
                 self.config_path, new_config.alerts.stale_timeout,
                 new_config.alerts.skip_known_drones,
+                new_config.alerts.proximity_distance,
             )
             changed = True
 

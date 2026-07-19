@@ -1,0 +1,32 @@
+{
+  "type": "message",
+  "attachments": [
+    {
+      "contentType": "application/vnd.microsoft.card.adaptive",
+      "contentUrl": null,
+      "content": {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.2",
+        "body": [
+          {
+            "type": "TextBlock",
+            "text": "**Drone Proximity Alert**",
+            "weight": "Bolder",
+            "size": "Large"
+          },
+          {
+            "type": "TextBlock",
+            "text": "**{{ name_a }}** and **{{ name_b }}** are **{{ distance_str }}** apart"
+          }{% if server_url %},
+          {
+            "type": "TextBlock",
+            "text": "[Open in Remote ID]({{ server_url }})",
+            "isSubtle": true,
+            "size": "Small"
+          }{% endif %}
+        ]
+      }
+    }
+  ]
+}

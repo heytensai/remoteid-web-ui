@@ -1810,6 +1810,29 @@ class WebDatabase:
         conn.commit()
         return cursor.rowcount
 
+    def get_live_positions(self, since: datetime) -> List[Dict]:
+        """Get the most recent position for each drone that has been updated since *since*.
+
+        Returns one row per UAS ID with ``uas_id``, ``latitude``, ``longitude``,
+        and ``max_ts`` (the timestamp of the latest position).  Used by the
+        drone-proximity alert to find pairs of drones that are close in both
+        space and time.
+        """
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(
+            """
+            SELECT uas_id, latitude, longitude, MAX(max_ts) AS max_ts
+            FROM latest_positions
+            WHERE latitude IS NOT NULL
+              AND longitude IS NOT NULL
+              AND max_ts >= ?
+            GROUP BY uas_id
+            """,
+            (since,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
     def update_collector_position(self, name: str, lat: float, lon: float):
         """Insert or replace a collector's current position"""
         conn = self._get_conn()

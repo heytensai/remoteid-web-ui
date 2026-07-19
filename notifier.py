@@ -31,7 +31,8 @@ logger = logging.getLogger(__name__)
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates", "notifications")
 
-VALID_EVENTS = ("geozone_enter", "geozone_exit", "new_session", "unrecognized_drone")
+VALID_EVENTS = ("geozone_enter", "geozone_exit", "new_session", "unrecognized_drone",
+                "drone_proximity")
 
 _NTFY_EVENT_HEADERS = {
     "geozone_enter": {
@@ -51,6 +52,11 @@ _NTFY_EVENT_HEADERS = {
     },
     "unrecognized_drone": {
         "title": "Unrecognized Drone Detected",
+        "priority": 4,
+        "tags": "warning,drone",
+    },
+    "drone_proximity": {
+        "title": "Drone Proximity Alert",
         "priority": 4,
         "tags": "warning,drone",
     },

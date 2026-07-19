@@ -11,7 +11,7 @@ check methods added to ``evaluate()``.
 import logging
 import math
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Callable
 
 from config import WaypointConfig, M_PER_DEG_LAT
@@ -61,7 +61,22 @@ def point_in_rectangle( # pylint: disable=too-many-positional-arguments
     )
 
 
-class AlertEngine:
+def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Return the great-circle distance in meters between two points."""
+    R = 6371000
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(dlon / 2) ** 2
+    )
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+
+class AlertEngine:  # pylint: disable=too-many-instance-attributes
     """Evaluates drone positions against configured alert conditions.
 
     Callbacks (set externally):
@@ -81,12 +96,14 @@ class AlertEngine:
         self._session_alert_cooldown: Dict[str, float] = {}  # key → monotonic timestamp of last fire
         self._geozone_alert_cooldown: Dict[str, float] = {}
         self._unrecognized_drone_cooldown: Dict[str, float] = {}
+        self._drone_proximity_cooldown: Dict[str, float] = {}  # "uas_a:uas_b" → monotonic
         self._load_known_sessions()
         # Callbacks
         self.on_new_alert: Optional[Callable] = None
         self.on_geozone_exit: Optional[Callable] = None
         self.on_new_session: Optional[Callable] = None
         self.on_unrecognized_drone: Optional[Callable] = None
+        self.on_drone_proximity: Optional[Callable] = None
 
     # --- Config loading ---
 
@@ -144,7 +161,7 @@ class AlertEngine:
         max_cd = max(cooldowns.values()) if cooldowns else 300
         cutoff = now - (max_cd * 2)
         for store in (self._session_alert_cooldown, self._geozone_alert_cooldown,
-                      self._unrecognized_drone_cooldown):
+                      self._unrecognized_drone_cooldown, self._drone_proximity_cooldown):
             stale = [k for k, t in store.items() if t < cutoff]
             for k in stale:
                 del store[k]
@@ -289,6 +306,63 @@ class AlertEngine:
                 self._geozone_alert_cooldown[cooldown_key] = now
                 self._fire(self.on_geozone_exit, uas_id, geozone_name)
 
+    # --- Drone proximity ---
+
+    def _check_drone_proximity(self):
+        """Check if any two live drones are within the configured proximity distance.
+
+        Only considers drones whose latest position is within ``stale_timeout``
+        seconds of now (i.e. live).  Each pair is checked once per cycle and
+        throttled by a cooldown keyed on the sorted pair of UAS IDs.
+        """
+        distance_m = self._config.alerts.proximity_distance
+        if not distance_m or distance_m <= 0:
+            return
+
+        stale_timeout = self._config.alerts.stale_timeout
+        now = datetime.now(timezone.utc)
+        since = now - timedelta(seconds=stale_timeout)
+        live = self._db.get_live_positions(since)
+        if len(live) < 2:
+            return
+
+        # Sort by uas_id so pair keys are deterministic
+        live.sort(key=lambda r: r["uas_id"])
+
+        for i, a in enumerate(live):
+            for b in live[i + 1:]:
+                dist = haversine_distance(a["latitude"], a["longitude"],
+                                         b["latitude"], b["longitude"])
+                if dist > distance_m:
+                    continue
+
+                pair_key = f"{a['uas_id']}|{b['uas_id']}"
+                cd_key = f"drone_proximity:{pair_key}"
+                cooldown = self._config.alerts.cooldown.get("drone_proximity", 300)
+                mono = time.monotonic()
+                last = self._drone_proximity_cooldown.get(cd_key)
+                if last is not None and (mono - last) < cooldown:
+                    logger.debug(
+                        "Skipping drone_proximity alert for %s (cooldown %ds)",
+                        pair_key, cooldown,
+                    )
+                    continue
+                self._drone_proximity_cooldown[cd_key] = mono
+
+                name_a = self._config.drone_aliases.get(a["uas_id"], a["uas_id"])
+                name_b = self._config.drone_aliases.get(b["uas_id"], b["uas_id"])
+
+                logger.info(
+                    "ALERT: drone proximity %s (%s) ↔ %s (%s) at %.1fm",
+                    a["uas_id"], name_a, b["uas_id"], name_b, dist,
+                )
+                self._fire(
+                    self.on_drone_proximity,
+                    a["uas_id"], name_a,
+                    b["uas_id"], name_b,
+                    dist,
+                )
+
     # --- Batch processing ---
 
     def evaluate_all(self, since: Optional[datetime] = None):
@@ -296,14 +370,13 @@ class AlertEngine:
 
         Used by the session scheduler for periodic background checking.
         """
-        if not self._geozones:
-            return
-
         drones = self._db.get_drones_for_alert_check(since)
         for uas_id in drones:
             positions = self._db.get_positions_for_alert_check(uas_id, since)
             if positions:
                 self.evaluate(uas_id, positions)
+        # Proximity check runs once per cycle regardless of geozone state
+        self._check_drone_proximity()
 
     def check_stale(self, reference_time: Optional[datetime] = None):
         """Mark events as timed out if last_seen_at is older than stale_timeout."""

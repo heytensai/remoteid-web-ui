@@ -25,7 +25,7 @@ from flask_wtf.csrf import CSRFProtect, generate_csrf
 from werkzeug.exceptions import BadRequest
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from config import WebConfig, M_PER_DEG_LAT
+from config import WebConfig, M_PER_DEG_LAT, FEET_PER_METER
 from database import WebDatabase
 from session_detect import process_database as redetect_sessions
 from session_scheduler import SessionScheduler
@@ -751,7 +751,7 @@ def _export_csv(positions, filename):
 
     for pos in positions:
         alt_m = pos.get("altitude")
-        alt_ft = round(alt_m * 3.28084, 1) if alt_m is not None else ""
+        alt_ft = round(alt_m * FEET_PER_METER, 1) if alt_m is not None else ""
         writer.writerow([
             pos.get("timestamp", ""),
             pos.get("latitude", ""),
@@ -1347,7 +1347,7 @@ def _hot_reload_config():
             CONFIG = new_config
             global _config_snapshot  # noqa: PLW0603  # pylint: disable=global-statement
             _config_snapshot = new_config
-        # Rebuild notifier if notifications changed
+        ALERT_ENGINE.reload_config(new_config)
         _rebuild_notifier()
 
 def _rebuild_notifier():
@@ -1362,11 +1362,13 @@ def _rebuild_notifier():
         ALERT_ENGINE.on_geozone_exit = _on_geozone_exit
         ALERT_ENGINE.on_new_session = _on_new_session
         ALERT_ENGINE.on_unrecognized_drone = _on_unrecognized_drone
+        ALERT_ENGINE.on_drone_proximity = _on_drone_proximity
     else:
         ALERT_ENGINE.on_new_alert = None
         ALERT_ENGINE.on_geozone_exit = None
         ALERT_ENGINE.on_new_session = None
         ALERT_ENGINE.on_unrecognized_drone = None
+        ALERT_ENGINE.on_drone_proximity = None
 
 
 def _init_app(config_path: str):
@@ -1399,6 +1401,7 @@ def _init_app(config_path: str):
         ALERT_ENGINE.on_geozone_exit = _on_geozone_exit
         ALERT_ENGINE.on_new_session = _on_new_session
         ALERT_ENGINE.on_unrecognized_drone = _on_unrecognized_drone
+        ALERT_ENGINE.on_drone_proximity = _on_drone_proximity
 
     SESSION_SCHEDULER = SessionScheduler(CONFIG, CONFIG.database_path, alert_engine=ALERT_ENGINE, database=DATABASE)
     MAINTENANCE_SCHEDULER = MaintenanceScheduler(CONFIG, DATABASE)
@@ -1536,6 +1539,29 @@ def _on_unrecognized_drone(uas_id: str, session_id: str, first_position: Optiona
         ctx["lat"] = first_position.get("latitude")
         ctx["lon"] = first_position.get("longitude")
     NOTIFIER_SERVICE.dispatch("unrecognized_drone", **ctx)
+
+
+def _on_drone_proximity(
+    uas_id_a: str, name_a: str,
+    uas_id_b: str, name_b: str,
+    distance_m: float,
+):
+    """Callback fired when two drones are within proximity distance. Dispatches to notifier."""
+    if CONFIG.use_metric:
+        distance_str = f"{distance_m:.0f} m"
+    else:
+        feet = distance_m * FEET_PER_METER
+        distance_str = f"{feet:.0f} ft"
+    NOTIFIER_SERVICE.dispatch(
+        "drone_proximity",
+        uas_id_a=uas_id_a,
+        name_a=name_a,
+        uas_id_b=uas_id_b,
+        name_b=name_b,
+        distance_m=distance_m,
+        distance_str=distance_str,
+        use_metric=CONFIG.use_metric,
+    )
 
 
 def start_background_services():

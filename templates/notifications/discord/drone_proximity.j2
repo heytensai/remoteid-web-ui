@@ -1,0 +1,14 @@
+{
+  "embeds": [{
+    "title": "Drone Proximity Alert",
+    "color": 15158332,
+    "description": "{{ name_a }} and {{ name_b }} are {{ distance_str }} apart",
+    "fields": [
+      {"name": "Drone A", "value": "{{ name_a }}", "inline": true},
+      {"name": "Drone B", "value": "{{ name_b }}", "inline": true},
+      {"name": "Distance", "value": "{{ distance_str }}", "inline": true}
+    ],
+    "timestamp": "{{ timestamp }}"{% if server_url %},
+    "url": "{{ server_url }}"{% endif %}
+  }]
+}
