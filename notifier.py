@@ -25,9 +25,23 @@ from datetime import datetime, timezone
 from typing import Dict, List
 from urllib.parse import urlparse
 
-from jinja2 import Template, TemplateError
+from jinja2 import Template, TemplateError, Environment, FileSystemLoader
+import json
 
 logger = logging.getLogger(__name__)
+
+
+def _json_escape(value):
+    """Escape a string to be JSON-safe (within a string literal)."""
+    if value is None:
+        return ""
+    return json.dumps(str(value))[1:-1]
+
+
+def _load_template(target_type, event):
+    env = Environment(loader=FileSystemLoader(os.path.join(TEMPLATE_DIR, target_type)))
+    env.filters["json_escape"] = _json_escape
+    return env.get_template(f"{event}.j2")
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates", "notifications")
 
