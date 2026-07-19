@@ -307,6 +307,9 @@ const UIController = {
             detailMaxSpeed: document.getElementById('detailMaxSpeed'),
             detailTimeSpan: document.getElementById('detailTimeSpan'),
             detailChart: document.getElementById('detailChart'),
+            chartModal: document.getElementById('chartModal'),
+            closeChartModalBtn: document.getElementById('closeChartModal'),
+            detailChartExpanded: document.getElementById('detailChartExpanded'),
             detailOperator: document.getElementById('detailOperator'),
             detailOperatorId: document.getElementById('detailOperatorId'),
             detailOperatorPos: document.getElementById('detailOperatorPos'),
@@ -404,6 +407,26 @@ const UIController = {
         // Close detail panel
         this.elements.closeDetailBtn.addEventListener('click', () => {
             this._closeDetailPanel();
+        });
+
+        // Chart modal open/close
+        this.elements.detailChart.parentElement.addEventListener('click', () => {
+            if (this.selectedDroneTrack && this.selectedDroneTrack.length > 0) {
+                this._openChartModal();
+            }
+        });
+        this.elements.closeChartModalBtn.addEventListener('click', () => {
+            this._closeChartModal();
+        });
+        this.elements.chartModal.addEventListener('click', (e) => {
+            if (e.target === this.elements.chartModal) {
+                this._closeChartModal();
+            }
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && this.elements.chartModal.style.display === 'flex') {
+                this._closeChartModal();
+            }
         });
 
         // Replay play button (sidebar header)
@@ -2192,6 +2215,23 @@ const UIController = {
     },
 
     /**
+     * Open the chart modal with expanded altitude/height chart
+     */
+    _openChartModal() {
+        this.elements.chartModal.style.display = 'flex';
+        requestAnimationFrame(() => {
+            this._drawAltitudeChart(this.selectedDroneTrack, this.elements.detailChartExpanded);
+        });
+    },
+
+    /**
+     * Close the chart modal
+     */
+    _closeChartModal() {
+        this.elements.chartModal.style.display = 'none';
+    },
+
+    /**
      * Update detail stats from track data (session-specific)
      */
     _updateDetailStats(track, maxHeight = null) {
@@ -2283,19 +2323,21 @@ const UIController = {
     /**
      * Draw altitude over time chart
      */
-    _drawAltitudeChart(track) {
-        const canvas = this.elements.detailChart;
+    _drawAltitudeChart(track, targetCanvas = null) {
+        const canvas = targetCanvas || this.elements.detailChart;
         const ctx = canvas.getContext('2d');
 
         const dpr = window.devicePixelRatio || 1;
         const rect = canvas.parentElement.getBoundingClientRect();
+        const isExpanded = canvas === this.elements.detailChartExpanded;
+        const canvasHeight = isExpanded ? Math.max(400, rect.height - 4) : 220;
         canvas.width = rect.width * dpr;
-        canvas.height = 220 * dpr;
-        canvas.style.height = '220px';
+        canvas.height = canvasHeight * dpr;
+        canvas.style.height = `${canvasHeight}px`;
         ctx.scale(dpr, dpr);
 
         const width = rect.width;
-        const height = 220;
+        const height = canvasHeight;
         const padding = { top: 32, right: 52, bottom: 30, left: 48 };
 
         ctx.clearRect(0, 0, width, height);

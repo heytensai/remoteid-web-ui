@@ -2236,6 +2236,28 @@ body.dark-mode .modal-header {
     flex: 1;
 }
 
+.modal-chart {
+    max-width: 95vw;
+    width: 95vw;
+    max-height: 85vh;
+}
+
+.modal-chart-body {
+    padding: 12px;
+    display: flex;
+    align-items: stretch;
+}
+
+.modal-chart-body canvas {
+    display: block;
+    width: 100%;
+    flex: 1;
+}
+
+.detail-chart-container {
+    cursor: pointer;
+}
+
 .alert-log-filters {
     display: flex;
     gap: 8px;
