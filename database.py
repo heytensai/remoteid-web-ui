@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger(__name__)
 
 # Current schema version — bump this and add a migration in _migrate()
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def _adapt_datetime(dt: datetime) -> str:
@@ -215,6 +215,7 @@ class WebDatabase:
             altitude REAL,
             height REAL,
             height_type TEXT,
+            max_height REAL,
             operator_id TEXT,
             operator_latitude REAL,
             operator_longitude REAL,
@@ -322,6 +323,17 @@ class WebDatabase:
             conn.execute("DROP TABLE IF EXISTS push_subscriptions")
             from_version = 5
 
+        if from_version == 5:
+            try:
+                conn.execute(
+                    "ALTER TABLE latest_positions ADD COLUMN max_height REAL"
+                )
+            except sqlite3.OperationalError:
+                pass  # column already exists
+            conn.execute("DELETE FROM latest_positions")
+            WebDatabase._backfill_latest_positions(conn)
+            from_version = 6
+
     @staticmethod
     def _ensure_latest_positions_table(conn: sqlite3.Connection):
         """Create the latest_positions table and index (idempotent)."""
@@ -337,6 +349,7 @@ class WebDatabase:
             altitude REAL,
             height REAL,
             height_type TEXT,
+            max_height REAL,
             operator_id TEXT,
             operator_latitude REAL,
             operator_longitude REAL,
@@ -359,7 +372,7 @@ class WebDatabase:
         """
         INSERT INTO latest_positions
             (uas_id, computed_session_id, max_ts, min_ts,
-             latitude, longitude, altitude, height, height_type,
+             latitude, longitude, altitude, height, height_type, max_height,
              operator_id, operator_latitude, operator_longitude, source,
              collector_latitude, collector_longitude)
         SELECT
@@ -369,7 +382,7 @@ class WebDatabase:
             MIN(timestamp) OVER (
                 PARTITION BY uas_id, COALESCE(computed_session_id, '')
             ),
-            latitude, longitude, altitude, height, height_type,
+            latitude, longitude, altitude, height, height_type, max_height,
             operator_id, operator_latitude, operator_longitude, source,
             collector_latitude, collector_longitude
         FROM (
@@ -377,7 +390,10 @@ class WebDatabase:
                 ROW_NUMBER() OVER (
                     PARTITION BY uas_id, COALESCE(computed_session_id, '')
                     ORDER BY timestamp DESC
-                ) as rn
+                ) as rn,
+                MAX(height) OVER (
+                    PARTITION BY uas_id, COALESCE(computed_session_id, '')
+                ) as max_height
             FROM remoteid
         )
         WHERE rn = 1
@@ -400,7 +416,7 @@ class WebDatabase:
                 f"""
                 INSERT INTO latest_positions
                     (uas_id, computed_session_id, max_ts, min_ts,
-                     latitude, longitude, altitude, height, height_type,
+                     latitude, longitude, altitude, height, height_type, max_height,
                      operator_id, operator_latitude, operator_longitude, source,
                      collector_latitude, collector_longitude)
                 SELECT
@@ -410,7 +426,7 @@ class WebDatabase:
                     MIN(timestamp) OVER (
                         PARTITION BY uas_id, COALESCE(computed_session_id, '')
                     ),
-                    latitude, longitude, altitude, height, height_type,
+                    latitude, longitude, altitude, height, height_type, max_height,
                     operator_id, operator_latitude, operator_longitude, source,
                     collector_latitude, collector_longitude
                 FROM (
@@ -418,7 +434,10 @@ class WebDatabase:
                         ROW_NUMBER() OVER (
                             PARTITION BY uas_id, COALESCE(computed_session_id, '')
                             ORDER BY timestamp DESC
-                        ) as rn
+                        ) as rn,
+                        MAX(height) OVER (
+                            PARTITION BY uas_id, COALESCE(computed_session_id, '')
+                        ) as max_height
                     FROM remoteid
                     WHERE uas_id IN ({placeholders})
                 )
@@ -1002,7 +1021,7 @@ class WebDatabase:
                 NULLIF(computed_session_id, '') as computed_session_id,
                 max_ts as timestamp,
                 min_ts as session_start,
-                latitude, longitude, altitude, height, height_type,
+                latitude, longitude, altitude, height, height_type, max_height,
                 operator_id,
                 operator_latitude, operator_longitude, source,
                 collector_latitude, collector_longitude
@@ -1038,7 +1057,7 @@ class WebDatabase:
                 NULLIF(computed_session_id, '') as computed_session_id,
                 max_ts as timestamp,
                 min_ts as session_start,
-                latitude, longitude, altitude, height, height_type,
+                latitude, longitude, altitude, height, height_type, max_height,
                 operator_id, operator_latitude, operator_longitude, source,
                 collector_latitude, collector_longitude
             FROM latest_positions
@@ -1124,7 +1143,7 @@ class WebDatabase:
                     uas_id,
                     NULLIF(computed_session_id, '') as computed_session_id,
                     max_ts as timestamp, min_ts as session_start,
-                    latitude, longitude, altitude, height, height_type,
+                    latitude, longitude, altitude, height, height_type, max_height,
                     operator_id,
                     operator_latitude, operator_longitude, source,
                     collector_latitude, collector_longitude
@@ -1144,7 +1163,7 @@ class WebDatabase:
                 uas_id,
                 NULLIF(computed_session_id, '') as computed_session_id,
                 max_ts as timestamp, min_ts as session_start,
-                latitude, longitude, altitude, height, height_type,
+                latitude, longitude, altitude, height, height_type, max_height,
                 operator_id,
                 operator_latitude, operator_longitude, source,
                 collector_latitude, collector_longitude

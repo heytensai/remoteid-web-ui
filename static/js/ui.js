@@ -302,6 +302,7 @@ const UIController = {
             detailUasId: document.getElementById('detailUasId'),
             detailPositions: document.getElementById('detailPositions'),
             detailMaxAlt: document.getElementById('detailMaxAlt'),
+            detailMaxHeight: document.getElementById('detailMaxHeight'),
             detailDistance: document.getElementById('detailDistance'),
             detailMaxSpeed: document.getElementById('detailMaxSpeed'),
             detailTimeSpan: document.getElementById('detailTimeSpan'),
@@ -1545,8 +1546,8 @@ const UIController = {
         const altitude = drone.altitude !== null && drone.altitude !== undefined
             ? Units.formatAltitude(drone.altitude, true, 0)
             : 'N/A';
-        const height = drone.height !== null && drone.height !== undefined
-            ? Units.formatAltitude(drone.height, true, 0)
+        const height = drone.max_height !== null && drone.max_height !== undefined
+            ? Units.formatAltitude(drone.max_height, true, 0)
             : null;
         const time = new Date(drone.timestamp);
         const timeStr = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -1567,7 +1568,7 @@ const UIController = {
         }
 
         return `
-            <div class="drone-item ${isSelected ? 'active' : ''} ${isVisible ? '' : 'dimmed'} ${hasAlert ? 'has-geozone-alert' : ''}" data-uas-id="${esc(drone.uas_id)}" data-session-key="${esc(rawSessionKey)}" data-session-id="${esc(drone.computed_session_id || '')}">
+            <div class="drone-item ${isSelected ? 'active' : ''} ${isVisible ? '' : 'dimmed'} ${hasAlert ? 'has-geozone-alert' : ''}" data-uas-id="${esc(drone.uas_id)}" data-session-key="${esc(rawSessionKey)}" data-session-id="${esc(drone.computed_session_id || '')}" data-max-height="${drone.max_height != null ? drone.max_height : ''}">
                 <input type="checkbox" class="drone-checkbox" data-session-key="${esc(rawSessionKey)}" ${isVisible ? 'checked' : ''}>
                 <div class="drone-color" style="background-color: ${color};"></div>
                 <div class="drone-info">
@@ -1989,6 +1990,7 @@ const UIController = {
                 const uasId = item.dataset.uasId;
                 const sessionKey = item.dataset.sessionKey;
                 const sessionId = item.dataset.sessionId;
+                const maxHeight = item.dataset.maxHeight ? parseFloat(item.dataset.maxHeight) : null;
 
                 if (!this.visibleSessions.has(sessionKey)) {
                     return;
@@ -2010,7 +2012,7 @@ const UIController = {
                 if (isSameSession) {
                     this._closeDetailPanel();
                 } else {
-                    this._openDetailPanel(uasId, sessionId);
+                    this._openDetailPanel(uasId, sessionId, maxHeight);
                 }
 
                 if (window.innerWidth < 768) {
@@ -2123,7 +2125,7 @@ const UIController = {
     /**
      * Open the drone detail panel - now session-specific
      */
-    async _openDetailPanel(uasId, sessionId = null) {
+    async _openDetailPanel(uasId, sessionId = null, maxHeight = null) {
         this.selectedDrone = uasId;
         this.selectedSession = sessionId;
         const displayName = this.getDroneName(uasId);
@@ -2153,7 +2155,7 @@ const UIController = {
                 const session = response.sessions.find(s => s.session_id === sessionId);
                 if (session && session.positions && session.positions.length > 0) {
                     this.selectedDroneTrack = session.positions;
-                    this._updateDetailStats(session.positions);
+                    this._updateDetailStats(session.positions, maxHeight);
                     this._drawAltitudeChart(session.positions);
                 } else {
                     this._clearDetailStats();
@@ -2161,7 +2163,7 @@ const UIController = {
             } else if (response.track && response.track.length > 0) {
                 // Fallback for old format
                 this.selectedDroneTrack = response.track;
-                this._updateDetailStats(response.track);
+                this._updateDetailStats(response.track, maxHeight);
                 this._drawAltitudeChart(response.track);
             } else {
                 this._clearDetailStats();
@@ -2192,13 +2194,22 @@ const UIController = {
     /**
      * Update detail stats from track data (session-specific)
      */
-    _updateDetailStats(track) {
+    _updateDetailStats(track, maxHeight = null) {
         const numPositions = track.length;
         this.elements.detailPositions.textContent = numPositions;
 
         // Max altitude
         const maxAlt = Math.max(...track.map(p => p.altitude || 0));
         this.elements.detailMaxAlt.textContent = maxAlt > 0 ? Units.formatAltitude(maxAlt, true, 0) : 'N/A';
+
+        // Max height (pre-computed from backend if available)
+        if (maxHeight != null && maxHeight > 0) {
+            this.elements.detailMaxHeight.textContent = Units.formatAltitude(maxHeight, true, 0);
+        } else {
+            const heights = track.map(p => p.height).filter(h => h != null && h > 0);
+            const computed = heights.length > 0 ? Math.max(...heights) : 0;
+            this.elements.detailMaxHeight.textContent = computed > 0 ? Units.formatAltitude(computed, true, 0) : 'N/A';
+        }
 
         // Total distance and max speed
         let totalDistance = 0;
@@ -2262,6 +2273,7 @@ const UIController = {
     _clearDetailStats() {
         this.elements.detailPositions.textContent = '-';
         this.elements.detailMaxAlt.textContent = '-';
+        this.elements.detailMaxHeight.textContent = '-';
         this.elements.detailDistance.textContent = '-';
         this.elements.detailMaxSpeed.textContent = '-';
         this.elements.detailTimeSpan.textContent = '-';
@@ -2278,20 +2290,19 @@ const UIController = {
         const dpr = window.devicePixelRatio || 1;
         const rect = canvas.parentElement.getBoundingClientRect();
         canvas.width = rect.width * dpr;
-        canvas.height = 200 * dpr;
-        canvas.style.height = '200px';
+        canvas.height = 220 * dpr;
+        canvas.style.height = '220px';
         ctx.scale(dpr, dpr);
 
         const width = rect.width;
-        const height = 200;
-        const padding = { top: 20, right: 16, bottom: 30, left: 48 };
+        const height = 220;
+        const padding = { top: 32, right: 52, bottom: 30, left: 48 };
 
-        // Clear
         ctx.clearRect(0, 0, width, height);
 
         // Filter valid altitude points
-        const validPoints = track.filter(p => p.altitude != null && p.altitude > 0);
-        if (validPoints.length < 2) {
+        const validAltPoints = track.filter(p => p.altitude != null && p.altitude > 0);
+        if (validAltPoints.length < 2) {
             ctx.fillStyle = '#6c757d';
             ctx.font = '13px sans-serif';
             ctx.textAlign = 'center';
@@ -2299,13 +2310,30 @@ const UIController = {
             return;
         }
 
-        const times = validPoints.map(p => new Date(p.timestamp).getTime());
-        const altitudes = validPoints.map(p => p.altitude);
+        const times = validAltPoints.map(p => new Date(p.timestamp).getTime());
+        const altitudes = validAltPoints.map(p => p.altitude);
+
+        // Collect height values indexed by timestamp for pairing
+        const heightByTime = new Map();
+        for (const p of track) {
+            if (p.height != null && p.height > 0) {
+                heightByTime.set(new Date(p.timestamp).getTime(), p.height);
+            }
+        }
+        const hasHeight = heightByTime.size >= 2;
 
         const minTime = Math.min(...times);
         const maxTime = Math.max(...times);
         const minAlt = Math.min(...altitudes);
         const maxAlt = Math.max(...altitudes);
+
+        let minH = 0;
+        let maxH = 1;
+        if (hasHeight) {
+            const hVals = [...heightByTime.values()];
+            minH = Math.min(...hVals);
+            maxH = Math.max(...hVals);
+        }
 
         const chartWidth = width - padding.left - padding.right;
         const chartHeight = height - padding.top - padding.bottom;
@@ -2316,8 +2344,11 @@ const UIController = {
         function yForAlt(a) {
             return padding.top + chartHeight - ((a - minAlt) / (maxAlt - minAlt || 1)) * chartHeight;
         }
+        function yForHeight(h) {
+            return padding.top + chartHeight - ((h - minH) / (maxH - minH || 1)) * chartHeight;
+        }
 
-        // Grid lines
+        // Altitude grid lines (left axis)
         ctx.strokeStyle = '#e9ecef';
         ctx.lineWidth = 1;
         const altRange = maxAlt - minAlt || 1;
@@ -2334,29 +2365,64 @@ const UIController = {
             ctx.moveTo(padding.left, y);
             ctx.lineTo(width - padding.right, y);
             ctx.stroke();
-            // Convert altitude for display
             const displayAlt = Units.useMetric ? a : a * 3.28084;
             ctx.fillText(`${displayAlt.toFixed(0)}`, padding.left - 4, y + 3);
         }
 
-        // Altitude label
+        // Height grid lines and right axis labels
+        if (hasHeight) {
+            ctx.strokeStyle = '#e9ecef';
+            ctx.setLineDash([3, 3]);
+            const hRange = maxH - minH || 1;
+            const hStep = this._niceStep(hRange, 4);
+            const hStart = Math.ceil(minH / hStep) * hStep;
+
+            ctx.fillStyle = '#28a745';
+            ctx.textAlign = 'left';
+
+            for (let h = hStart; h <= maxH; h += hStep) {
+                const y = yForHeight(h);
+                ctx.beginPath();
+                ctx.moveTo(padding.left, y);
+                ctx.lineTo(width - padding.right, y);
+                ctx.stroke();
+                const displayH = Units.useMetric ? h : h * 3.28084;
+                ctx.fillText(`${displayH.toFixed(0)}`, width - padding.right + 4, y + 3);
+            }
+            ctx.setLineDash([]);
+        }
+
+        // Altitude Y-axis label (left, rotated)
         ctx.save();
-        ctx.translate(10, height / 2);
+        ctx.translate(10, padding.top + chartHeight / 2);
         ctx.rotate(-Math.PI / 2);
         ctx.textAlign = 'center';
-        ctx.fillStyle = '#495057';
+        ctx.fillStyle = '#007bff';
         ctx.font = '11px sans-serif';
         const altUnit = Units.getAltitudeUnit();
         ctx.fillText(`Altitude (${altUnit})`, 0, 0);
         ctx.restore();
 
-        // Draw line
+        // Height Y-axis label (right, rotated)
+        if (hasHeight) {
+            ctx.save();
+            ctx.translate(width - 6, padding.top + chartHeight / 2);
+            ctx.rotate(Math.PI / 2);
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#28a745';
+            ctx.font = '11px sans-serif';
+            const hUnit = Units.getAltitudeUnit();
+            ctx.fillText(`Height (${hUnit})`, 0, 0);
+            ctx.restore();
+        }
+
+        // Draw altitude line
         ctx.strokeStyle = '#007bff';
         ctx.lineWidth = 2;
         ctx.lineJoin = 'round';
         ctx.beginPath();
 
-        for (let i = 0; i < validPoints.length; i++) {
+        for (let i = 0; i < validAltPoints.length; i++) {
             const x = xForTime(times[i]);
             const y = yForAlt(altitudes[i]);
             if (i === 0) {
@@ -2367,14 +2433,36 @@ const UIController = {
         }
         ctx.stroke();
 
-        // Draw area fill
+        // Draw altitude area fill
         ctx.lineTo(xForTime(times[times.length - 1]), padding.top + chartHeight);
         ctx.lineTo(xForTime(times[0]), padding.top + chartHeight);
         ctx.closePath();
         ctx.fillStyle = 'rgba(0, 123, 255, 0.1)';
         ctx.fill();
 
-        // Time labels
+        // Draw height line
+        if (hasHeight) {
+            ctx.strokeStyle = '#28a745';
+            ctx.lineWidth = 2;
+            ctx.lineJoin = 'round';
+            ctx.beginPath();
+
+            let started = false;
+            for (const [t, h] of heightByTime) {
+                if (t < minTime || t > maxTime) continue;
+                const x = xForTime(t);
+                const y = yForHeight(h);
+                if (!started) {
+                    ctx.moveTo(x, y);
+                    started = true;
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            }
+            ctx.stroke();
+        }
+
+        // Time labels (X-axis)
         ctx.fillStyle = '#6c757d';
         ctx.textAlign = 'center';
         ctx.font = '10px sans-serif';
@@ -2388,6 +2476,26 @@ const UIController = {
             const date = new Date(t);
             const label = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             ctx.fillText(label, x, height - 6);
+        }
+
+        // Legend
+        const legendY = 10;
+        const legendX = width / 2;
+
+        // Altitude legend item
+        ctx.fillStyle = '#007bff';
+        ctx.fillRect(legendX - (hasHeight ? 50 : 20), legendY - 4, 12, 3);
+        ctx.fillStyle = '#495057';
+        ctx.font = '10px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText('Altitude', legendX - (hasHeight ? 34 : 4), legendY);
+
+        // Height legend item
+        if (hasHeight) {
+            ctx.fillStyle = '#28a745';
+            ctx.fillRect(legendX + 18, legendY - 4, 12, 3);
+            ctx.fillStyle = '#495057';
+            ctx.fillText('Height', legendX + 34, legendY);
         }
     },
 

@@ -55,7 +55,7 @@ This file is the user's personal, gitignored configuration. Even if it contains 
 
 ## Database Schema Versioning
 
-The database uses a lightweight integer-based versioning system tracked in the `_schema_version` table. Current schema version: **5**.
+The database uses a lightweight integer-based versioning system tracked in the `_schema_version` table. Current schema version: **6**.
 
 ### How It Works
 

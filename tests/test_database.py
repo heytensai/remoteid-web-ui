@@ -17,11 +17,13 @@ def test_schema_version_created(db):
     """_schema_version table exists at current version."""
     import sqlite3
     conn = sqlite3.connect(db.db_path)
+    from database import SCHEMA_VERSION
+
     version = conn.execute(
         "SELECT MAX(version) FROM _schema_version"
     ).fetchone()[0]
     conn.close()
-    assert version == 5
+    assert version == SCHEMA_VERSION
 
 
 def test_schema_version_upgrade(tmp_path):
