@@ -203,12 +203,16 @@ The app registers a service worker stub but there's no actual offline capability
 
 Errors go to `console.error` and are invisible to users. Implement a non-intrusive error banner/toast system that surfaces API failures, sync errors, and connection drops — especially important when multiple remote collectors are involved and one might silently stop reporting.
 
-### 7.2 Data Export Enhancements
+### 7.2 Bulk Data Export
 **Priority: Medium | Effort: Low**
 
-The app exports alert history as CSV, but there's no export for drone tracks, position data, or flight summaries. Add configurable exports (CSV, GPX, KML) for the currently visible data — a common need for post-flight analysis and compliance reporting.
+Per-session track export (CSV/GPX/KML) already exists via the sidebar download button. What's missing:
+- **Bulk export**: Export all visible sessions at once instead of one-by-one
+- **Position-level export**: Export raw positions (not just tracks) for custom analysis
+- **Flight summary export**: A CSV of aggregate stats per session (total distance, max altitude, duration, speed profile)
+- **Operator export**: Export operator positions alongside drone tracks
 
-### 7.3 README and Getting Started Guide
+### 7.3 README and Getting Started Guide ✅ **COMPLETED**
 **Priority: High | Effort: Low**
 
 The project has no README. For a project with Docker support, CLI tools (`flask auth create-user`), YAML config, and multiple deployment options, a proper README with install instructions, config examples, and troubleshooting would dramatically lower the barrier for new users.
@@ -217,9 +221,8 @@ The project has no README. For a project with Docker support, CLI tools (`flask 
 
 ## Quick Wins (Low Effort, High Impact)
 
-1. **README** — 1 hour
-2. **Toast notifications** — 1-2 hours
-3. **Local CDN fallbacks** — 1 hour
+1. **Toast notifications** — 1-2 hours
+2. **Local CDN fallbacks** — 1 hour
 4. **Loading overlay during refresh** — 1 hour
 5. **Drone search/filter in sidebar** — 1 hour
 6. **Health check endpoint** — 30 minutes
