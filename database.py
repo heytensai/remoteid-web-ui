@@ -233,6 +233,7 @@ class WebDatabase:
 
         conn.commit()
         self._ensure_schema_version(conn)
+        self._ensure_latest_positions_backfilled(conn)
         logger.debug("Database initialized at %s", self.db_path)
 
     def _ensure_schema_version(self, conn: sqlite3.Connection):
@@ -365,6 +366,21 @@ class WebDatabase:
             "ON latest_positions(max_ts)"
         )
 
+    def _ensure_latest_positions_backfilled(self, conn: sqlite3.Connection):
+        """Safety net: if latest_positions is empty but remoteid has rows, backfill."""
+        remoteid_count = conn.execute("SELECT COUNT(*) FROM remoteid").fetchone()[0]
+        if remoteid_count == 0:
+            return
+        lp_count = conn.execute("SELECT COUNT(*) FROM latest_positions").fetchone()[0]
+        if lp_count > 0:
+            return
+        logger.warning(
+            "latest_positions is empty but remoteid has %d rows — backfilling",
+            remoteid_count,
+        )
+        WebDatabase._backfill_latest_positions(conn)
+        conn.commit()
+
     @staticmethod
     def _backfill_latest_positions(conn: sqlite3.Connection):
         """Populate latest_positions from existing remoteid data (one-time migration)."""
@@ -379,9 +395,7 @@ class WebDatabase:
             uas_id,
             COALESCE(computed_session_id, ''),
             timestamp,
-            MIN(timestamp) OVER (
-                PARTITION BY uas_id, COALESCE(computed_session_id, '')
-            ),
+            min_ts,
             latitude, longitude, altitude, height, height_type, max_height,
             operator_id, operator_latitude, operator_longitude, source,
             collector_latitude, collector_longitude
@@ -391,6 +405,9 @@ class WebDatabase:
                     PARTITION BY uas_id, COALESCE(computed_session_id, '')
                     ORDER BY timestamp DESC
                 ) as rn,
+                MIN(timestamp) OVER (
+                    PARTITION BY uas_id, COALESCE(computed_session_id, '')
+                ) as min_ts,
                 MAX(height) OVER (
                     PARTITION BY uas_id, COALESCE(computed_session_id, '')
                 ) as max_height
@@ -423,9 +440,7 @@ class WebDatabase:
                     uas_id,
                     COALESCE(computed_session_id, ''),
                     timestamp,
-                    MIN(timestamp) OVER (
-                        PARTITION BY uas_id, COALESCE(computed_session_id, '')
-                    ),
+                    min_ts,
                     latitude, longitude, altitude, height, height_type, max_height,
                     operator_id, operator_latitude, operator_longitude, source,
                     collector_latitude, collector_longitude
@@ -435,6 +450,9 @@ class WebDatabase:
                             PARTITION BY uas_id, COALESCE(computed_session_id, '')
                             ORDER BY timestamp DESC
                         ) as rn,
+                        MIN(timestamp) OVER (
+                            PARTITION BY uas_id, COALESCE(computed_session_id, '')
+                        ) as min_ts,
                         MAX(height) OVER (
                             PARTITION BY uas_id, COALESCE(computed_session_id, '')
                         ) as max_height
