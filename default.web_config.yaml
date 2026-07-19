@@ -167,10 +167,15 @@ web_interface:
     # Skip geozone alerts for drones that have an alias configured in
     # drone_aliases (hot-reloadable)
     skip_known_drones: false
-    # Seconds before the same (uas_id, session_id) pair can trigger a
-    # new_session alert again. Prevents duplicate alerts when session
-    # detection regenerates IDs every ~30s (hot-reloadable)
-    new_session_cooldown: 300
+    # Seconds before the same alert can fire again, keyed by event type.
+    # Each entry is independent — a drone can trigger new_session,
+    # geozone_enter, and geozone_exit simultaneously without interference.
+    # (hot-reloadable)
+    cooldown:
+      new_session: 300
+      geozone_enter: 300
+      geozone_exit: 300
+      unrecognized_drone: 300
 
   # Collector positions and status
   # Each collector can be either:
@@ -235,9 +240,11 @@ web_interface:
   #   - token      — Bearer token auth (e.g. "tk_xxx")
   #   - username/password — Basic auth for self-hosted servers
   #
-  # Event filters (subset of ["geozone_enter", "new_session"]):
-  #   - geozone_enter — drone enters an alert-enabled geozone
-  #   - new_session   — drone starts a new flight
+  # Event filters (subset of ["geozone_enter", "geozone_exit", "new_session", "unrecognized_drone"]):
+  #   - geozone_enter     — drone enters an alert-enabled geozone
+  #   - geozone_exit      — drone leaves an alert-enabled geozone
+  #   - new_session       — drone starts a new flight
+  #   - unrecognized_drone — drone not in the aliases list starts a new flight
   #
   # Templates live in templates/notifications/<type>/<event>.j2
   # and can be customized per deployment.

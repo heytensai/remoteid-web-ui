@@ -1356,10 +1356,14 @@ def _rebuild_notifier():
     )
     if NOTIFIER_SERVICE.has_targets():
         ALERT_ENGINE.on_new_alert = _on_new_alert
+        ALERT_ENGINE.on_geozone_exit = _on_geozone_exit
         ALERT_ENGINE.on_new_session = _on_new_session
+        ALERT_ENGINE.on_unrecognized_drone = _on_unrecognized_drone
     else:
         ALERT_ENGINE.on_new_alert = None
+        ALERT_ENGINE.on_geozone_exit = None
         ALERT_ENGINE.on_new_session = None
+        ALERT_ENGINE.on_unrecognized_drone = None
 
 
 def _init_app(config_path: str):
@@ -1389,7 +1393,9 @@ def _init_app(config_path: str):
     )
     if NOTIFIER_SERVICE.has_targets():
         ALERT_ENGINE.on_new_alert = _on_new_alert
+        ALERT_ENGINE.on_geozone_exit = _on_geozone_exit
         ALERT_ENGINE.on_new_session = _on_new_session
+        ALERT_ENGINE.on_unrecognized_drone = _on_unrecognized_drone
 
     SESSION_SCHEDULER = SessionScheduler(CONFIG, CONFIG.database_path, alert_engine=ALERT_ENGINE, database=DATABASE)
     MAINTENANCE_SCHEDULER = MaintenanceScheduler(CONFIG, DATABASE)
@@ -1481,6 +1487,18 @@ def _on_new_alert(uas_id: str, geozone_name: str):
     )
 
 
+def _on_geozone_exit(uas_id: str, geozone_name: str):
+    """Callback fired when a drone leaves a geozone. Dispatches to notifier."""
+    name = CONFIG.drone_aliases.get(uas_id, uas_id)
+    NOTIFIER_SERVICE.dispatch(
+        "geozone_exit",
+        uas_id=uas_id,
+        name=name,
+        geozone_name=geozone_name,
+        use_metric=CONFIG.use_metric,
+    )
+
+
 def _on_new_session(uas_id: str, session_id: str, first_position: Optional[Dict] = None):
     """Callback fired when a new drone session/flight is detected. Dispatches to notifier."""
     name = CONFIG.drone_aliases.get(uas_id, uas_id)
@@ -1497,6 +1515,24 @@ def _on_new_session(uas_id: str, session_id: str, first_position: Optional[Dict]
         ctx["lat"] = first_position.get("latitude")
         ctx["lon"] = first_position.get("longitude")
     NOTIFIER_SERVICE.dispatch("new_session", **ctx)
+
+
+def _on_unrecognized_drone(uas_id: str, session_id: str, first_position: Optional[Dict] = None):
+    """Callback fired when an unrecognized drone starts a new flight. Dispatches to notifier."""
+    name = CONFIG.drone_aliases.get(uas_id, uas_id)
+    ctx = {
+        "uas_id": uas_id,
+        "name": name,
+        "session_id": session_id,
+        "use_metric": CONFIG.use_metric,
+    }
+    if first_position:
+        ctx["altitude"] = first_position.get("altitude")
+        ctx["height"] = first_position.get("height")
+        ctx["height_type"] = first_position.get("height_type")
+        ctx["lat"] = first_position.get("latitude")
+        ctx["lon"] = first_position.get("longitude")
+    NOTIFIER_SERVICE.dispatch("unrecognized_drone", **ctx)
 
 
 def start_background_services():

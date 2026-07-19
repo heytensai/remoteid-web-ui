@@ -51,7 +51,7 @@ This file is the user's personal, gitignored configuration. Even if it contains 
 - `timezone` (per-collector) - IANA timezone name (e.g. "America/Denver"). If set, naive timestamps from that collector are converted from this timezone to UTC before storing. (default: None — naive assumed UTC)
 - `position_stale_minutes` - Minutes without ping before collector marker turns gray (hot-reloadable)
 - `server_url` - Public base URL for notification embeds (hot-reloadable)
-- `notifications` - List of notification targets (name, type, events[], webhook_url). Supported types: discord, ntfy, teams. Events: geozone_enter, new_session. If empty, notifications disabled. (hot-reloadable)
+- `notifications` - List of notification targets (name, type, events[], webhook_url). Supported types: discord, ntfy, teams. Events: geozone_enter, geozone_exit, new_session, unrecognized_drone. If empty, notifications disabled. (hot-reloadable)
 
 ## Database Schema Versioning
 

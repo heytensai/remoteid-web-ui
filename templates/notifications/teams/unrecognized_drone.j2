@@ -1,0 +1,43 @@
+{
+  "type": "message",
+  "attachments": [
+    {
+      "contentType": "application/vnd.microsoft.card.adaptive",
+      "contentUrl": null,
+      "content": {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.2",
+        "body": [
+          {
+            "type": "TextBlock",
+            "text": "**Unrecognized Drone Detected**",
+            "weight": "Bolder",
+            "size": "Large",
+            "color": "Attention"
+          },
+          {
+            "type": "TextBlock",
+            "text": "**{{ name }}** ({{ uas_id }}) is not in the aliases list"
+          },
+          {
+            "type": "FactSet",
+            "facts": [
+              {"title": "UAS ID", "value": "{{ uas_id }}"},
+              {"title": "Session", "value": "{{ session_id[:8] }}"}
+              {% if altitude is not none -%}
+              ,{"title": "Altitude", "value": "{{ '%.0f' % (altitude if use_metric else altitude * 3.28084) }}{{ 'm' if use_metric else 'ft' }}"}
+              {% endif -%}
+            ]
+          }{% if server_url %},
+          {
+            "type": "TextBlock",
+            "text": "[Open in Remote ID]({{ server_url }})",
+            "isSubtle": true,
+            "size": "Small"
+          }{% endif %}
+        ]
+      }
+    }
+  ]
+}

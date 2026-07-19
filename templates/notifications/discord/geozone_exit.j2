@@ -1,0 +1,13 @@
+{
+  "embeds": [{
+    "title": "Geozone Exit",
+    "color": 3066993,
+    "description": "{{ name }} left {{ geozone_name }}",
+    "fields": [
+      {"name": "Drone", "value": "{{ name }}", "inline": true},
+      {"name": "Zone", "value": "{{ geozone_name }}", "inline": true}
+    ],
+    "timestamp": "{{ timestamp }}"{% if server_url %},
+    "url": "{{ server_url }}"{% endif %}
+  }]
+}

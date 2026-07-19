@@ -1,0 +1,16 @@
+{
+  "embeds": [{
+    "title": "Unrecognized Drone Detected",
+    "color": 15158332,
+    "description": "**{{ name }}** is not in the aliases list",
+    "fields": [
+      {"name": "UAS ID", "value": "{{ uas_id }}", "inline": true},
+      {"name": "Session", "value": "{{ session_id[:8] }}", "inline": true}
+      {% if altitude is not none -%}
+      ,{"name": "Altitude", "value": "{{ '%.0f' % (altitude if use_metric else altitude * 3.28084) }}{{ 'm' if use_metric else 'ft' }}", "inline": true}
+      {% endif -%}
+    ],
+    "timestamp": "{{ timestamp }}"{% if server_url %},
+    "url": "{{ server_url }}"{% endif %}
+  }]
+}

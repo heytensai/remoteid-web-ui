@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 import yaml
 
-VALID_EVENTS = {"geozone_enter", "new_session"}
+VALID_EVENTS = {"geozone_enter", "geozone_exit", "new_session", "unrecognized_drone"}
 VALID_NOTIFIER_TYPES = {"discord", "ntfy", "teams"}
 
 logger = logging.getLogger(__name__)
@@ -93,7 +93,7 @@ class NotificationTargetConfig:
 
     name: str
     type: str  # "discord", "ntfy", or "teams"
-    events: List[str]  # subset of ["geozone_enter", "new_session"]
+    events: List[str]  # subset of ["geozone_enter", "geozone_exit", "new_session", "unrecognized_drone"]
     enabled: bool = True
     webhook_url: str = ""
     token: str = ""  # ntfy Bearer auth token (mutually exclusive with username/password)
@@ -127,13 +127,15 @@ class AlertsConfig:
 
     stale_timeout: int = 300  # seconds without position before marking as left
     skip_known_drones: bool = False  # skip alerts for drones with aliases
-    new_session_cooldown: int = 300  # seconds before same (uas_id, session_id) can fire again
+    cooldown: dict = None  # per-event cooldowns in seconds
 
     def __init__(self, data: dict = None):
         if data:
             self.stale_timeout = data.get("stale_timeout", 300)
             self.skip_known_drones = data.get("skip_known_drones", False)
-            self.new_session_cooldown = data.get("new_session_cooldown", 300)
+            self.cooldown = data.get("cooldown") or {}
+        else:
+            self.cooldown = {}
 
 
 @dataclass

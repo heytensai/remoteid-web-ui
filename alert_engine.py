@@ -66,7 +66,9 @@ class AlertEngine:
 
     Callbacks (set externally):
       on_new_alert(uas_id, geozone_name)   — drone entered a geozone
+      on_geozone_exit(uas_id, geozone_name) — drone left a geozone
       on_new_session(uas_id, session_id, first_position) — drone started a new flight
+      on_unrecognized_drone(uas_id, session_id, first_position) — unknown drone started a new flight
     """
 
     def __init__(self, database, config):
@@ -77,10 +79,14 @@ class AlertEngine:
         # Session tracking
         self._known_sessions: Dict[str, str] = {}
         self._session_alert_cooldown: Dict[str, float] = {}  # key → monotonic timestamp of last fire
+        self._geozone_alert_cooldown: Dict[str, float] = {}
+        self._unrecognized_drone_cooldown: Dict[str, float] = {}
         self._load_known_sessions()
         # Callbacks
         self.on_new_alert: Optional[Callable] = None
+        self.on_geozone_exit: Optional[Callable] = None
         self.on_new_session: Optional[Callable] = None
+        self.on_unrecognized_drone: Optional[Callable] = None
 
     # --- Config loading ---
 
@@ -129,18 +135,21 @@ class AlertEngine:
             logger.exception("AlertEngine: failed to sync sessions")
 
     def _prune_cooldowns(self):
-        """Remove cooldown entries older than 2× the cooldown period.
+        """Remove cooldown entries older than 2× the longest cooldown period.
 
-        Prevents unbounded memory growth from stale keys that will never
-        match again (session IDs that changed long ago).
+        Prevents unbounded memory growth from stale keys.
         """
         now = time.monotonic()
-        cutoff = now - (self._config.alerts.new_session_cooldown * 2)
-        stale = [k for k, t in self._session_alert_cooldown.items() if t < cutoff]
-        for k in stale:
-            del self._session_alert_cooldown[k]
-        if stale:
-            logger.debug("Pruned %d stale session alert cooldown entries", len(stale))
+        cooldowns = self._config.alerts.cooldown
+        max_cd = max(cooldowns.values()) if cooldowns else 300
+        cutoff = now - (max_cd * 2)
+        for store in (self._session_alert_cooldown, self._geozone_alert_cooldown,
+                      self._unrecognized_drone_cooldown):
+            stale = [k for k, t in store.items() if t < cutoff]
+            for k in stale:
+                del store[k]
+            if stale:
+                logger.debug("Pruned %d stale cooldown entries", len(stale))
 
     # --- Public entry point ---
 
@@ -173,7 +182,7 @@ class AlertEngine:
         if self._known_sessions.get(uas_id) == session_id:
             return
         now = time.monotonic()
-        cooldown = self._config.alerts.new_session_cooldown
+        cooldown = self._config.alerts.cooldown.get("new_session", 300)
         last_fired = self._session_alert_cooldown.get(uas_id)
         if last_fired is not None and (now - last_fired) < cooldown:
             logger.debug(
@@ -188,6 +197,18 @@ class AlertEngine:
             "New session for %s: %s", uas_id, session_id,
         )
         self._fire(self.on_new_session, uas_id, session_id, first_pos)
+
+        if uas_id not in self._config.drone_aliases:
+            udr_cooldown = self._config.alerts.cooldown.get("unrecognized_drone", 300)
+            last_fired = self._unrecognized_drone_cooldown.get(uas_id)
+            if last_fired is not None and (now - last_fired) < udr_cooldown:
+                logger.debug(
+                    "Skipping unrecognized drone alert for %s (cooldown %ds)",
+                    uas_id, udr_cooldown,
+                )
+            else:
+                self._unrecognized_drone_cooldown[uas_id] = now
+                self._fire(self.on_unrecognized_drone, uas_id, session_id, first_pos)
 
     # --- Geozone evaluation ---
 
@@ -232,7 +253,18 @@ class AlertEngine:
                 "ALERT: %s entered geozone '%s' at %s",
                 uas_id, geozone_name, timestamp.isoformat(),
             )
-            self._fire(self.on_new_alert, uas_id, geozone_name)
+            cooldown_key = f"{uas_id}:{geozone_name}"
+            now = time.monotonic()
+            cooldown = self._config.alerts.cooldown.get("geozone_enter", 300)
+            last_fired = self._geozone_alert_cooldown.get(cooldown_key)
+            if last_fired is not None and (now - last_fired) < cooldown:
+                logger.debug(
+                    "Skipping geozone_enter alert for %s/%s (cooldown %ds)",
+                    uas_id, geozone_name, cooldown,
+                )
+            else:
+                self._geozone_alert_cooldown[cooldown_key] = now
+                self._fire(self.on_new_alert, uas_id, geozone_name)
 
     def _handle_exit(self, uas_id: str, geozone_name: str, timestamp: datetime):
         """Called when a position is outside a geozone. Exits active event."""
@@ -244,6 +276,18 @@ class AlertEngine:
                 "ALERT: %s left geozone '%s' at %s",
                 uas_id, geozone_name, timestamp.isoformat(),
             )
+            cooldown_key = f"{uas_id}:{geozone_name}"
+            now = time.monotonic()
+            cooldown = self._config.alerts.cooldown.get("geozone_exit", 300)
+            last_fired = self._geozone_alert_cooldown.get(cooldown_key)
+            if last_fired is not None and (now - last_fired) < cooldown:
+                logger.debug(
+                    "Skipping geozone_exit alert for %s/%s (cooldown %ds)",
+                    uas_id, geozone_name, cooldown,
+                )
+            else:
+                self._geozone_alert_cooldown[cooldown_key] = now
+                self._fire(self.on_geozone_exit, uas_id, geozone_name)
 
     # --- Batch processing ---
 
