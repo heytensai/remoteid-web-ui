@@ -959,6 +959,34 @@ class WebDatabase:
         conn.commit()
         return count
 
+    def cleanup_old_sync_log(self, retention_days: int) -> int:
+        """Delete sync_log rows older than *retention_days*.
+
+        Always preserves at least one row per source so that
+        ``_get_last_sync`` never returns NULL for an active source.
+
+        Returns the number of rows deleted.
+        """
+        conn = self._get_conn()
+        cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+        count = conn.execute(
+            """
+            DELETE FROM sync_log
+            WHERE id NOT IN (
+                SELECT id FROM (
+                    SELECT id FROM sync_log
+                    WHERE last_sync >= ?
+                    UNION
+                    SELECT MAX(id) FROM sync_log GROUP BY source
+                )
+            )
+            AND last_sync < ?
+            """,
+            (cutoff, cutoff),
+        ).rowcount
+        conn.commit()
+        return count
+
     def get_all_sources(self) -> List[Dict]:
         """Get all unique data sources from sync_log and remoteid tables.
 

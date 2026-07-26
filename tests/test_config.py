@@ -837,6 +837,8 @@ def test_maintenance_config_defaults():
     assert mc.delete_expired_tokens is True
     assert mc.delete_expired_login_tokens is True
     assert mc.delete_orphaned_ephemeral_users is True
+    assert mc.cleanup_sync_log is True
+    assert mc.sync_log_retention_days == 7
 
 
 def test_maintenance_config_with_data():
@@ -847,12 +849,16 @@ def test_maintenance_config_with_data():
         "delete_expired_tokens": False,
         "delete_expired_login_tokens": True,
         "delete_orphaned_ephemeral_users": False,
+        "cleanup_sync_log": False,
+        "sync_log_retention_days": 14,
     })
     assert mc.enabled is True
     assert mc.interval == 7200
     assert mc.delete_expired_tokens is False
     assert mc.delete_expired_login_tokens is True
     assert mc.delete_orphaned_ephemeral_users is False
+    assert mc.cleanup_sync_log is False
+    assert mc.sync_log_retention_days == 14
 
 
 def test_maintenance_config_from_yaml():
@@ -877,6 +883,8 @@ def test_maintenance_config_from_yaml():
         assert cfg.maintenance.delete_expired_tokens is True  # default
         assert cfg.maintenance.delete_expired_login_tokens is False
         assert cfg.maintenance.delete_orphaned_ephemeral_users is True  # default
+        assert cfg.maintenance.cleanup_sync_log is True  # default
+        assert cfg.maintenance.sync_log_retention_days == 7  # default
     finally:
         os.unlink(path)
 

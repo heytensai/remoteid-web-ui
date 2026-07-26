@@ -148,7 +148,8 @@ class AlertsConfig:
 class MaintenanceConfig:
     """Background maintenance task configuration.
 
-    Runs periodic cleanup of stale auth data (expired tokens, orphaned users).
+    Runs periodic cleanup of stale auth data (expired tokens, orphaned users)
+    and sync_log history.
     """
 
     enabled: bool = False
@@ -156,6 +157,8 @@ class MaintenanceConfig:
     delete_expired_tokens: bool = True
     delete_expired_login_tokens: bool = True
     delete_orphaned_ephemeral_users: bool = True
+    cleanup_sync_log: bool = True
+    sync_log_retention_days: int = 7
 
     def __init__(self, data: dict = None):
         if data:
@@ -164,6 +167,8 @@ class MaintenanceConfig:
             self.delete_expired_tokens = data.get("delete_expired_tokens", True)
             self.delete_expired_login_tokens = data.get("delete_expired_login_tokens", True)
             self.delete_orphaned_ephemeral_users = data.get("delete_orphaned_ephemeral_users", True)
+            self.cleanup_sync_log = data.get("cleanup_sync_log", True)
+            self.sync_log_retention_days = data.get("sync_log_retention_days", 7)
 
 
 @dataclass

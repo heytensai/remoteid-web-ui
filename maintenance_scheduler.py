@@ -72,6 +72,11 @@ class MaintenanceScheduler:
                         count = self._database.cleanup_orphaned_ephemeral_users()
                         if count:
                             logger.info("Cleaned up %d orphaned ephemeral user(s)", count)
+
+                    if maint.cleanup_sync_log:
+                        count = self._database.cleanup_old_sync_log(maint.sync_log_retention_days)
+                        if count:
+                            logger.info("Cleaned up %d old sync_log record(s)", count)
                 except sqlite3.Error:
                     logger.exception("Maintenance cycle failed")
             else:

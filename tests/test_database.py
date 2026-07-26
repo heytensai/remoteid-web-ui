@@ -953,3 +953,69 @@ def test_cleanup_orphaned_ephemeral_no_tokens(tmp_path):
     cursor = conn.execute("SELECT id FROM users WHERE id = ?", (uid,))
     assert cursor.fetchone() is None
     conn.close()
+
+
+def test_cleanup_old_sync_log(tmp_path):
+    """cleanup_old_sync_log removes old rows but keeps at least 1 per source."""
+    import sqlite3
+    db_path = tmp_path / "test_cleanup_synclog.db"
+    db = WebDatabase(str(db_path))
+
+    now = datetime.now(timezone.utc)
+    conn = sqlite3.connect(str(db_path))
+
+    # Source A: 1 old row + 1 recent row
+    conn.execute(
+        "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (?, ?, ?)",
+        ("A", now - timedelta(days=10), 100),
+    )
+    conn.execute(
+        "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (?, ?, ?)",
+        ("A", now - timedelta(hours=1), 200),
+    )
+    # Source B: only 1 old row (must be preserved)
+    conn.execute(
+        "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (?, ?, ?)",
+        ("B", now - timedelta(days=20), 50),
+    )
+    # Source C: all recent rows
+    conn.execute(
+        "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (?, ?, ?)",
+        ("C", now - timedelta(hours=2), 75),
+    )
+    conn.commit()
+    conn.close()
+
+    deleted = db.cleanup_old_sync_log(retention_days=7)
+    assert deleted == 1  # only source A's old row
+
+    conn = sqlite3.connect(str(db_path))
+    rows = conn.execute("SELECT source, records_imported FROM sync_log ORDER BY source").fetchall()
+    conn.close()
+
+    # Source A: kept recent row, source B: kept only row, source C: kept all
+    assert len(rows) == 3
+    assert ("A", 200) in rows
+    assert ("B", 50) in rows
+    assert ("C", 75) in rows
+
+
+def test_cleanup_old_sync_log_none(tmp_path):
+    """cleanup_old_sync_log returns 0 when all rows are within retention."""
+    db_path = tmp_path / "test_cleanup_synclog_none.db"
+    db = WebDatabase(str(db_path))
+    now = datetime.now(timezone.utc)
+    import sqlite3
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (?, ?, ?)",
+        ("X", now - timedelta(hours=1), 10),
+    )
+    conn.commit()
+    conn.close()
+
+    assert db.cleanup_old_sync_log(retention_days=7) == 0
+
+    conn = sqlite3.connect(str(db_path))
+    assert conn.execute("SELECT COUNT(*) FROM sync_log").fetchone()[0] == 1
+    conn.close()

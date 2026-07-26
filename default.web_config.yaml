@@ -221,6 +221,11 @@ web_interface:
     delete_expired_login_tokens: true
     # Delete ephemeral (guest) users whose session tokens have all expired (hot-reloadable)
     delete_orphaned_ephemeral_users: true
+    # Delete old sync_log records to prevent unbounded table growth (hot-reloadable)
+    cleanup_sync_log: true
+    # Days to keep sync_log records — at least 1 row per source is always
+    # preserved so the sync watermark never goes NULL (hot-reloadable)
+    sync_log_retention_days: 7
 
   # Minutes after which a collector's marker turns gray on the map
   # when it hasn't pinged via /api/submit/ping. (hot-reloadable)
