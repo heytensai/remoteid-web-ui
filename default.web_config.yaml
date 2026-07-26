@@ -53,6 +53,7 @@ web_interface:
     # Known codes (use the first 4–5 characters including length code for precision):
     "1581F": "DJI"
     "1588E": "Parrot"
+    "1668B": "Skydio"
     "17444": "Wingtra"
     "1748C": "Autel"
     "1596": "Dronetag"
