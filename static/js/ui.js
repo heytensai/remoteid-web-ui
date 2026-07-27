@@ -12,7 +12,7 @@ const UIController = {
     isLoading: false,
     defaultHours: 24,
     droneMap: {},
-    loadedTracks: new Set(),
+    loadedTracks: new Map(),
     replayActive: false,
     replayPlaying: false,
     replaySpeed: 4,
@@ -1502,13 +1502,13 @@ const UIController = {
             // Get current session keys from filtered data
             const currentSessionKeys = new Set(drones.map(d => `${d.uas_id}:${d.computed_session_id || 'unknown'}`));
             // Remove tracks for sessions no longer in the data
-            for (const sessionKey of this.loadedTracks) {
+            for (const sessionKey of this.loadedTracks.keys()) {
                 if (!currentSessionKeys.has(sessionKey)) {
                     const [uasId] = sessionKey.split(':');
                     MapController.removeTrack(uasId, sessionKey);
                 }
             }
-            this.loadedTracks = new Set([...this.loadedTracks].filter(k => currentSessionKeys.has(k)));
+            this.loadedTracks = new Map([...this.loadedTracks].filter(([k]) => currentSessionKeys.has(k)));
             this.visibleSessions = new Set([...this.visibleSessions].filter(k => currentSessionKeys.has(k)));
             this.dismissedSessionKeys = new Set([...this.dismissedSessionKeys].filter(k => currentSessionKeys.has(k)));
 
@@ -1938,18 +1938,27 @@ const UIController = {
      */
     _batchLoadTracks(drones) {
         const pending = [];
+        const refreshPending = [];
         for (const drone of drones) {
             const sessionKey = `${drone.uas_id}:${drone.computed_session_id || 'unknown'}`;
             const sessionId = drone.computed_session_id;
-            if (sessionId && this.visibleSessions.has(sessionKey) && !this.loadedTracks.has(sessionKey)) {
-                this.loadedTracks.add(sessionKey);
+            if (!sessionId || !this.visibleSessions.has(sessionKey)) continue;
+
+            const lastLoaded = this.loadedTracks.get(sessionKey);
+            if (lastLoaded === undefined) {
+                this.loadedTracks.set(sessionKey, drone.timestamp);
                 pending.push({ uas_id: drone.uas_id, session_id: sessionId });
+            } else if (drone.timestamp && drone.timestamp > lastLoaded) {
+                MapController.removeTrack(drone.uas_id, sessionKey);
+                this.loadedTracks.set(sessionKey, drone.timestamp);
+                refreshPending.push({ uas_id: drone.uas_id, session_id: sessionId });
             }
         }
-        if (pending.length > 0) {
-            MapController.loadTracksBatch(pending).then(loaded => {
+        const allPending = [...pending, ...refreshPending];
+        if (allPending.length > 0) {
+            MapController.loadTracksBatch(allPending).then(loaded => {
                 const loadedSet = new Set(loaded);
-                pending.forEach(s => {
+                allPending.forEach(s => {
                     const key = `${s.uas_id}:${s.session_id}`;
                     if (!loadedSet.has(key)) this.loadedTracks.delete(key);
                 });
@@ -1983,7 +1992,8 @@ const UIController = {
                             const uasId = droneItem.dataset.uasId;
                             const sessionId = droneItem.dataset.sessionId;
                             if (sessionId) {
-                                this.loadedTracks.add(sessionKey);
+                                const droneData = this.droneMap[sessionKey];
+                                this.loadedTracks.set(sessionKey, droneData ? droneData.timestamp : Infinity);
                                 MapController.loadTrackSession(uasId, sessionId, this.currentStartTime, this.currentEndTime)
                                     .then(success => { if (!success) this.loadedTracks.delete(sessionKey); this._updateReplayButtonState(); });
                             }
@@ -2048,7 +2058,8 @@ const UIController = {
                     droneItem.classList.remove('dimmed');
                     if (!this.loadedTracks.has(sessionKey)) {
                         if (sessionId) {
-                            this.loadedTracks.add(sessionKey);
+                            const droneData = this.droneMap[sessionKey];
+                            this.loadedTracks.set(sessionKey, droneData ? droneData.timestamp : Infinity);
                             MapController.loadTrackSession(uasId, sessionId, this.currentStartTime, this.currentEndTime)
                                 .then(success => { if (!success) this.loadedTracks.delete(sessionKey); this._updateReplayButtonState(); });
                         }
@@ -2127,7 +2138,8 @@ const UIController = {
                 MapController.panToDrone(uasId);
 
                 if (sessionId && !this.loadedTracks.has(sessionKey)) {
-                    this.loadedTracks.add(sessionKey);
+                    const droneData = this.droneMap[sessionKey];
+                    this.loadedTracks.set(sessionKey, droneData ? droneData.timestamp : Infinity);
                     MapController.loadTrackSession(uasId, sessionId, this.currentStartTime, this.currentEndTime)
                         .then(success => { if (!success) this.loadedTracks.delete(sessionKey); this._updateReplayButtonState(); });
                 }
@@ -2185,7 +2197,7 @@ const UIController = {
 
         // Clear archive drones so the list doesn't linger
         this.droneMap = {};
-        this.loadedTracks = new Set();
+        this.loadedTracks = new Map();
         this.visibleSessions = new Set();
         this.dismissedSessionKeys = new Set();
         MapController.dronePositions = {};
