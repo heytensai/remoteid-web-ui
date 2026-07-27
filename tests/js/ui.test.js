@@ -180,4 +180,84 @@ describe('UIController', () => {
       expect(dateCb.indeterminate).toBe(true);
     });
   });
+
+  describe('_switchToLive / _switchToArchive', () => {
+    beforeEach(() => {
+      UIController._dataMode = 'live';
+      UIController.droneTimestamps = {};
+      UIController.elements = {
+        liveBtn: document.createElement('button'),
+        liveBtnM: document.createElement('button'),
+        headerTimeControls: document.createElement('div'),
+        settingsTimeControls: document.createElement('div'),
+        droneList: document.createElement('div'),
+      };
+      UIController.elements.headerTimeControls.classList.add('disabled');
+      UIController.elements.settingsTimeControls.classList.add('disabled');
+      // Mock refreshData to avoid network calls
+      UIController.refreshData = jest.fn();
+      UIController._clearActivePreset = jest.fn();
+      UIController._clearStoredPreset = jest.fn();
+      UIController._setStoredPreset = jest.fn();
+      UIController._setTimeRange = jest.fn();
+      UIController._switchView = jest.fn();
+    });
+
+    test('_switchToLive sets mode and adds active class', () => {
+      UIController._dataMode = 'archive';
+      UIController.droneTimestamps = { 'd1:s1': '2024-01-01T12:00:00Z' };
+      UIController._switchToLive();
+      expect(UIController._dataMode).toBe('live');
+      expect(UIController.droneTimestamps).toEqual({});
+      expect(UIController.elements.liveBtn.classList.contains('active')).toBe(true);
+      expect(UIController.elements.liveBtnM.classList.contains('active')).toBe(true);
+      expect(UIController.elements.headerTimeControls.classList.contains('disabled')).toBe(true);
+      expect(UIController.elements.settingsTimeControls.classList.contains('disabled')).toBe(true);
+      expect(UIController.refreshData).toHaveBeenCalled();
+    });
+
+    test('_switchToLive toggles to archive when already live', () => {
+      UIController._dataMode = 'live';
+      UIController.refreshData.mockClear();
+      UIController._switchToLive();
+      expect(UIController._dataMode).toBe('archive');
+      expect(UIController.refreshData).toHaveBeenCalled();
+    });
+
+    test('_switchToArchive sets mode and removes active class', () => {
+      UIController.droneTimestamps = { 'd1:s1': '2024-01-01T12:00:00Z' };
+      UIController._switchToArchive(24);
+      expect(UIController._dataMode).toBe('archive');
+      expect(UIController.droneTimestamps).toEqual({});
+      expect(UIController.elements.liveBtn.classList.contains('active')).toBe(false);
+      expect(UIController.elements.liveBtnM.classList.contains('active')).toBe(false);
+      expect(UIController.elements.headerTimeControls.classList.contains('disabled')).toBe(false);
+      expect(UIController.elements.settingsTimeControls.classList.contains('disabled')).toBe(false);
+      expect(UIController._setStoredPreset).toHaveBeenCalledWith(24);
+      expect(UIController._setTimeRange).toHaveBeenCalledWith(24);
+      expect(UIController.refreshData).toHaveBeenCalled();
+    });
+
+    test('_switchToArchive without preset does not set time range', () => {
+      UIController._dataMode = 'live';
+      UIController.droneTimestamps = { 'd1:s1': '2024-01-01T12:00:00Z' };
+      UIController._switchToArchive();
+      expect(UIController._dataMode).toBe('archive');
+      expect(UIController.droneTimestamps).toEqual({});
+      expect(UIController._setTimeRange).not.toHaveBeenCalled();
+      expect(UIController.refreshData).toHaveBeenCalled();
+    });
+
+    test('live -> archive -> live round trip resets correctly', () => {
+      UIController._switchToArchive(24);
+      expect(UIController._dataMode).toBe('archive');
+      expect(UIController.elements.liveBtn.classList.contains('active')).toBe(false);
+
+      UIController._switchToLive();
+      expect(UIController._dataMode).toBe('live');
+      expect(UIController.elements.liveBtn.classList.contains('active')).toBe(true);
+      expect(UIController.elements.headerTimeControls.classList.contains('disabled')).toBe(true);
+      expect(UIController.refreshData).toHaveBeenCalledTimes(2);
+    });
+  });
 });

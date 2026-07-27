@@ -45,6 +45,9 @@
                     <button id="refreshBtn" class="refresh-btn" title="Refresh">
                         <i class="fas fa-sync-alt"></i>
                     </button>
+                    <button id="liveBtn" class="live-btn active" title="Live view — show active flights" aria-pressed="true">
+                        <i class="fas fa-satellite-dish"></i> Live
+                    </button>
                     <div class="header-time-controls">
                         <div class="header-time-inputs">
                             <input type="text" id="startTime" class="flatpickr" placeholder="Start time">
@@ -166,6 +169,11 @@
                 <div class="settings-panel-body">
                     <div class="settings-section mobile-only">
                         <h4 class="settings-section-title">Time Range</h4>
+                        <div class="settings-live-toggle">
+                            <button id="liveBtnM" class="live-btn active" title="Live view" aria-pressed="true">
+                                <i class="fas fa-satellite-dish"></i> Live
+                            </button>
+                        </div>
                         <div class="settings-time-controls">
                             <div class="settings-time-inputs">
                                 <input type="text" id="startTimeM" class="flatpickr" placeholder="Start time">

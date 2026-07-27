@@ -45,7 +45,7 @@ self.addEventListener('fetch', (event) => {
 
   // Bypass SW for API and config endpoints
   if (NEVER_CACHE.some((p) => url.pathname.includes(p))) {
-    event.respondWith(fetch(event.request));
+    event.respondWith(fetch(event.request, { cache: 'no-store' }));
     return;
   }
 

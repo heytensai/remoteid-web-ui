@@ -570,21 +570,35 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
             )
             changed = True
 
-        if (new_config.maintenance.enabled != self.maintenance.enabled
-                or new_config.maintenance.interval != self.maintenance.interval
-                or new_config.maintenance.delete_expired_tokens != self.maintenance.delete_expired_tokens
-                or new_config.maintenance.delete_expired_login_tokens != self.maintenance.delete_expired_login_tokens
-                or new_config.maintenance.delete_orphaned_ephemeral_users
-                != self.maintenance.delete_orphaned_ephemeral_users):
+        old_m = self.maintenance
+        new_m = new_config.maintenance
+        if (new_m.enabled != old_m.enabled
+                or new_m.interval != old_m.interval
+                or new_m.delete_expired_tokens != old_m.delete_expired_tokens
+                or new_m.delete_expired_login_tokens
+                != old_m.delete_expired_login_tokens
+                or new_m.delete_orphaned_ephemeral_users
+                != old_m.delete_orphaned_ephemeral_users):
             logger.info(
                 "Reloaded maintenance from %s (enabled=%s, interval=%s, "
                 "delete_expired_tokens=%s, delete_expired_login_tokens=%s, "
                 "delete_orphaned_ephemeral_users=%s)",
-                self.config_path, new_config.maintenance.enabled,
-                new_config.maintenance.interval,
-                new_config.maintenance.delete_expired_tokens,
-                new_config.maintenance.delete_expired_login_tokens,
-                new_config.maintenance.delete_orphaned_ephemeral_users,
+                self.config_path, new_m.enabled,
+                new_m.interval,
+                new_m.delete_expired_tokens,
+                new_m.delete_expired_login_tokens,
+                new_m.delete_orphaned_ephemeral_users,
+            )
+            changed = True
+
+        if (new_m.cleanup_sync_log != old_m.cleanup_sync_log
+                or new_m.sync_log_retention_days
+                != old_m.sync_log_retention_days):
+            logger.info(
+                "Reloaded maintenance sync_log from %s "
+                "(cleanup_sync_log=%s, sync_log_retention_days=%s)",
+                self.config_path, new_m.cleanup_sync_log,
+                new_m.sync_log_retention_days,
             )
             changed = True
 

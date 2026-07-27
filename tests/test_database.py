@@ -48,6 +48,31 @@ def test_schema_version_upgrade(tmp_path):
     assert version == SCHEMA_VERSION
 
 
+def test_migration_6_to_7_adds_sync_log_index(tmp_path):
+    """Migration from schema 6 creates idx_sync_log_source."""
+    import sqlite3
+    db_path = tmp_path / "test_migrate_6.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE _schema_version (version INTEGER NOT NULL)")
+    conn.execute("INSERT INTO _schema_version (version) VALUES (6)")
+    conn.execute(
+        "CREATE TABLE sync_log("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "source TEXT, last_sync DATETIME, records_imported INTEGER)"
+    )
+    conn.commit()
+    conn.close()
+
+    WebDatabase(str(db_path))
+
+    conn = sqlite3.connect(str(db_path))
+    index_names = [row[1] for row in conn.execute(
+        "PRAGMA index_list(sync_log)"
+    ).fetchall()]
+    conn.close()
+    assert "idx_sync_log_source" in index_names
+
+
 def test_validate_record_valid():
     now = datetime.now(timezone.utc)
     row = (1, now, "aa:bb:cc:dd:ee:ff", "uas-001", None, 37.7749, -122.4194, 100.0, None, None, None)
@@ -1019,3 +1044,69 @@ def test_cleanup_old_sync_log_none(tmp_path):
     conn = sqlite3.connect(str(db_path))
     assert conn.execute("SELECT COUNT(*) FROM sync_log").fetchone()[0] == 1
     conn.close()
+
+
+def test_get_live_drones(tmp_path):
+    """get_live_drones returns sessions with recent positions only."""
+    import sqlite3
+    db_path = tmp_path / "test_live_drones.db"
+    db = WebDatabase(str(db_path))
+    now = datetime.now(timezone.utc)
+    conn = sqlite3.connect(str(db_path))
+
+    # Recent position (1 minute ago) — should be returned
+    conn.execute(
+        """INSERT INTO latest_positions
+           (uas_id, computed_session_id, max_ts, min_ts, latitude, longitude,
+            altitude, height, height_type, max_height, source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("drone-recent", "session_1",
+         (now - timedelta(minutes=1)).isoformat(),
+         (now - timedelta(minutes=5)).isoformat(),
+         37.7, -122.4, 100, 50, "agl", 80, "test"),
+    )
+    # Old position (2 hours ago) — should NOT be returned
+    conn.execute(
+        """INSERT INTO latest_positions
+           (uas_id, computed_session_id, max_ts, min_ts, latitude, longitude,
+            altitude, height, height_type, max_height, source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("drone-old", "session_2",
+         (now - timedelta(hours=2)).isoformat(),
+         (now - timedelta(hours=3)).isoformat(),
+         38.0, -122.0, 200, 100, "agl", 150, "test"),
+    )
+    conn.commit()
+    conn.close()
+
+    # With 30-minute stale window, only the recent drone is live
+    result = db.get_live_drones(stale_minutes=30)
+    uas_ids = [r["uas_id"] for r in result]
+    assert "drone-recent" in uas_ids
+    assert "drone-old" not in uas_ids
+
+
+def test_get_live_drones_empty(tmp_path):
+    """get_live_drones returns empty list when no recent data exists."""
+    import sqlite3
+    db_path = tmp_path / "test_live_empty.db"
+    db = WebDatabase(str(db_path))
+    now = datetime.now(timezone.utc)
+    conn = sqlite3.connect(str(db_path))
+
+    # Only old data (6 hours ago)
+    conn.execute(
+        """INSERT INTO latest_positions
+           (uas_id, computed_session_id, max_ts, min_ts, latitude, longitude,
+            altitude, height, height_type, max_height, source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("drone-stale", "session_1",
+         (now - timedelta(hours=6)).isoformat(),
+         (now - timedelta(hours=7)).isoformat(),
+         37.7, -122.4, 100, 50, "agl", 80, "test"),
+    )
+    conn.commit()
+    conn.close()
+
+    result = db.get_live_drones(stale_minutes=30)
+    assert result == []

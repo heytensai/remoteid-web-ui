@@ -548,6 +548,41 @@ html, body {
     font-size: 0.9rem;
 }
 
+.live-btn {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: white;
+    cursor: pointer;
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.2s;
+}
+
+.live-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.live-btn.active {
+    background: #28a745;
+    border-color: #28a745;
+    color: white;
+}
+
+.live-btn i {
+    font-size: 0.85rem;
+}
+
+.header-time-controls.disabled,
+.settings-time-controls.disabled {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
 .header-time-controls {
     display: flex;
     align-items: center;
@@ -1468,6 +1503,15 @@ body.dark-mode .replay-time-display {
     cursor: pointer;
 }
 
+.settings-live-toggle {
+    margin-bottom: 8px;
+}
+
+.settings-live-toggle .live-btn {
+    width: 100%;
+    justify-content: center;
+}
+
 .settings-time-controls {
     display: flex;
     flex-direction: column;
@@ -1915,6 +1959,22 @@ body.dark-mode .refresh-btn:hover {
     background: rgba(255, 255, 255, 0.15);
 }
 
+body.dark-mode .live-btn {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.15);
+    color: #e0e0e0;
+}
+
+body.dark-mode .live-btn:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+body.dark-mode .live-btn.active {
+    background: #1e7e34;
+    border-color: #1e7e34;
+    color: white;
+}
+
 body.dark-mode .header-time-inputs input {
     background: #2a2a4a;
     border-color: #3a3a5a;
@@ -1936,6 +1996,31 @@ body.dark-mode .header-time-presets button:hover {
 }
 
 body.dark-mode .header-time-presets button.active {
+    background: #4a6fa5;
+    border-color: #4a6fa5;
+}
+
+body.dark-mode .settings-time-inputs input {
+    background: #2a2a4a;
+    border-color: #3a3a5a;
+    color: #e0e0e0;
+}
+
+body.dark-mode .settings-time-inputs input:focus {
+    border-color: #4a6fa5;
+}
+
+body.dark-mode .settings-time-presets button {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.15);
+    color: #e0e0e0;
+}
+
+body.dark-mode .settings-time-presets button:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+body.dark-mode .settings-time-presets button.active {
     background: #4a6fa5;
     border-color: #4a6fa5;
 }

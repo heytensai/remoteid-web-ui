@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger(__name__)
 
 # Current schema version — bump this and add a migration in _migrate()
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def _adapt_datetime(dt: datetime) -> str:
@@ -40,7 +40,19 @@ class WebDatabase:
         """Initialize the web database, creating schema if needed."""
         self.db_path = Path(db_path)
         self._tlocal = threading.local()
+        self._write_lock = threading.Lock()
         self._init_db()
+
+    def _commit(self, conn):
+        """Commit a transaction while holding the write lock.
+
+        Serializing all commits prevents ``database is locked`` errors
+        when multiple threads (gunicorn workers, maintenance scheduler,
+        session detector) write concurrently.  WAL mode still allows
+        concurrent *reads* outside the lock.
+        """
+        with self._write_lock:
+            conn.commit()
 
     def _init_db(self):
         """Initialize the database schema"""
@@ -231,7 +243,7 @@ class WebDatabase:
         "ON latest_positions(max_ts)"
         )
 
-        conn.commit()
+        self._commit(conn)
         self._ensure_schema_version(conn)
         self._ensure_latest_positions_backfilled(conn)
         logger.debug("Database initialized at %s", self.db_path)
@@ -252,7 +264,7 @@ class WebDatabase:
                 "INSERT INTO _schema_version (version) VALUES (?)",
                 (SCHEMA_VERSION,),
             )
-            conn.commit()
+            self._commit(conn)
 
     @staticmethod
     def _migrate(  # pylint: disable=unused-argument
@@ -335,6 +347,13 @@ class WebDatabase:
             WebDatabase._backfill_latest_positions(conn)
             from_version = 6
 
+        if from_version == 6:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sync_log_source "
+                "ON sync_log(source, last_sync)"
+            )
+            from_version = 7
+
     @staticmethod
     def _ensure_latest_positions_table(conn: sqlite3.Connection):
         """Create the latest_positions table and index (idempotent)."""
@@ -379,7 +398,7 @@ class WebDatabase:
             remoteid_count,
         )
         WebDatabase._backfill_latest_positions(conn)
-        conn.commit()
+        self._commit(conn)
 
     @staticmethod
     def _backfill_latest_positions(conn: sqlite3.Connection):
@@ -466,7 +485,7 @@ class WebDatabase:
         else:
             conn.execute("DELETE FROM latest_positions")
             self._backfill_latest_positions(conn)
-        conn.commit()
+        self._commit(conn)
 
     def _get_conn(self) -> sqlite3.Connection:
         """Get a thread-local database connection, creating one if needed.
@@ -717,7 +736,7 @@ class WebDatabase:
                         # Update session tracking for this batch
                         uas_sessions[uas_id] = (timestamp, computed_session_id)
 
-                dest_conn.commit()
+                self._commit(dest_conn)
 
             # Update materialized latest_positions for affected UAS IDs
             if count > 0:
@@ -885,7 +904,7 @@ class WebDatabase:
             "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (?, ?, ?)",
             (source_name, datetime.now(timezone.utc), count),
         )
-        conn.commit()
+        self._commit(conn)
 
     def log_submission(self, source_name: str, records_count: int):
         """Log an HTTP data submission to the sync log"""
@@ -894,7 +913,7 @@ class WebDatabase:
             "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (?, ?, ?)",
             (source_name, datetime.now(timezone.utc), records_count),
         )
-        conn.commit()
+        self._commit(conn)
 
     def cleanup_expired_auth_tokens(self) -> int:
         """Delete session tokens whose expiry has passed.
@@ -906,7 +925,7 @@ class WebDatabase:
             "DELETE FROM auth_tokens WHERE expires_at < ?",
             (datetime.now(timezone.utc),),
         ).rowcount
-        conn.commit()
+        self._commit(conn)
         return count
 
     def cleanup_expired_login_tokens(self) -> int:
@@ -925,7 +944,7 @@ class WebDatabase:
         ).rowcount
         # Also clean up dangling auth_tokens for the deleted users
         # (SQLite ON DELETE CASCADE is not set, so we do it manually)
-        conn.commit()
+        self._commit(conn)
         return count
 
     def cleanup_orphaned_ephemeral_users(self) -> int:
@@ -956,7 +975,7 @@ class WebDatabase:
         conn.execute(
             "DELETE FROM auth_tokens WHERE user_id NOT IN (SELECT id FROM users)"
         )
-        conn.commit()
+        self._commit(conn)
         return count
 
     def cleanup_old_sync_log(self, retention_days: int) -> int:
@@ -984,7 +1003,7 @@ class WebDatabase:
             """,
             (cutoff, cutoff),
         ).rowcount
-        conn.commit()
+        self._commit(conn)
         return count
 
     def get_all_sources(self) -> List[Dict]:
@@ -1076,6 +1095,35 @@ class WebDatabase:
             ORDER BY uas_id, computed_session_id
         """,
             (start_time, end_time),
+        )
+        return [self._sanitize_record(dict(row)) for row in cursor.fetchall()]
+
+    def get_live_drones(self, stale_minutes: int) -> List[Dict]:
+        """Return all sessions with a position newer than *stale_minutes*.
+
+        Used by Live mode — no time window, purely staleness-based.
+        Uses a Python-side cutoff to avoid SQLite ISO-format string comparison
+        mismatches (``T`` vs space separator).
+        """
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)
+        cursor = conn.execute(
+            """
+            SELECT
+                uas_id,
+                NULLIF(computed_session_id, '') as computed_session_id,
+                max_ts as timestamp,
+                min_ts as session_start,
+                latitude, longitude, altitude, height, height_type, max_height,
+                operator_id,
+                operator_latitude, operator_longitude, source,
+                collector_latitude, collector_longitude
+            FROM latest_positions
+            WHERE max_ts > ?
+            ORDER BY uas_id, computed_session_id
+        """,
+            (cutoff,),
         )
         return [self._sanitize_record(dict(row)) for row in cursor.fetchall()]
 
@@ -1546,7 +1594,7 @@ class WebDatabase:
             """,
             rows,
         )
-        conn.commit()
+        self._commit(conn)
 
         after = conn.execute("SELECT COUNT(*) FROM remoteid").fetchone()[0]
         inserted = after - before
@@ -1741,7 +1789,7 @@ class WebDatabase:
             """,
             (uas_id, geozone_name, timestamp, timestamp),
         )
-        conn.commit()
+        self._commit(conn)
         return cursor.lastrowid
 
     def update_geozone_last_seen(self, event_id: int, timestamp: datetime):
@@ -1751,7 +1799,7 @@ class WebDatabase:
             "UPDATE geozone_events SET last_seen_at = ? WHERE id = ?",
             (timestamp, event_id),
         )
-        conn.commit()
+        self._commit(conn)
 
     def exit_geozone(self, event_id: int, timestamp: datetime, reason: str = "left"):
         """Mark a geozone event as exited."""
@@ -1760,7 +1808,7 @@ class WebDatabase:
             "UPDATE geozone_events SET exited_at = ?, exited_reason = ? WHERE id = ?",
             (timestamp, reason, event_id),
         )
-        conn.commit()
+        self._commit(conn)
 
     def get_geozone_event_history(
         self,
@@ -1835,7 +1883,7 @@ class WebDatabase:
             """,
             (reference_time - timedelta(seconds=stale_timeout),),
         )
-        conn.commit()
+        self._commit(conn)
         return cursor.rowcount
 
     def get_live_positions(self, since: datetime) -> List[Dict]:
@@ -1872,7 +1920,7 @@ class WebDatabase:
             """,
             (name, lat, lon),
         )
-        conn.commit()
+        self._commit(conn)
 
     def get_collector_positions(self) -> List[Dict]:
         """Get all current collector positions"""
@@ -1903,7 +1951,7 @@ class WebDatabase:
             """,
             (name, email, role_name, token_hash, login_token_expires_at),
         )
-        conn.commit()
+        self._commit(conn)
         conn.row_factory = sqlite3.Row
         cursor = conn.execute("SELECT * FROM users WHERE login_token_hash = ?", (token_hash,))
         return dict(cursor.fetchone())
@@ -1928,7 +1976,7 @@ class WebDatabase:
             "INSERT INTO auth_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)",
             (user_id, token_hash, expires_at),
         )
-        conn.commit()
+        self._commit(conn)
         return session_token, user_id
 
     def exchange_login_token(self, login_token: str) -> Optional[Tuple[str, dict]]:
@@ -1962,7 +2010,7 @@ class WebDatabase:
             "INSERT INTO auth_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)",
             (user["id"], session_hash, expires_at),
         )
-        conn.commit()
+        self._commit(conn)
 
         return session_token, dict(user)
 
@@ -1988,13 +2036,13 @@ class WebDatabase:
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         conn = self._get_conn()
         conn.execute("DELETE FROM auth_tokens WHERE token_hash = ?", (token_hash,))
-        conn.commit()
+        self._commit(conn)
 
     def revoke_all_user_tokens(self, user_id: int):
         """Revoke all auth tokens for a given user."""
         conn = self._get_conn()
         conn.execute("DELETE FROM auth_tokens WHERE user_id = ?", (user_id,))
-        conn.commit()
+        self._commit(conn)
 
     def upgrade_ephemeral_user(self, ephemeral_user_id: int, target_user_id: int) -> bool:
         """Merge a pre-created user into an ephemeral user record.
@@ -2018,5 +2066,5 @@ class WebDatabase:
         )
         conn.execute("DELETE FROM auth_tokens WHERE user_id = ?", (target_user_id,))
         conn.execute("UPDATE users SET is_active = 0 WHERE id = ?", (target_user_id,))
-        conn.commit()
+        self._commit(conn)
         return True

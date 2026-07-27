@@ -49,6 +49,10 @@ class MaintenanceScheduler:
         self._running = False
         logger.info("Maintenance scheduler thread stopped")
 
+    def reload_config(self, config):
+        """Update the config reference for the next maintenance cycle."""
+        self._config = config
+
     def _run(self):
         self._running = True
         while not self._stop_event.is_set():

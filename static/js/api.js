@@ -103,15 +103,21 @@ const API = {
 
     /**
      * Consolidated refresh: returns drones, alerts, stats, and sources in one call
-     * @param {Date} start - Start time
-     * @param {Date} end - End time
-     * @param {Object} knownTimestamps - Map of "uas_id:session_id" -> last known timestamp ISO string
+     * @param {Date} start - Start time (archive mode only)
+     * @param {Date} end - End time (archive mode only)
+     * @param {Object} knownTimestamps - Map of "uas_id:session_id" -> last known timestamp ISO string (archive mode only)
+     * @param {string} mode - "live" or "archive" (default: "live")
      */
-    async getRefresh(start, end, knownTimestamps) {
+    async getRefresh(start, end, knownTimestamps, mode = 'live') {
         const params = new URLSearchParams();
-        if (start) params.append('start', start.toISOString());
-        if (end) params.append('end', end.toISOString());
-        return this._post(`/api/refresh?${params}`, { known_timestamps: knownTimestamps || {} });
+        if (mode === 'archive') {
+            if (start) params.append('start', start.toISOString());
+            if (end) params.append('end', end.toISOString());
+        }
+        return this._post(`/api/refresh?${params}`, {
+            mode,
+            known_timestamps: mode === 'archive' ? (knownTimestamps || {}) : {}
+        });
     },
 
     /**
@@ -253,6 +259,7 @@ const API = {
             const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
             try {
                 const response = await fetch(this.baseUrl + url, {
+                    cache: 'no-store',
                     headers: this._headers(),
                     signal: controller.signal
                 });
@@ -292,6 +299,7 @@ const API = {
                 }
                 const response = await fetch(this.baseUrl + url, {
                     method: 'POST',
+                    cache: 'no-store',
                     headers,
                     body: JSON.stringify(data),
                     signal: controller.signal
@@ -306,6 +314,7 @@ const API = {
                         headers['X-CSRFToken'] = this.csrfToken;
                         const retryResp = await fetch(this.baseUrl + url, {
                             method: 'POST',
+                            cache: 'no-store',
                             headers,
                             body: JSON.stringify(data),
                             signal: (new AbortController()).signal

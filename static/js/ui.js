@@ -30,6 +30,7 @@ const UIController = {
     alertLogTotal: 0,
     expandedGroups: new Set(),
     viewMode: 'date', // 'date' or 'uas'
+    _dataMode: 'live', // 'live' or 'archive'
     remotes: [],
     remoteDetailOpen: false,
     _suppressTimeChange: false,
@@ -189,6 +190,17 @@ const UIController = {
         // Clear any existing markers before loading data
         MapController.clearAllTracks();
         MapController.clearAllOperators();
+
+        // Start in live mode — disable time controls
+        if (this._dataMode === 'live') {
+            if (this.elements.headerTimeControls) {
+                this.elements.headerTimeControls.classList.add('disabled');
+            }
+            if (this.elements.settingsTimeControls) {
+                this.elements.settingsTimeControls.classList.add('disabled');
+            }
+        }
+
         await this.refreshData(false);
         this._initialized = true;
         this._applyPermissionGating();
@@ -253,6 +265,7 @@ const UIController = {
         if (!this.pollTimer || this._pollMode === 'slow') return;
         console.log('[Poll] Switching to SLOW (10s)');
         this._pollMode = 'slow';
+        clearInterval(this.pollTimer);
         this.pollTimer = setInterval(() => this.refreshData(false), this.pollSlowMs);
     },
 
@@ -372,6 +385,10 @@ const UIController = {
             replaySpeedBtns: document.querySelectorAll('.replay-speed-btn'),
             replayTimeline: document.getElementById('replayTimeline'),
             replayTimeDisplay: document.getElementById('replayTimeDisplay'),
+            liveBtn: document.getElementById('liveBtn'),
+            liveBtnM: document.getElementById('liveBtnM'),
+            headerTimeControls: document.querySelector('.header-time-controls'),
+            settingsTimeControls: document.querySelector('.settings-time-controls'),
         };
 
     },
@@ -403,6 +420,15 @@ const UIController = {
         this.elements.refreshBtn.addEventListener('click', () => {
             this.refreshData();
         });
+
+        // Live button (header + mobile settings)
+        const liveHandler = () => this._switchToLive();
+        if (this.elements.liveBtn) {
+            this.elements.liveBtn.addEventListener('click', liveHandler);
+        }
+        if (this.elements.liveBtnM) {
+            this.elements.liveBtnM.addEventListener('click', liveHandler);
+        }
 
         // Close detail panel
         this.elements.closeDetailBtn.addEventListener('click', () => {
@@ -473,10 +499,7 @@ const UIController = {
         this.elements.timePresets.forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const hours = parseInt(e.currentTarget.dataset.hours);
-                this._setStoredPreset(hours);
-                this._setTimeRange(hours);
-                this.droneTimestamps = {}; // Clear timestamps for new time window
-                this.refreshData();
+                this._switchToArchive(hours);
             });
         });
 
@@ -485,10 +508,7 @@ const UIController = {
             this.elements.settingsTimePresets.forEach(btn => {
                 btn.addEventListener('click', (e) => {
                     const hours = parseInt(e.currentTarget.dataset.hours);
-                    this._setStoredPreset(hours);
-                    this._setTimeRange(hours);
-                    this.droneTimestamps = {}; // Clear timestamps for new time window
-                    this.refreshData();
+                    this._switchToArchive(hours);
                 });
             });
         }
@@ -695,6 +715,13 @@ const UIController = {
             }
         });
 
+        // Close export menu on outside click (once, not per re-render)
+        document.addEventListener('click', (e) => {
+            if (this._exportMenu && !this._exportMenu.contains(e.target) && !e.target.closest('.export-btn')) {
+                this._closeExportMenu();
+            }
+        });
+
     },
 
     /**
@@ -723,7 +750,11 @@ const UIController = {
                     this.currentEndTime = selectedDates[0];
                 }
                 this.droneTimestamps = {};
-                this.refreshData();
+                if (this._dataMode !== 'archive') {
+                    this._switchToArchive();
+                } else {
+                    this.refreshData();
+                }
             }
         };
 
@@ -1400,7 +1431,8 @@ const UIController = {
         try {
             // Consolidated refresh: returns drones, alerts, stats, and sources
             const data = await API.getRefresh(
-                this.currentStartTime, this.currentEndTime, this.droneTimestamps
+                this.currentStartTime, this.currentEndTime,
+                this.droneTimestamps, this._dataMode
             );
 
             // Update remote status
@@ -1446,6 +1478,16 @@ const UIController = {
                 return true;
             });
 
+            // In live mode, auto-make new sessions visible so tracks load on the map
+            if (this._dataMode === 'live') {
+                for (const drone of drones) {
+                    const sessionKey = `${drone.uas_id}:${drone.computed_session_id || 'unknown'}`;
+                    if (!this.visibleSessions.has(sessionKey) && !this.dismissedSessionKeys.has(sessionKey)) {
+                        this.visibleSessions.add(sessionKey);
+                    }
+                }
+            }
+
             // Get current session keys from filtered data
             const currentSessionKeys = new Set(drones.map(d => `${d.uas_id}:${d.computed_session_id || 'unknown'}`));
             // Remove tracks for sessions no longer in the data
@@ -1461,6 +1503,9 @@ const UIController = {
 
             // Update drone list incrementally
             this._updateDroneList(drones);
+
+            // Load tracks for any visible sessions not yet on the map
+            this._batchLoadTracks(drones);
 
             // Update markers on the map for changed drones only
             if (drones.length > 0) {
@@ -1544,10 +1589,13 @@ const UIController = {
         this._droneListCacheKey = cacheKey;
 
         if (drones.length === 0) {
+            const msg = this._dataMode === 'live'
+                ? 'No active flights'
+                : 'No flights detected in time window';
             list.innerHTML = `
                 <div class="empty-state">
                     <i class="fas fa-satellite-dish"></i>
-                    <p>No flights detected in time window</p>
+                    <p>${this.escapeHtml(msg)}</p>
                 </div>
             `;
             return;
@@ -2078,13 +2126,90 @@ const UIController = {
                 this._openExportMenu(btn);
             });
         });
+    },
 
-        // Close export menu on outside click
-        document.addEventListener('click', (e) => {
-            if (this._exportMenu && !this._exportMenu.contains(e.target) && !e.target.closest('.export-btn')) {
-                this._closeExportMenu();
-            }
-        });
+    /**
+     * Switch to Live mode — show only active flights based on position staleness.
+     */
+    _switchToLive() {
+        if (this._dataMode === 'live') {
+            this._switchToArchive();
+            return;
+        }
+        this._dataMode = 'live';
+        this.droneTimestamps = {};
+        this._clearActivePreset();
+        this._clearStoredPreset();
+
+        // Update live button state
+        if (this.elements.liveBtn) {
+            this.elements.liveBtn.classList.add('active');
+            this.elements.liveBtn.setAttribute('aria-pressed', 'true');
+        }
+        if (this.elements.liveBtnM) {
+            this.elements.liveBtnM.classList.add('active');
+            this.elements.liveBtnM.setAttribute('aria-pressed', 'true');
+        }
+
+        // Disable time controls
+        if (this.elements.headerTimeControls) {
+            this.elements.headerTimeControls.classList.add('disabled');
+        }
+        if (this.elements.settingsTimeControls) {
+            this.elements.settingsTimeControls.classList.add('disabled');
+        }
+
+        // Force flat UAS view (no date grouping)
+        if (this.viewMode === 'date') {
+            this._switchView('uas');
+        }
+
+        // Clear archive drones so the list doesn't linger
+        this.droneMap = {};
+        this.loadedTracks = new Set();
+        this.visibleSessions = new Set();
+        this.dismissedSessionKeys = new Set();
+        MapController.dronePositions = {};
+        MapController.clearAllTracks();
+        MapController.clearAllOperators();
+        this._updateDroneList([]);
+
+        this.refreshData();
+    },
+
+    /**
+     * Switch to Archive mode — show flights within a time window.
+     * @param {number} [presetHours] - If provided, set the time window to this range.
+     */
+    _switchToArchive(presetHours) {
+        if (this._dataMode === 'archive' && !presetHours) return;
+        this._dataMode = 'archive';
+        this.droneTimestamps = {};
+
+        // Update live button state
+        if (this.elements.liveBtn) {
+            this.elements.liveBtn.classList.remove('active');
+            this.elements.liveBtn.setAttribute('aria-pressed', 'false');
+        }
+        if (this.elements.liveBtnM) {
+            this.elements.liveBtnM.classList.remove('active');
+            this.elements.liveBtnM.setAttribute('aria-pressed', 'false');
+        }
+
+        // Enable time controls
+        if (this.elements.headerTimeControls) {
+            this.elements.headerTimeControls.classList.remove('disabled');
+        }
+        if (this.elements.settingsTimeControls) {
+            this.elements.settingsTimeControls.classList.remove('disabled');
+        }
+
+        if (presetHours) {
+            this._setStoredPreset(presetHours);
+            this._setTimeRange(presetHours);
+        }
+
+        this.refreshData();
     },
 
     /**

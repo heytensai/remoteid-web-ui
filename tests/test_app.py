@@ -781,7 +781,7 @@ class TestApiRefresh:
     def test_refresh_endpoint(self, client, db):
         resp = client.post(
             "/api/refresh",
-            data=json.dumps({"known_timestamps": {}}),
+            data=json.dumps({"mode": "archive", "known_timestamps": {}}),
             content_type="application/json",
             headers={"X-CSRFToken": "test"},
         )
@@ -804,7 +804,7 @@ class TestApiRefresh:
 
         resp = client.post(
             "/api/refresh",
-            data=json.dumps({"known_timestamps": known}),
+            data=json.dumps({"mode": "archive", "known_timestamps": known}),
             content_type="application/json",
             headers={"X-CSRFToken": "test"},
         )
@@ -817,11 +817,54 @@ class TestApiRefresh:
     def test_refresh_invalid_params(self, client):
         resp = client.post(
             "/api/refresh?start=not-a-date",
-            data=json.dumps({}),
+            data=json.dumps({"mode": "archive"}),
             content_type="application/json",
             headers={"X-CSRFToken": "test"},
         )
         assert resp.status_code == 500
+
+    def test_refresh_live_mode(self, client, db):
+        resp = client.post(
+            "/api/refresh",
+            data=json.dumps({"mode": "live"}),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "drones" in data
+        assert "alerts" in data
+        assert "stats" in data
+        assert "sources" in data
+        assert data["stats"]["total_drones"] == len(set(
+            d["uas_id"] for d in data["drones"]
+        ))
+
+    def test_refresh_invalid_mode(self, client):
+        resp = client.post(
+            "/api/refresh",
+            data=json.dumps({"mode": "bogus"}),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 400
+        assert "Invalid mode" in resp.get_json()["error"]
+
+    def test_refresh_archive_mode(self, client, db):
+        resp = client.post(
+            "/api/refresh",
+            data=json.dumps({"mode": "archive", "known_timestamps": {}}),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "drones" in data
+        assert "alerts" in data
+        assert "stats" in data
+        assert "sources" in data
+        assert len(data["drones"]) >= 3
+        assert "total_drones" in data["stats"]
 
 
 class TestApiCollectors:

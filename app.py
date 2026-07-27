@@ -544,13 +544,27 @@ def get_drones_incremental():
 @app.route("/api/refresh", methods=["POST"])
 @limiter.limit("60/minute")
 def get_refresh():
-    """Consolidated refresh: returns drones, alerts, stats, and sources in one call."""
+    """Consolidated refresh: returns drones, alerts, stats, and sources in one call.
+
+    POST body:
+        mode: "live" (default) or "archive"
+        known_timestamps: dict of "uas_id:session_id" -> ISO timestamp (archive only)
+    Query params:
+        start, end: time window (archive only)
+    """
     try:
-        start, end = _parse_time_range(request.args)
         data = request.get_json() or {}
+        mode = data.get("mode", "live")
+        if mode not in ("live", "archive"):
+            return jsonify({"error": f"Invalid mode: {mode}"}), 400
         known_timestamps = data.get("known_timestamps", {})
 
-        drones = DATABASE.get_drones_incremental(start, end, known_timestamps)
+        if mode == "live":
+            stale = _get_config().position_stale_minutes
+            drones = DATABASE.get_live_drones(stale)
+        else:
+            start, end = _parse_time_range(request.args)
+            drones = DATABASE.get_drones_incremental(start, end, known_timestamps)
 
         try:
             active = DATABASE.get_active_geozone_events()
@@ -560,8 +574,17 @@ def get_refresh():
         uas_ids = list(set(e["uas_id"] for e in active))
 
         try:
-            stats = DATABASE.get_stats(start, end)
-        except sqlite3.Error:
+            if mode == "live":
+                stats = {
+                    "total_drones": len(set(d["uas_id"] for d in drones)),
+                    "total_sessions": len(drones),
+                    "total_positions": 0,
+                    "active_alerts": 0,
+                    "total_alerts": 0,
+                }
+            else:
+                stats = DATABASE.get_stats(start, end)
+        except (sqlite3.Error, ValueError, TypeError):
             logger.exception("Error getting stats in refresh")
             stats = {}
 
@@ -1348,6 +1371,7 @@ def _hot_reload_config():
             global _config_snapshot  # noqa: PLW0603  # pylint: disable=global-statement
             _config_snapshot = new_config
         ALERT_ENGINE.reload_config(new_config)
+        MAINTENANCE_SCHEDULER.reload_config(new_config)
         _rebuild_notifier()
 
 def _rebuild_notifier():

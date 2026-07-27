@@ -179,6 +179,55 @@ describe('API', () => {
     });
   });
 
+  describe('getRefresh', () => {
+    test('live mode sends mode in body and omits time params', async () => {
+      global.fetch = mockFetch({ drones: [], alerts: {}, stats: {}, sources: [] });
+
+      await API.getRefresh(null, null, {}, 'live');
+      const url = fetch.mock.calls[0][0];
+      const options = fetch.mock.calls[0][1];
+      expect(url).toBe('/api/refresh?');
+      const body = JSON.parse(options.body);
+      expect(body.mode).toBe('live');
+      expect(body.known_timestamps).toEqual({});
+    });
+
+    test('archive mode sends time params in URL', async () => {
+      global.fetch = mockFetch({ drones: [], alerts: {}, stats: {}, sources: [] });
+      const start = new Date('2024-01-01T00:00:00Z');
+      const end = new Date('2024-01-02T00:00:00Z');
+
+      await API.getRefresh(start, end, { 'd1:s1': '2024-01-01T12:00:00Z' }, 'archive');
+      const url = fetch.mock.calls[0][0];
+      const options = fetch.mock.calls[0][1];
+      expect(url).toContain('start=');
+      expect(url).toContain('end=');
+      const body = JSON.parse(options.body);
+      expect(body.mode).toBe('archive');
+      expect(body.known_timestamps).toEqual({ 'd1:s1': '2024-01-01T12:00:00Z' });
+    });
+
+    test('defaults to live mode when mode omitted', async () => {
+      global.fetch = mockFetch({ drones: [], alerts: {}, stats: {}, sources: [] });
+
+      await API.getRefresh(null, null, {});
+      const options = fetch.mock.calls[0][1];
+      const body = JSON.parse(options.body);
+      expect(body.mode).toBe('live');
+    });
+
+    test('live mode omits time params even when provided', async () => {
+      global.fetch = mockFetch({ drones: [], alerts: {}, stats: {}, sources: [] });
+      const start = new Date('2024-01-01T00:00:00Z');
+      const end = new Date('2024-01-02T00:00:00Z');
+
+      await API.getRefresh(start, end, {}, 'live');
+      const url = fetch.mock.calls[0][0];
+      expect(url).not.toContain('start=');
+      expect(url).not.toContain('end=');
+    });
+  });
+
   describe('_post', () => {
     test('includes CSRF token header', async () => {
       API.csrfToken = 'csrf-abc';
