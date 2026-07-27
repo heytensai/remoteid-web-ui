@@ -649,6 +649,11 @@ const MapController = {
             }
         } catch (e) {
             console.error('Failed to update collectors:', e);
+            if (typeof UIController !== 'undefined' && UIController.showToast) {
+                UIController.showToast('Failed to update collector positions', 'warning', {
+                    dedupeKey: 'collector-update',
+                });
+            }
         }
     },
 

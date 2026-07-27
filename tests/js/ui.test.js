@@ -260,4 +260,100 @@ describe('UIController', () => {
       expect(UIController.refreshData).toHaveBeenCalledTimes(2);
     });
   });
+
+  describe('showToast', () => {
+    let container;
+
+    beforeEach(() => {
+      container = document.createElement('div');
+      container.id = 'toastContainer';
+      document.body.appendChild(container);
+      UIController._consecutiveFailures = 0;
+      UIController._connectionLostShown = false;
+    });
+
+    afterEach(() => {
+      document.body.removeChild(container);
+    });
+
+    test('creates a toast element with correct type', () => {
+      UIController.showToast('Test error', 'error');
+      const toast = container.querySelector('.toast-error');
+      expect(toast).not.toBeNull();
+      expect(toast.textContent).toContain('Test error');
+    });
+
+    test('defaults to error type', () => {
+      UIController.showToast('Something broke');
+      expect(container.querySelector('.toast-error')).not.toBeNull();
+    });
+
+    test('deduplicates by key', () => {
+      UIController.showToast('First', 'error', { dedupeKey: 'dup-test' });
+      UIController.showToast('Second', 'error', { dedupeKey: 'dup-test' });
+      const toasts = container.querySelectorAll('.toast');
+      expect(toasts.length).toBe(1);
+      expect(toasts[0].textContent).toContain('First');
+    });
+
+    test('respects max visible toasts', () => {
+      UIController._toastMaxVisible = 2;
+      UIController.showToast('one', 'info');
+      UIController.showToast('two', 'info');
+      UIController.showToast('three', 'info');
+      const toasts = container.querySelectorAll('.toast');
+      expect(toasts.length).toBe(2);
+    });
+
+    test('_dismissToast adds removing class', () => {
+      UIController.showToast('Dismiss me', 'info', { duration: 0 });
+      const toast = container.querySelector('.toast');
+      UIController._dismissToast(toast);
+      expect(toast.classList.contains('removing')).toBe(true);
+    });
+  });
+
+  describe('_trackRefreshFailure', () => {
+    let banner;
+
+    beforeEach(() => {
+      banner = document.createElement('div');
+      banner.id = 'connectionBanner';
+      document.body.appendChild(banner);
+      UIController._consecutiveFailures = 0;
+      UIController._connectionLostShown = false;
+    });
+
+    afterEach(() => {
+      document.body.removeChild(banner);
+    });
+
+    test('increments failure counter on failure', () => {
+      UIController._trackRefreshFailure(false);
+      UIController._trackRefreshFailure(false);
+      expect(UIController._consecutiveFailures).toBe(2);
+    });
+
+    test('resets counter on success', () => {
+      UIController._consecutiveFailures = 5;
+      UIController._trackRefreshFailure(true);
+      expect(UIController._consecutiveFailures).toBe(0);
+    });
+
+    test('shows banner after 3 consecutive failures', () => {
+      UIController._trackRefreshFailure(false);
+      UIController._trackRefreshFailure(false);
+      UIController._trackRefreshFailure(false);
+      expect(banner.style.display).toBe('flex');
+      expect(UIController._connectionLostShown).toBe(true);
+    });
+
+    test('hides banner on recovery', () => {
+      UIController._connectionLostShown = true;
+      banner.style.display = 'flex';
+      UIController._trackRefreshFailure(true);
+      expect(banner.style.display).toBe('none');
+      expect(UIController._connectionLostShown).toBe(false);
+    });
+  });
 });

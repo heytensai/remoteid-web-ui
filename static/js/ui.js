@@ -59,6 +59,11 @@ const UIController = {
     // Incremental update tracking
     droneTimestamps: {}, // Map of "uas_id:session_id" -> last known timestamp
 
+    // Toast / connection tracking
+    _toastMaxVisible: 5,
+    _consecutiveFailures: 0,
+    _connectionLostShown: false,
+
     // DOM Elements
     elements: {},
 
@@ -1133,6 +1138,9 @@ const UIController = {
             }
         } catch (e) {
             console.error('Failed to load alert history:', e);
+            this.showToast('Could not load alert history', 'warning', {
+                dedupeKey: 'alert-history',
+            });
         }
     },
 
@@ -1300,6 +1308,9 @@ const UIController = {
             this._renderRemoteDetail();
         } catch (e) {
             console.error('Failed to load remote status:', e);
+            this.showToast('Could not load remote sources', 'warning', {
+                dedupeKey: 'remote-status',
+            });
         }
     },
 
@@ -1531,10 +1542,18 @@ const UIController = {
 
             // Update last update time
             this._updateLastUpdateTime();
+            this._trackRefreshFailure(true);
 
         } catch (e) {
             console.error('Failed to refresh data:', e);
-            this._showError('Failed to load data. Please try again.');
+            this._trackRefreshFailure(false);
+            // Only toast on initial or manual refresh — polling failures
+            // are surfaced by the connection banner after 3 consecutive failures
+            if (!this._initialized || e._manualRefresh) {
+                this.showToast('Failed to load data', 'error', {
+                    dedupeKey: 'refresh-failed',
+                });
+            }
         } finally {
             this.isLoading = false;
             this.elements.refreshBtn.classList.remove('spinning');
@@ -2681,8 +2700,100 @@ const UIController = {
         return nice * pow;
     },
 
+    /**
+     * Show a non-intrusive toast notification.
+     * @param {string} message - Text to display.
+     * @param {'error'|'warning'|'info'|'success'} [type='error'] - Visual style.
+     * @param {object} [opts] - Options: { duration, dedupeKey, icon }.
+     */
+    showToast(message, type = 'error', opts = {}) {
+        const container = document.getElementById('toastContainer');
+        if (!container) return;
+
+        const {
+            duration = type === 'error' ? 8000 : 5000,
+            dedupeKey = null,
+            icon = null,
+        } = opts;
+
+        // Deduplicate: if a toast with the same key is already visible, skip
+        if (dedupeKey && container.querySelector(`[data-dedupe="${dedupeKey}"]`)) {
+            return;
+        }
+
+        // Enforce max visible toasts
+        const existing = container.querySelectorAll('.toast');
+        if (existing.length >= this._toastMaxVisible) {
+            existing[existing.length - 1].remove();
+        }
+
+        const iconMap = {
+            error: 'fa-exclamation-circle',
+            warning: 'fa-exclamation-triangle',
+            info: 'fa-info-circle',
+            success: 'fa-check-circle',
+        };
+        const iconClass = icon || iconMap[type] || iconMap.info;
+
+        const el = document.createElement('div');
+        el.className = `toast toast-${type}`;
+        if (dedupeKey) el.dataset.dedupe = dedupeKey;
+        el.innerHTML = `
+            <i class="fas ${iconClass}"></i>
+            <span>${this.escapeHtml(message)}</span>
+            <button class="toast-close" aria-label="Dismiss">
+                <i class="fas fa-times"></i>
+            </button>
+        `;
+
+        el.querySelector('.toast-close').addEventListener('click', () => {
+            this._dismissToast(el);
+        });
+
+        container.prepend(el);
+
+        if (duration > 0) {
+            setTimeout(() => this._dismissToast(el), duration);
+        }
+    },
+
+    _dismissToast(el) {
+        if (!el.parentNode) return;
+        el.classList.add('removing');
+        el.addEventListener('animationend', () => el.remove(), { once: true });
+    },
+
     _showError(message) {
-        console.error(message);
+        this.showToast(message, 'error');
+    },
+
+    /** Show or hide the connection-lost banner. */
+    _setConnectionBanner(show, recovering = false) {
+        const banner = document.getElementById('connectionBanner');
+        if (!banner) return;
+        banner.style.display = show ? 'flex' : 'none';
+        banner.classList.toggle('recovering', recovering);
+    },
+
+    /** Called after every refreshData — tracks consecutive failures. */
+    _trackRefreshFailure(success) {
+        if (success) {
+            if (this._connectionLostShown) {
+                this._setConnectionBanner(false);
+                this._connectionLostShown = false;
+                this.showToast('Connection restored', 'success', {
+                    duration: 3000, icon: 'fa-plug',
+                });
+            }
+            this._consecutiveFailures = 0;
+        } else {
+            this._consecutiveFailures++;
+            // Show banner after 3 consecutive failures (~30s in slow poll)
+            if (this._consecutiveFailures >= 3 && !this._connectionLostShown) {
+                this._setConnectionBanner(true);
+                this._connectionLostShown = true;
+            }
+        }
     },
 
     /**
