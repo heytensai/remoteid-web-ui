@@ -369,9 +369,12 @@ def test_evaluate_string_timestamp(engine):
 # --- New session callback tests ---
 
 def test_new_session_callback_fired(engine):
-    """on_new_session fires when a drone first appears in the DB."""
-    alert_engine, db, _ = engine
+    """on_new_session fires when a known drone first appears in the DB."""
+    alert_engine, db, config = engine
     now = datetime.now(timezone.utc)
+
+    # Alias the drone so on_new_session fires (not on_unrecognized_drone)
+    config.drone_aliases["drone-001"] = "Alpha"
 
     # Insert a record so a session is created in the DB
     db.insert_remoteid_records("test", [{
@@ -425,12 +428,15 @@ def test_new_session_not_fired_for_known(engine):
 
 def test_new_session_fired_after_gap(engine):
     """on_new_session fires when the session changes (new flight)."""
-    alert_engine, db, _ = engine
+    alert_engine, db, config = engine
     now = datetime.now(timezone.utc)
 
-    # First flight — creates session_old
+    # Alias the drone so on_new_session fires (not on_unrecognized_drone)
+    config.drone_aliases["drone-001"] = "Alpha"
+
+    # Insert first flight
     db.insert_remoteid_records("test", [{
-        "timestamp": (now - timedelta(hours=2)).isoformat(),
+        "timestamp": (now - timedelta(hours=3)).isoformat(),
         "uas_id": "drone-001",
         "latitude": 37.78,
         "longitude": -122.42,

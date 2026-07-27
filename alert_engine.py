@@ -192,6 +192,10 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
         Uses a per-uas_id cooldown to prevent duplicate alerts when session
         detection regenerates IDs (the scheduler runs every ~30s, changing
         all session UUIDs).
+
+        For unrecognized drones (no alias), ``on_unrecognized_drone`` fires
+        instead of ``on_new_session`` so that notification targets only
+        receive one alert per new flight.
         """
         session_id = self._db.get_latest_session_id(uas_id)
         if session_id is None:
@@ -213,8 +217,8 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
         logger.info(
             "New session for %s: %s", uas_id, session_id,
         )
-        self._fire(self.on_new_session, uas_id, session_id, first_pos)
 
+        # Unrecognized drone takes priority over new_session — fire only one
         if uas_id not in self._config.drone_aliases:
             udr_cooldown = self._config.alerts.cooldown.get("unrecognized_drone", 300)
             last_fired = self._unrecognized_drone_cooldown.get(uas_id)
@@ -226,6 +230,8 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
             else:
                 self._unrecognized_drone_cooldown[uas_id] = now
                 self._fire(self.on_unrecognized_drone, uas_id, session_id, first_pos)
+        else:
+            self._fire(self.on_new_session, uas_id, session_id, first_pos)
 
     # --- Geozone evaluation ---
 

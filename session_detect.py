@@ -77,6 +77,20 @@ def get_positions_for_uas(db_path: str, uas_id: str) -> List[Tuple[int, datetime
         return [(row[0], _ensure_tz(row[1])) for row in cursor.fetchall()]
 
 
+def _get_unassigned_positions(
+    db_path: str, uas_id: str,
+) -> List[Tuple[int, datetime]]:
+    """Get positions for *uas_id* that lack a ``computed_session_id``."""
+    with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES, timeout=5) as conn:
+        cursor = conn.execute(
+            "SELECT id, timestamp FROM remoteid "
+            "WHERE uas_id = ? AND computed_session_id IS NULL "
+            "ORDER BY timestamp",
+            (uas_id,),
+        )
+        return [(row[0], _ensure_tz(row[1])) for row in cursor.fetchall()]
+
+
 def detect_sessions(positions: List[Tuple[int, datetime]], gap_threshold: int) -> List[Tuple[int, str]]:
     """Detect sessions based on time gaps
 
@@ -196,6 +210,12 @@ def process_database(
 ):
     """Process the database and assign session IDs.
 
+    Only records without an existing ``computed_session_id`` are updated.
+    This prevents the scheduler from overwriting session IDs that were
+    already assigned by the submit handler's inline session detection,
+    eliminating the race condition where two independent generators
+    produce different session IDs for the same flight.
+
     When *since* is provided, only UAS with positions at or after that
     timestamp are processed (all historic positions for those UAS are
     still scanned so session boundary detection stays correct). UAS that
@@ -225,17 +245,29 @@ def process_database(
     total_records = 0
 
     for uas_id in uas_list:
-        positions = get_positions_for_uas(str(db_path), uas_id)
+        # Fetch ALL positions for correct gap detection, but also get the
+        # set of already-assigned IDs so we can skip them when writing.
+        all_positions = get_positions_for_uas(str(db_path), uas_id)
+        unassigned = _get_unassigned_positions(str(db_path), uas_id)
 
-        if len(positions) < 2:
-            # Single record — stable session ID from the position's DB ID
-            if positions and not dry_run:
-                session_id = f"session_{positions[0][0]}"
-                update_session_ids(str(db_path), [(session_id, datetime.now(), positions[0][0])])
+        if not unassigned:
             continue
 
-        # Detect sessions
-        sessions = detect_sessions(positions, gap_threshold)
+        if len(all_positions) < 2:
+            # Single record without a session ID — assign one
+            if unassigned and not dry_run:
+                session_id = f"session_{unassigned[0][0]}"
+                update_session_ids(
+                    str(db_path),
+                    [(session_id, datetime.now(), unassigned[0][0])],
+                )
+            continue
+
+        # Detect sessions using ALL positions for correct gap boundaries
+        sessions = detect_sessions(all_positions, gap_threshold)
+
+        # Build a map of position_id → detected session_id
+        session_map = dict(sessions)
 
         if sessions:
             session_count = len(set(s[1] for s in sessions))
@@ -243,12 +275,15 @@ def process_database(
             total_records += len(sessions)
 
             if not dry_run:
-                # Batch update
+                # Only update records that don't already have a session ID
+                unassigned_ids = {pos_id for pos_id, _ in unassigned}
                 updates = [
-                    (session_id, datetime.now(), pos_id)
-                    for pos_id, session_id in sessions
+                    (session_map[pos_id], datetime.now(), pos_id)
+                    for pos_id in unassigned_ids
+                    if pos_id in session_map
                 ]
-                update_session_ids(str(db_path), updates)
+                if updates:
+                    update_session_ids(str(db_path), updates)
 
     logger.debug(
         "Session detection: %i UAS, %i records, %i sessions detected",
