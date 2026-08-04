@@ -53,12 +53,16 @@ web_interface:
     # Known codes (use the first 4–5 characters including length code for precision):
     "1581F": "DJI"
     "1588E": "Parrot"
+    "1596": "Dronetag"
+    "16635": "Wing Aviation"
     "1668B": "Skydio"
     "17444": "Wingtra"
     "1748C": "Autel"
-    "1596": "Dronetag"
-    "2146": "Contixo"
+    "17865": "Amazon Prime Air"
+    "18738": "Zipline"
     "1907F": "Brinc"
+    "1914C": "Brinc"
+    "2146": "Contixo"
 
   # Custom waypoints and geozones displayed on the map
   # type: "point" (default) — marker with icon at lat/lon
