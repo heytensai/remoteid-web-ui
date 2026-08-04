@@ -64,6 +64,8 @@ global.MapController = {
   filterOperatorsByUasIds: jest.fn(),
   removeTrack: jest.fn(),
   loadTrackSession: jest.fn(),
+  loadTracksBatch: jest.fn().mockResolvedValue({}),
+  updateAlertState: jest.fn(),
 };
 
 global.Units = {
@@ -86,6 +88,9 @@ uiCode = uiCode
   .replace(/\/\/ Initialize when DOM is ready\n.*$/, '')
   .replace(/^const /m, '');
 (0, eval)(uiCode);
+
+// Capture the real refreshData; later describe blocks may mock it out.
+const realRefreshData = UIController.refreshData;
 
 describe('UIController', () => {
   beforeEach(() => {
@@ -354,6 +359,104 @@ describe('UIController', () => {
       UIController._trackRefreshFailure(true);
       expect(banner.style.display).toBe('none');
       expect(UIController._connectionLostShown).toBe(false);
+    });
+  });
+
+  describe('refreshData session cleanup', () => {
+    beforeEach(() => {
+      UIController._dataMode = 'live';
+      UIController.currentStartTime = new Date('2024-01-01T00:00:00Z');
+      UIController.currentEndTime = new Date('2024-01-01T02:00:00Z');
+      UIController.droneTimestamps = {};
+      UIController.droneMap = {};
+      UIController.uasExtraSessions = {};
+      UIController.uasExtraTotal = {};
+      UIController.uasExtraLoading = {};
+      UIController.alertEvents = [];
+      UIController.remotes = [];
+      UIController.remoteDetailOpen = false;
+      UIController.isLoading = false;
+      UIController._initialized = false;
+      UIController.lastActivityTime = null;
+      UIController.showKnownDrones = true;
+      UIController.showUnknownDrones = true;
+      UIController.droneAliases = {};
+      UIController.selectedDrones.clear();
+      UIController.visibleSessions.clear();
+      UIController.loadedTracks.clear();
+      UIController.dismissedSessionKeys.clear();
+
+      UIController.elements = {
+        refreshBtn: document.createElement('button'),
+        droneList: document.createElement('div'),
+        lastUpdateSpan: document.createElement('span'),
+      };
+
+      // The _switchToLive/_switchToArchive tests replace refreshData with a
+      // mock; restore the real implementation so the cleanup path is exercised.
+      UIController.refreshData = realRefreshData;
+
+      global.API = { getRefresh: jest.fn() };
+
+      // Mock peripheral helpers to isolate the session-cleanup logic
+      UIController._updateRemoteSummary = jest.fn();
+      UIController._renderStats = jest.fn();
+      UIController._updateLastUpdateTime = jest.fn();
+      UIController._trackRefreshFailure = jest.fn();
+      UIController._adjustPollTimer = jest.fn();
+      UIController._updateReplayButtonState = jest.fn();
+      MapController._updateCollectors = jest.fn().mockResolvedValue();
+      MapController.config = { center_lat: 1 };
+    });
+
+    afterEach(() => {
+      delete global.API;
+      MapController.config = {};
+    });
+
+    test('keeps historical extra-session tracks during a live refresh', async () => {
+      UIController.uasExtraSessions = {
+        'uas-123': [{
+          uas_id: 'uas-123',
+          computed_session_id: 'session_past',
+          timestamp: '2024-01-01T00:00:00Z',
+        }],
+      };
+      UIController.visibleSessions = new Set(['uas-123:session_past', 'uas-123:session_live']);
+      UIController.loadedTracks = new Map([
+        ['uas-123:session_past', Infinity],
+        ['uas-123:session_live', '2024-01-01T01:00:00Z'],
+      ]);
+      UIController.droneMap = {
+        'uas-123:session_live': {
+          uas_id: 'uas-123',
+          computed_session_id: 'session_live',
+          timestamp: '2024-01-01T01:00:00Z',
+          latitude: 1,
+          longitude: 2,
+          altitude: 10,
+        },
+      };
+      const liveDrone = {
+        uas_id: 'uas-123',
+        computed_session_id: 'session_live',
+        timestamp: '2024-01-01T01:00:00Z',
+        latitude: 1,
+        longitude: 2,
+        altitude: 10,
+      };
+      API.getRefresh.mockResolvedValue({
+        drones: [liveDrone],
+        sources: [],
+        alerts: { active: [] },
+        stats: {},
+      });
+
+      await UIController.refreshData();
+
+      expect(MapController.removeTrack).not.toHaveBeenCalledWith('uas-123', 'uas-123:session_past');
+      expect(UIController.loadedTracks.has('uas-123:session_past')).toBe(true);
+      expect(UIController.visibleSessions.has('uas-123:session_past')).toBe(true);
     });
   });
 });
