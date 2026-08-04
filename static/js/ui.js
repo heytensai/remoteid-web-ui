@@ -1501,6 +1501,13 @@ const UIController = {
 
             // Get current session keys from filtered data
             const currentSessionKeys = new Set(drones.map(d => `${d.uas_id}:${d.computed_session_id || 'unknown'}`));
+            // Include extra sessions loaded via Load More in the UAS view so
+            // user-displayed historical flights aren't treated as stale data.
+            for (const uasId of Object.keys(this.uasExtraSessions)) {
+                for (const d of this.uasExtraSessions[uasId]) {
+                    currentSessionKeys.add(`${d.uas_id}:${d.computed_session_id || 'unknown'}`);
+                }
+            }
             // Remove tracks for sessions no longer in the data
             for (const sessionKey of this.loadedTracks.keys()) {
                 if (!currentSessionKeys.has(sessionKey)) {
