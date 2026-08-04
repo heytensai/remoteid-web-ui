@@ -73,6 +73,105 @@ def test_migration_6_to_7_adds_sync_log_index(tmp_path):
     assert "idx_sync_log_source" in index_names
 
 
+def test_migration_7_to_8_adds_sent_alerts_and_active_index(tmp_path):
+    """Migration from schema 7 creates sent_alerts and the partial unique index."""
+    import sqlite3
+    db_path = tmp_path / "test_migrate_7.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE _schema_version (version INTEGER NOT NULL)")
+    conn.execute("INSERT INTO _schema_version (version) VALUES (7)")
+    conn.execute(
+        "CREATE TABLE geozone_events("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "uas_id TEXT NOT NULL, geozone_name TEXT NOT NULL,"
+        "entered_at DATETIME NOT NULL, last_seen_at DATETIME NOT NULL,"
+        "exited_at DATETIME, exited_reason TEXT,"
+        "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+    )
+    conn.commit()
+    conn.close()
+
+    WebDatabase(str(db_path))
+
+    conn = sqlite3.connect(str(db_path))
+    tables = [row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()]
+    index_names = [row[1] for row in conn.execute(
+        "PRAGMA index_list(geozone_events)"
+    ).fetchall()]
+    conn.close()
+    assert "sent_alerts" in tables
+    assert "idx_geozone_events_active_unique" in index_names
+
+
+def test_migration_7_to_8_dedupes_active_events(tmp_path):
+    """Migration deduplicates pre-existing duplicate active geozone events."""
+    import sqlite3
+    db_path = tmp_path / "test_migrate_7_dup.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE _schema_version (version INTEGER NOT NULL)")
+    conn.execute("INSERT INTO _schema_version (version) VALUES (7)")
+    conn.execute(
+        "CREATE TABLE geozone_events("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "uas_id TEXT NOT NULL, geozone_name TEXT NOT NULL,"
+        "entered_at DATETIME NOT NULL, last_seen_at DATETIME NOT NULL,"
+        "exited_at DATETIME, exited_reason TEXT,"
+        "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+    )
+    now = datetime.now(timezone.utc)
+    # Two duplicate active events for the same (uas, geozone) — left behind by
+    # the old per-process race — must be collapsed before the unique index.
+    conn.execute(
+        "INSERT INTO geozone_events (uas_id, geozone_name, entered_at, last_seen_at) "
+        "VALUES ('drone-001', 'ZoneA', ?, ?)",
+        (now, now),
+    )
+    conn.execute(
+        "INSERT INTO geozone_events (uas_id, geozone_name, entered_at, last_seen_at) "
+        "VALUES ('drone-001', 'ZoneA', ?, ?)",
+        (now, now),
+    )
+    conn.commit()
+    conn.close()
+
+    WebDatabase(str(db_path))
+
+    conn = sqlite3.connect(str(db_path))
+    active = conn.execute(
+        "SELECT COUNT(*) FROM geozone_events WHERE exited_at IS NULL"
+    ).fetchone()[0]
+    conn.close()
+    assert active == 1
+
+
+def test_claim_alert_first_wins(db):
+    """Only the first claim for a key returns True."""
+    assert db.claim_alert("new_session", "uas-001:session_abc") is True
+    assert db.claim_alert("new_session", "uas-001:session_abc") is False
+
+
+def test_claim_alert_different_keys_independent(db):
+    """Different event types and keys do not interfere."""
+    assert db.claim_alert("new_session", "uas-001:session_abc") is True
+    assert db.claim_alert("unrecognized_drone", "uas-001:session_abc") is True
+    assert db.claim_alert("new_session", "uas-001:session_def") is True
+
+
+def test_claim_alert_persists_across_connections(db):
+    """The claim survives a new database connection (restart-safety)."""
+    import sqlite3
+    assert db.claim_alert("new_session", "uas-001:session_abc") is True
+    conn = sqlite3.connect(db.db_path)
+    count = conn.execute(
+        "SELECT COUNT(*) FROM sent_alerts WHERE alert_type = 'new_session' "
+        "AND dedup_key = 'uas-001:session_abc'"
+    ).fetchone()[0]
+    conn.close()
+    assert count == 1
+
+
 def test_validate_record_valid():
     now = datetime.now(timezone.utc)
     row = (1, now, "aa:bb:cc:dd:ee:ff", "uas-001", None, 37.7749, -122.4194, 100.0, None, None, None)
@@ -427,6 +526,45 @@ def test_get_geozone_event_history_orders_by_entered_desc(db):
     # Most recent first
     assert events[0]["geozone_name"] == "ZoneB"
     assert events[1]["geozone_name"] == "ZoneA"
+
+
+def test_enter_geozone_creates_only_one_active_event(db):
+    """Entering an already-active geozone is a no-op, not a duplicate row."""
+    now = datetime.now(timezone.utc)
+    event_id, created = db.enter_geozone("drone-001", "ZoneA", now)
+    assert created is True
+    event_id2, created2 = db.enter_geozone(
+        "drone-001", "ZoneA", now + timedelta(seconds=10)
+    )
+    assert created2 is False
+    assert event_id2 == event_id
+    active = db.get_active_geozone_events()
+    assert len(active) == 1
+    assert active[0]["id"] == event_id
+
+
+def test_enter_geozone_allows_reentry_after_exit(db):
+    """Exiting closes the event so a later entry creates a fresh one."""
+    now = datetime.now(timezone.utc)
+    event_id, created = db.enter_geozone("drone-001", "ZoneA", now)
+    assert created is True
+    db.exit_geozone(event_id, now + timedelta(seconds=30))
+    event_id2, created2 = db.enter_geozone(
+        "drone-001", "ZoneA", now + timedelta(seconds=60)
+    )
+    assert created2 is True
+    assert event_id2 != event_id
+    active = db.get_active_geozone_events()
+    assert len(active) == 1
+    assert active[0]["id"] == event_id2
+
+
+def test_exit_geozone_is_atomic(db):
+    """Only the first exit transition returns rowcount 1."""
+    now = datetime.now(timezone.utc)
+    event_id, _ = db.enter_geozone("drone-001", "ZoneA", now)
+    assert db.exit_geozone(event_id, now + timedelta(seconds=30)) == 1
+    assert db.exit_geozone(event_id, now + timedelta(seconds=60)) == 0
 
 
 # --- Stats tests ---

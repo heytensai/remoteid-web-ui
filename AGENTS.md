@@ -56,7 +56,7 @@ This file is the user's personal, gitignored configuration. Even if it contains 
 
 ## Database Schema Versioning
 
-The database uses a lightweight integer-based versioning system tracked in the `_schema_version` table. Current schema version: **7**.
+The database uses a lightweight integer-based versioning system tracked in the `_schema_version` table. Current schema version: **8**.
 
 ### How It Works
 
@@ -93,6 +93,28 @@ def _migrate(conn, from_version, to_version):
 ```
 
 The `_schema_version` table records each migration step so any gap between the current version and the target is closed in order.
+
+### Migration History
+
+- **v7** (current for `latest_positions` era): adds `idx_sync_log_source`.
+- **v8**: adds the `sent_alerts` table and the partial unique index
+  `idx_geozone_events_active_unique ON geozone_events(uas_id, geozone_name) WHERE exited_at IS NULL`.
+  These back **cross-process alert dedup** — required because gunicorn forks a
+  private copy of `AlertEngine` into each worker, so in-memory cooldowns/known-session
+  maps are per-process and the same `(uas_id, session_id)` event could fire twice.
+  - `sent_alerts` makes session/new-drone alerts idempotent via an atomic
+    `INSERT OR IGNORE` claim on a unique `(alert_type, dedup_key)` constraint
+    (`WebDatabase.claim_alert`). Rows are intentionally kept forever — they are
+    tiny and the dedup must survive restarts.
+  - The partial unique index guarantees at most one active geozone event per
+    `(uas_id, geozone_name)`, so `enter_geozone` (INSERT OR IGNORE) returns
+    `(event_id, created)` and only the process that actually creates the event
+    fires the alert; `exit_geozone` returns the UPDATE rowcount with an
+    `exited_at IS NULL` guard so only the first exiter fires.
+  - Migration v8 also closes any duplicate active geozone events left behind by
+    the pre-fix per-process race before creating the unique index (same cleanup
+    runs idempotently in `_init_db()`).
+
 
 ## Code Style Guidelines
 
