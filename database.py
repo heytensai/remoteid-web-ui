@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger(__name__)
 
 # Current schema version — bump this and add a migration in _migrate()
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def _adapt_datetime(dt: datetime) -> str:
@@ -138,6 +138,24 @@ class WebDatabase:
         """
         )
 
+        # Create sent_alerts table for cross-process alert deduplication.
+        # The unique (alert_type, dedup_key) constraint makes the first
+        # INSERT OR IGNORE claim the alert atomically across all gunicorn
+        # workers, so the same event can never fire twice.
+        conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sent_alerts(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            alert_type TEXT NOT NULL,
+            dedup_key TEXT NOT NULL,
+            uas_id TEXT,
+            session_id TEXT,
+            sent_at DATETIME NOT NULL,
+            UNIQUE (alert_type, dedup_key)
+        )
+        """
+        )
+
         # Create collector positions table
         conn.execute(
         """
@@ -204,6 +222,32 @@ class WebDatabase:
         conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_geozone_events_stale "
         "ON geozone_events(exited_at, last_seen_at)"
+        )
+        # At most one active event per (uas_id, geozone_name). Closing any
+        # duplicates left by older per-process races must happen before the
+        # unique index is created, otherwise the CREATE would fail on
+        # databases that accumulated duplicate active events.
+        conn.execute(
+            """
+            UPDATE geozone_events
+            SET exited_at = last_seen_at, exited_reason = 'deduplicated'
+            WHERE id IN (
+                SELECT id FROM (
+                    SELECT id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY uas_id, geozone_name
+                               ORDER BY entered_at DESC
+                           ) AS rn
+                    FROM geozone_events
+                    WHERE exited_at IS NULL
+                )
+                WHERE rn > 1
+            )
+            """
+        )
+        conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_geozone_events_active_unique "
+        "ON geozone_events(uas_id, geozone_name) WHERE exited_at IS NULL"
         )
         conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_auth_tokens_hash "
@@ -353,6 +397,48 @@ class WebDatabase:
                 "ON sync_log(source, last_sync)"
             )
             from_version = 7
+
+        if from_version == 7:
+            # Cross-process alert dedup + atomic geozone event lifecycle.
+            # The table/index are also created idempotently in _init_db(),
+            # but are repeated here so upgrades are versioned and the
+            # duplicate-active-event cleanup is part of the migration.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sent_alerts(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    alert_type TEXT NOT NULL,
+                    dedup_key TEXT NOT NULL,
+                    uas_id TEXT,
+                    session_id TEXT,
+                    sent_at DATETIME NOT NULL,
+                    UNIQUE (alert_type, dedup_key)
+                )
+                """
+            )
+            conn.execute(
+                """
+                UPDATE geozone_events
+                SET exited_at = last_seen_at, exited_reason = 'deduplicated'
+                WHERE id IN (
+                    SELECT id FROM (
+                        SELECT id,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY uas_id, geozone_name
+                                   ORDER BY entered_at DESC
+                               ) AS rn
+                        FROM geozone_events
+                        WHERE exited_at IS NULL
+                    )
+                    WHERE rn > 1
+                )
+                """
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_geozone_events_active_unique "
+                "ON geozone_events(uas_id, geozone_name) WHERE exited_at IS NULL"
+            )
+            from_version = 8
 
     @staticmethod
     def _ensure_latest_positions_table(conn: sqlite3.Connection):
@@ -1748,6 +1834,36 @@ class WebDatabase:
         )
         return {row[0]: row[1] for row in cursor.fetchall()}
 
+    # --- Alert dedup helpers ---
+
+    def claim_alert(
+        self,
+        alert_type: str,
+        dedup_key: str,
+        uas_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> bool:
+        """Atomically claim the right to fire an alert for *dedup_key*.
+
+        Uses ``INSERT OR IGNORE`` against the unique ``(alert_type, dedup_key)``
+        constraint on ``sent_alerts``. Returns True only for the first caller
+        across all processes and threads; every later caller for the same key
+        gets False. This makes alert deduplication shared and restart-safe
+        instead of per-process in-memory state, which is what caused duplicate
+        notifications under gunicorn's forked workers.
+        """
+        conn = self._get_conn()
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO sent_alerts
+                (alert_type, dedup_key, uas_id, session_id, sent_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (alert_type, dedup_key, uas_id, session_id, datetime.now(timezone.utc)),
+        )
+        self._commit(conn)
+        return cursor.rowcount == 1
+
     # --- Geozone event methods ---
 
     def get_active_geozone_events(self) -> List[Dict]:
@@ -1779,18 +1895,38 @@ class WebDatabase:
 
     def enter_geozone(
         self, uas_id: str, geozone_name: str, timestamp: datetime
-    ) -> int:
-        """Create a new geozone entry event. Returns event id."""
+    ) -> Tuple[int, bool]:
+        """Create a new geozone entry event if no active event exists.
+
+        Atomic across processes: the partial unique index
+        ``idx_geozone_events_active_unique`` guarantees at most one active
+        event per ``(uas_id, geozone_name)``, so exactly one caller observes
+        ``created=True`` and fires the entry notification.
+
+        Returns ``(event_id, created)`` where *created* is False when an
+        active event already exists (and *event_id* is that existing event).
+        """
         conn = self._get_conn()
         cursor = conn.execute(
             """
-            INSERT INTO geozone_events (uas_id, geozone_name, entered_at, last_seen_at)
+            INSERT OR IGNORE INTO geozone_events (uas_id, geozone_name, entered_at, last_seen_at)
             VALUES (?, ?, ?, ?)
             """,
             (uas_id, geozone_name, timestamp, timestamp),
         )
+        if cursor.rowcount == 1:
+            event_id = cursor.lastrowid
+            created = True
+        else:
+            row = conn.execute(
+                "SELECT id FROM geozone_events "
+                "WHERE uas_id = ? AND geozone_name = ? AND exited_at IS NULL",
+                (uas_id, geozone_name),
+            ).fetchone()
+            event_id = row[0]
+            created = False
         self._commit(conn)
-        return cursor.lastrowid
+        return event_id, created
 
     def update_geozone_last_seen(self, event_id: int, timestamp: datetime):
         """Update last_seen_at for an active event."""
@@ -1801,14 +1937,22 @@ class WebDatabase:
         )
         self._commit(conn)
 
-    def exit_geozone(self, event_id: int, timestamp: datetime, reason: str = "left"):
-        """Mark a geozone event as exited."""
+    def exit_geozone(self, event_id: int, timestamp: datetime, reason: str = "left") -> int:
+        """Mark a geozone event as exited.
+
+        Returns 1 if this call performed the exit, 0 if the event was already
+        exited. The ``exited_at IS NULL`` guard makes the transition atomic
+        across processes — only the first caller sees rowcount 1 and fires the
+        exit notification.
+        """
         conn = self._get_conn()
-        conn.execute(
-            "UPDATE geozone_events SET exited_at = ?, exited_reason = ? WHERE id = ?",
+        cursor = conn.execute(
+            "UPDATE geozone_events SET exited_at = ?, exited_reason = ? "
+            "WHERE id = ? AND exited_at IS NULL",
             (timestamp, reason, event_id),
         )
         self._commit(conn)
+        return cursor.rowcount
 
     def get_geozone_event_history(
         self,

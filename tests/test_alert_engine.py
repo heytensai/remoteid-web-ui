@@ -702,3 +702,136 @@ def test_proximity_imperial_config():
 
     os.unlink(path)
     os.unlink(db_path)
+
+
+# --- Cross-process (multi-worker) dedup tests ---
+#
+# gunicorn forks a private copy of the AlertEngine into each worker, so the
+# in-memory _known_sessions/cooldown dicts are per-process. These tests
+# simulate that by running two engine instances over the SAME database and
+# asserting the shared DB-backed dedup lets only one of them fire.
+
+def _make_two_engines(engine_db, engine_config_yaml):
+    config = WebConfig(engine_config_yaml)
+    engine_a = AlertEngine(engine_db, config)
+    engine_b = AlertEngine(engine_db, config)
+    return engine_a, engine_b, config
+
+
+def test_session_alert_fires_once_across_engines(engine_db, engine_config_yaml):
+    """A known drone's session alert fires once even when two workers see it."""
+    engine_a, engine_b, config = _make_two_engines(engine_db, engine_config_yaml)
+    config.drone_aliases["drone-001"] = "Alpha"
+    now = datetime.now(timezone.utc)
+
+    engine_db.insert_remoteid_records("test", [{
+        "timestamp": now.isoformat(),
+        "uas_id": "drone-001",
+        "latitude": 37.78,
+        "longitude": -122.42,
+        "altitude": 100,
+    }])
+
+    calls = []
+    engine_a.on_new_session = lambda uas_id, session_id, fp: calls.append(session_id)
+    engine_b.on_new_session = lambda uas_id, session_id, fp: calls.append(session_id)
+
+    engine_a.evaluate("drone-001", [{"latitude": 37.78, "longitude": -122.42, "timestamp": now}])
+    engine_b.evaluate("drone-001", [{"latitude": 37.78, "longitude": -122.42, "timestamp": now}])
+
+    assert len(calls) == 1
+
+
+def test_unrecognized_drone_fires_once_across_engines(engine_db, engine_config_yaml):
+    """The reported bug: unrecognized_drone fires once even across workers."""
+    engine_a, engine_b, _ = _make_two_engines(engine_db, engine_config_yaml)
+    now = datetime.now(timezone.utc)
+
+    engine_db.insert_remoteid_records("test", [{
+        "timestamp": now.isoformat(),
+        "uas_id": "unknown-drone",
+        "latitude": 37.78,
+        "longitude": -122.42,
+    }])
+
+    calls = []
+    engine_a.on_unrecognized_drone = lambda *args: calls.append(1)
+    engine_b.on_unrecognized_drone = lambda *args: calls.append(1)
+
+    engine_a.evaluate("unknown-drone", [{"latitude": 37.78, "longitude": -122.42, "timestamp": now}])
+    engine_b.evaluate("unknown-drone", [{"latitude": 37.78, "longitude": -122.42, "timestamp": now}])
+
+    assert len(calls) == 1
+
+
+def test_new_flight_still_fires_via_other_engine(engine_db, engine_config_yaml):
+    """A genuinely new flight notifies even when handled by a different worker."""
+    engine_a, engine_b, config = _make_two_engines(engine_db, engine_config_yaml)
+    config.drone_aliases["drone-001"] = "Alpha"
+    now = datetime.now(timezone.utc)
+
+    # First flight, seen by engine A
+    engine_db.insert_remoteid_records("test", [{
+        "timestamp": (now - timedelta(hours=3)).isoformat(),
+        "uas_id": "drone-001",
+        "latitude": 37.78,
+        "longitude": -122.42,
+    }])
+    old_session = engine_db.get_latest_session_id("drone-001")
+    engine_a.evaluate("drone-001", [
+        {"latitude": 37.78, "longitude": -122.42, "timestamp": now - timedelta(hours=3)},
+    ])
+
+    # Second flight (gap > 600s), seen only by engine B
+    engine_db.insert_remoteid_records("test", [{
+        "timestamp": now.isoformat(),
+        "uas_id": "drone-001",
+        "latitude": 37.78,
+        "longitude": -122.42,
+    }])
+
+    calls = []
+    engine_b.on_new_session = lambda uas_id, session_id, fp: calls.append(session_id)
+    engine_b.evaluate("drone-001", [
+        {"latitude": 37.78, "longitude": -122.42, "timestamp": now},
+    ])
+
+    assert len(calls) == 1
+    assert calls[0] != old_session
+
+
+def test_geozone_enter_fires_once_across_engines(engine_db, engine_config_yaml):
+    """Concurrent workers evaluating an entry create one event and one alert."""
+    engine_a, engine_b, _ = _make_two_engines(engine_db, engine_config_yaml)
+    now = datetime.now(timezone.utc)
+    pos = {"latitude": 37.78, "longitude": -122.42, "timestamp": now}
+
+    calls = []
+    engine_a.on_new_alert = lambda uas_id, gz: calls.append((uas_id, gz))
+    engine_b.on_new_alert = lambda uas_id, gz: calls.append((uas_id, gz))
+
+    engine_a.evaluate("drone-001", [pos])
+    engine_b.evaluate("drone-001", [pos])
+
+    assert len(calls) == 1
+    events = engine_db.get_active_geozone_events()
+    assert len(events) == 1
+
+
+def test_geozone_exit_fires_once_across_engines(engine_db, engine_config_yaml):
+    """Concurrent workers evaluating an exit fire the alert only once."""
+    engine_a, engine_b, _ = _make_two_engines(engine_db, engine_config_yaml)
+    now = datetime.now(timezone.utc)
+    inside = {"latitude": 37.78, "longitude": -122.42, "timestamp": now}
+    outside = {"latitude": 38.0, "longitude": -122.0, "timestamp": now + timedelta(seconds=60)}
+
+    engine_a.evaluate("drone-001", [inside])
+
+    calls = []
+    engine_a.on_geozone_exit = lambda uas_id, gz: calls.append((uas_id, gz))
+    engine_b.on_geozone_exit = lambda uas_id, gz: calls.append((uas_id, gz))
+
+    engine_a.evaluate("drone-001", [outside])
+    engine_b.evaluate("drone-001", [outside])
+
+    assert len(calls) == 1

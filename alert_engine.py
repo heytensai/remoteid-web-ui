@@ -189,9 +189,11 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
         Queries the latest ``computed_session_id`` from the database and
         compares it against the internally tracked value for this UAS.
         A difference means either a first flight or a new flight after a gap.
-        Uses a per-uas_id cooldown to prevent duplicate alerts when session
-        detection regenerates IDs (the scheduler runs every ~30s, changing
-        all session UUIDs).
+        The in-memory ``_known_sessions`` map is only a fast path — the
+        authoritative dedup is an atomic ``INSERT OR IGNORE`` claim on the
+        shared ``sent_alerts`` table, so a ``(uas_id, session_id)`` event
+        fires exactly once even when multiple gunicorn workers each hold
+        their own forked copy of this engine.
 
         For unrecognized drones (no alias), ``on_unrecognized_drone`` fires
         instead of ``on_new_session`` so that notification targets only
@@ -203,35 +205,48 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
         if self._known_sessions.get(uas_id) == session_id:
             return
         now = time.monotonic()
-        cooldown = self._config.alerts.cooldown.get("new_session", 300)
-        last_fired = self._session_alert_cooldown.get(uas_id)
+        first_pos = positions[0] if positions else None
+
+        if uas_id not in self._config.drone_aliases:
+            event_type = "unrecognized_drone"
+            cooldown = self._config.alerts.cooldown.get("unrecognized_drone", 300)
+            cooldown_store = self._unrecognized_drone_cooldown
+            callback = self.on_unrecognized_drone
+        else:
+            event_type = "new_session"
+            cooldown = self._config.alerts.cooldown.get("new_session", 300)
+            cooldown_store = self._session_alert_cooldown
+            callback = self.on_new_session
+
+        last_fired = cooldown_store.get(uas_id)
         if last_fired is not None and (now - last_fired) < cooldown:
             logger.debug(
-                "Skipping duplicate new session alert for %s: %s (cooldown %ds)",
-                uas_id, session_id, cooldown,
+                "Skipping duplicate %s alert for %s: %s (cooldown %ds)",
+                event_type, uas_id, session_id, cooldown,
             )
+            self._known_sessions[uas_id] = session_id
             return
+
+        # Cross-process authoritative dedup: the first process to claim
+        # (uas_id, session_id) is the only one that fires, even when each
+        # gunicorn worker has its own copy of this engine.
+        if not self._db.claim_alert(
+            event_type, f"{uas_id}:{session_id}",
+            uas_id=uas_id, session_id=session_id,
+        ):
+            logger.debug(
+                "Skipping %s alert for %s: %s (already fired)",
+                event_type, uas_id, session_id,
+            )
+            self._known_sessions[uas_id] = session_id
+            return
+
+        cooldown_store[uas_id] = now
         self._known_sessions[uas_id] = session_id
-        self._session_alert_cooldown[uas_id] = now
-        first_pos = positions[0] if positions else None
         logger.info(
             "New session for %s: %s", uas_id, session_id,
         )
-
-        # Unrecognized drone takes priority over new_session — fire only one
-        if uas_id not in self._config.drone_aliases:
-            udr_cooldown = self._config.alerts.cooldown.get("unrecognized_drone", 300)
-            last_fired = self._unrecognized_drone_cooldown.get(uas_id)
-            if last_fired is not None and (now - last_fired) < udr_cooldown:
-                logger.debug(
-                    "Skipping unrecognized drone alert for %s (cooldown %ds)",
-                    uas_id, udr_cooldown,
-                )
-            else:
-                self._unrecognized_drone_cooldown[uas_id] = now
-                self._fire(self.on_unrecognized_drone, uas_id, session_id, first_pos)
-        else:
-            self._fire(self.on_new_session, uas_id, session_id, first_pos)
+        self._fire(callback, uas_id, session_id, first_pos)
 
     # --- Geozone evaluation ---
 
@@ -266,51 +281,56 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
 
     def _handle_entry(self, uas_id: str, geozone_name: str, timestamp: datetime):
         """Called when a position is inside a geozone. Creates or updates event."""
-        events = self._db.get_geozone_events_for_uas(uas_id)
-        active = [e for e in events if e["geozone_name"] == geozone_name and e["exited_at"] is None]
-        if active:
-            self._db.update_geozone_last_seen(active[0]["id"], timestamp)
-        else:
-            self._db.enter_geozone(uas_id, geozone_name, timestamp)
-            logger.info(
-                "ALERT: %s entered geozone '%s' at %s",
-                uas_id, geozone_name, timestamp.isoformat(),
+        # Atomic across processes: only the caller that actually creates the
+        # new event row fires the notification, so concurrent gunicorn
+        # workers evaluating the same packet cannot double-notify.
+        event_id, created = self._db.enter_geozone(uas_id, geozone_name, timestamp)
+        if not created:
+            self._db.update_geozone_last_seen(event_id, timestamp)
+            return
+        logger.info(
+            "ALERT: %s entered geozone '%s' at %s",
+            uas_id, geozone_name, timestamp.isoformat(),
+        )
+        cooldown_key = f"geozone_enter:{uas_id}:{geozone_name}"
+        now = time.monotonic()
+        cooldown = self._config.alerts.cooldown.get("geozone_enter", 300)
+        last_fired = self._geozone_alert_cooldown.get(cooldown_key)
+        if last_fired is not None and (now - last_fired) < cooldown:
+            logger.debug(
+                "Skipping geozone_enter alert for %s/%s (cooldown %ds)",
+                uas_id, geozone_name, cooldown,
             )
-            cooldown_key = f"{uas_id}:{geozone_name}"
-            now = time.monotonic()
-            cooldown = self._config.alerts.cooldown.get("geozone_enter", 300)
-            last_fired = self._geozone_alert_cooldown.get(cooldown_key)
-            if last_fired is not None and (now - last_fired) < cooldown:
-                logger.debug(
-                    "Skipping geozone_enter alert for %s/%s (cooldown %ds)",
-                    uas_id, geozone_name, cooldown,
-                )
-            else:
-                self._geozone_alert_cooldown[cooldown_key] = now
-                self._fire(self.on_new_alert, uas_id, geozone_name)
+        else:
+            self._geozone_alert_cooldown[cooldown_key] = now
+            self._fire(self.on_new_alert, uas_id, geozone_name)
 
     def _handle_exit(self, uas_id: str, geozone_name: str, timestamp: datetime):
         """Called when a position is outside a geozone. Exits active event."""
         events = self._db.get_geozone_events_for_uas(uas_id)
         active = [e for e in events if e["geozone_name"] == geozone_name and e["exited_at"] is None]
-        if active:
-            self._db.exit_geozone(active[0]["id"], timestamp, "left")
-            logger.info(
-                "ALERT: %s left geozone '%s' at %s",
-                uas_id, geozone_name, timestamp.isoformat(),
+        if not active:
+            return
+        updated = self._db.exit_geozone(active[0]["id"], timestamp, "left")
+        if updated == 0:
+            # Another process already exited this event and fired the alert.
+            return
+        logger.info(
+            "ALERT: %s left geozone '%s' at %s",
+            uas_id, geozone_name, timestamp.isoformat(),
+        )
+        cooldown_key = f"geozone_exit:{uas_id}:{geozone_name}"
+        now = time.monotonic()
+        cooldown = self._config.alerts.cooldown.get("geozone_exit", 300)
+        last_fired = self._geozone_alert_cooldown.get(cooldown_key)
+        if last_fired is not None and (now - last_fired) < cooldown:
+            logger.debug(
+                "Skipping geozone_exit alert for %s/%s (cooldown %ds)",
+                uas_id, geozone_name, cooldown,
             )
-            cooldown_key = f"{uas_id}:{geozone_name}"
-            now = time.monotonic()
-            cooldown = self._config.alerts.cooldown.get("geozone_exit", 300)
-            last_fired = self._geozone_alert_cooldown.get(cooldown_key)
-            if last_fired is not None and (now - last_fired) < cooldown:
-                logger.debug(
-                    "Skipping geozone_exit alert for %s/%s (cooldown %ds)",
-                    uas_id, geozone_name, cooldown,
-                )
-            else:
-                self._geozone_alert_cooldown[cooldown_key] = now
-                self._fire(self.on_geozone_exit, uas_id, geozone_name)
+        else:
+            self._geozone_alert_cooldown[cooldown_key] = now
+            self._fire(self.on_geozone_exit, uas_id, geozone_name)
 
     # --- Drone proximity ---
 
