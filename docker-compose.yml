@@ -8,18 +8,37 @@
 #   docker-compose pull && docker-compose up -d
 
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: remoteid-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: remoteid
+      POSTGRES_USER: remoteid
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    networks:
+      - remoteid-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U remoteid -d remoteid"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   web:
     build: .
     image: remoteid-web:latest
     container_name: remoteid-web
     restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       - "127.0.0.1:5000:5000"
     volumes:
       # Configuration directory (required)
       - ./config:/app/config:ro
-      # Database persistence (bind mount to host directory)
-      - ./data:/app/data
       # only leave this for dev, not prod
       - ./templates:/app/templates
       # only leave this for dev, not prod
@@ -30,6 +49,7 @@ services:
       # Python settings
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
+      - DATABASE_URL=postgresql://remoteid:${POSTGRES_PASSWORD}@db:5432/remoteid
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/config')"]
       interval: 30s

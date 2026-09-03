@@ -1,16 +1,17 @@
-"""Database layer for web interface"""
+"""Database layer for web interface — PostgreSQL backend"""
 # pylint: disable=too-many-lines
 
 import hashlib
 import secrets as _secrets
-import sqlite3
-import threading
 import uuid
 import logging
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from zoneinfo import ZoneInfo
+
+import psycopg2
+import psycopg2.extras
+from psycopg2 import pool
 
 logger = logging.getLogger(__name__)
 
@@ -18,405 +19,224 @@ logger = logging.getLogger(__name__)
 SCHEMA_VERSION = 8
 
 
-def _adapt_datetime(dt: datetime) -> str:
-    """Adapt datetime to ISO format string for SQLite"""
-    return dt.isoformat()
-
-
-def _convert_datetime(s: bytes) -> datetime:
-    """Convert ISO format string from SQLite to datetime"""
-    return datetime.fromisoformat(s.decode())
-
-
-# Register adapters for datetime handling
-sqlite3.register_adapter(datetime, _adapt_datetime)
-sqlite3.register_converter("DATETIME", _convert_datetime)
-
-
 class WebDatabase:
-    """Manages SQLite database for web interface"""
+    """Manages PostgreSQL database for web interface"""
 
-    def __init__(self, db_path: str):
+    def __init__(self, database_url: str):
         """Initialize the web database, creating schema if needed."""
-        self.db_path = Path(db_path)
-        self._tlocal = threading.local()
-        self._write_lock = threading.Lock()
+        self.database_url = database_url
+        self._pool = pool.ThreadedConnectionPool(0, 10, dsn=database_url)
         self._init_db()
 
-    def _commit(self, conn):
-        """Commit a transaction while holding the write lock.
+    def reset_pool(self):
+        """Replace the connection pool with a fresh one forked workers can use.
 
-        Serializing all commits prevents ``database is locked`` errors
-        when multiple threads (gunicorn workers, maintenance scheduler,
-        session detector) write concurrently.  WAL mode still allows
-        concurrent *reads* outside the lock.
+        After ``fork()`` the child inherits the parent's pool. Reusing it is
+        unsafe two ways:
+
+        - its ``psycopg2`` sockets are shared with the parent (protocol
+          corruption when both processes use them), and
+        - its internal ``threading.Lock`` may have been inherited in a
+          **held** state from a master background thread that was mid-use at
+          fork time, so calling ``closeall()``/``getconn()`` on it can
+          deadlock forever.
+
+        The fix is to allocate a brand-new lazy pool (minconn=0, no sockets
+        opened) and replace the reference without ever locking the inherited
+        one. The old pool object is dropped and its inherited file
+        descriptors are never touched by this worker.
+
+        Safe to call multiple times.
         """
-        with self._write_lock:
-            conn.commit()
+        self._pool = pool.ThreadedConnectionPool(0, 10, dsn=self.database_url)
+
+    def _get_conn(self):
+        """Get a connection from the pool.
+
+        The caller MUST return the connection via ``_put_conn()`` when done,
+        ideally in a ``finally`` block.
+        """
+        return self._pool.getconn()
+
+    def _put_conn(self, conn):
+        """Return a connection to the pool."""
+        if conn is not None:
+            self._pool.putconn(conn)
+
+    def _commit(self, conn):
+        """Commit a transaction."""
+        conn.commit()
 
     def _init_db(self):
         """Initialize the database schema"""
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-
         conn = self._get_conn()
-        # Enable WAL mode for better concurrent access
-        conn.execute("PRAGMA journal_mode=WAL")
+        try:
+            conn.autocommit = True
+            cur = conn.cursor()
 
-        # Create remoteid table with source column
-        conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS remoteid(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source TEXT,
-            timestamp DATETIME,
-            mac_address TEXT,
-            uas_id TEXT,
-            session_id TEXT,
-            latitude REAL,
-            longitude REAL,
-            altitude REAL,
-            height REAL,
-            height_type TEXT,
-            operator_id TEXT,
-            operator_latitude REAL,
-            operator_longitude REAL,
-            computed_session_id TEXT,
-            session_detected_at DATETIME,
-            collector_latitude REAL,
-            collector_longitude REAL
-        )
-        """
-        )
-
-        # Create schema version tracking table
-        conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS _schema_version(
-            version INTEGER NOT NULL
-        )
-        """
-        )
-
-        # Create sync log table
-        conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS sync_log(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source TEXT,
-            last_sync DATETIME,
-            records_imported INTEGER
-        )
-        """
-        )
-
-        # Create session tracking table for real-time detection
-        conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS session_tracking(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            uas_id TEXT UNIQUE,
-            last_seen DATETIME,
-            current_session_id TEXT,
-            updated_at DATETIME
-        )
-        """
-        )
-
-        # Create geozone events table for alerting
-        conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS geozone_events(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            uas_id TEXT NOT NULL,
-            geozone_name TEXT NOT NULL,
-            entered_at DATETIME NOT NULL,
-            last_seen_at DATETIME NOT NULL,
-            exited_at DATETIME,
-            exited_reason TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-        )
-
-        # Create sent_alerts table for cross-process alert deduplication.
-        # The unique (alert_type, dedup_key) constraint makes the first
-        # INSERT OR IGNORE claim the alert atomically across all gunicorn
-        # workers, so the same event can never fire twice.
-        conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS sent_alerts(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            alert_type TEXT NOT NULL,
-            dedup_key TEXT NOT NULL,
-            uas_id TEXT,
-            session_id TEXT,
-            sent_at DATETIME NOT NULL,
-            UNIQUE (alert_type, dedup_key)
-        )
-        """
-        )
-
-        # Create collector positions table
-        conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS collector_positions(
-            name TEXT PRIMARY KEY,
-            latitude REAL NOT NULL,
-            longitude REAL NOT NULL,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-        )
-
-        # Create users table
-        conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS users(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            email TEXT,
-            role_name TEXT NOT NULL DEFAULT 'guest',
-            is_ephemeral INTEGER NOT NULL DEFAULT 0,
-            is_active INTEGER NOT NULL DEFAULT 1,
-            login_token_hash TEXT UNIQUE,
-            login_token_expires_at DATETIME,
-            auth_method TEXT NOT NULL DEFAULT 'ephemeral',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-        )
-
-        # Create auth_tokens table
-        conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS auth_tokens(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            token_hash TEXT NOT NULL,
-            expires_at DATETIME NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id)
-        )
-        """
-        )
-
-        # Create indexes
-        conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_uas_time ON remoteid(uas_id, timestamp)"
-        )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_source ON remoteid(source)")
-        conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_uas_time_unique "
-        "ON remoteid(uas_id, timestamp)"
-        )
-        conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_timestamp ON remoteid(timestamp)"
-        )
-        conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_computed_session ON remoteid(computed_session_id)"
-        )
-        conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_geozone_events_active "
-        "ON geozone_events(uas_id, geozone_name, exited_at)"
-        )
-        conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_geozone_events_stale "
-        "ON geozone_events(exited_at, last_seen_at)"
-        )
-        # At most one active event per (uas_id, geozone_name). Closing any
-        # duplicates left by older per-process races must happen before the
-        # unique index is created, otherwise the CREATE would fail on
-        # databases that accumulated duplicate active events.
-        conn.execute(
+            # Create remoteid table
+            cur.execute(
             """
-            UPDATE geozone_events
-            SET exited_at = last_seen_at, exited_reason = 'deduplicated'
-            WHERE id IN (
-                SELECT id FROM (
-                    SELECT id,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY uas_id, geozone_name
-                               ORDER BY entered_at DESC
-                           ) AS rn
-                    FROM geozone_events
-                    WHERE exited_at IS NULL
-                )
-                WHERE rn > 1
+            CREATE TABLE IF NOT EXISTS remoteid(
+                id SERIAL PRIMARY KEY,
+                source TEXT,
+                timestamp TIMESTAMPTZ,
+                mac_address TEXT,
+                uas_id TEXT,
+                session_id TEXT,
+                latitude DOUBLE PRECISION,
+                longitude DOUBLE PRECISION,
+                altitude DOUBLE PRECISION,
+                height DOUBLE PRECISION,
+                height_type TEXT,
+                operator_id TEXT,
+                operator_latitude DOUBLE PRECISION,
+                operator_longitude DOUBLE PRECISION,
+                computed_session_id TEXT,
+                session_detected_at TIMESTAMPTZ,
+                collector_latitude DOUBLE PRECISION,
+                collector_longitude DOUBLE PRECISION
             )
             """
-        )
-        conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_geozone_events_active_unique "
-        "ON geozone_events(uas_id, geozone_name) WHERE exited_at IS NULL"
-        )
-        conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_auth_tokens_hash "
-        "ON auth_tokens(token_hash)"
-        )
-        conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_auth_tokens_user "
-        "ON auth_tokens(user_id)"
-        )
-
-        # Materialized latest_positions table — O(sessions) instead of O(rows)
-        conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS latest_positions(
-            uas_id TEXT NOT NULL,
-            computed_session_id TEXT NOT NULL DEFAULT '',
-            max_ts DATETIME NOT NULL,
-            min_ts DATETIME NOT NULL,
-            latitude REAL,
-            longitude REAL,
-            altitude REAL,
-            height REAL,
-            height_type TEXT,
-            max_height REAL,
-            operator_id TEXT,
-            operator_latitude REAL,
-            operator_longitude REAL,
-            source TEXT,
-            collector_latitude REAL,
-            collector_longitude REAL,
-            PRIMARY KEY (uas_id, computed_session_id)
-        )
-        """
-        )
-        conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_lp_max_ts "
-        "ON latest_positions(max_ts)"
-        )
-
-        self._commit(conn)
-        self._ensure_schema_version(conn)
-        self._ensure_latest_positions_backfilled(conn)
-        logger.debug("Database initialized at %s", self.db_path)
-
-    def _ensure_schema_version(self, conn: sqlite3.Connection):
-        """Check the schema version and apply any pending migrations.
-
-        The ``_schema_version`` table is guaranteed to exist by
-        ``_init_db()`` (``CREATE TABLE IF NOT EXISTS``).
-        """
-        current = conn.execute(
-            "SELECT COALESCE(MAX(version), 0) FROM _schema_version"
-        ).fetchone()[0]
-
-        if current < SCHEMA_VERSION:
-            self._migrate(conn, current, SCHEMA_VERSION)
-            conn.execute(
-                "INSERT INTO _schema_version (version) VALUES (?)",
-                (SCHEMA_VERSION,),
             )
-            self._commit(conn)
 
-    @staticmethod
-    def _migrate(  # pylint: disable=unused-argument
-        conn: sqlite3.Connection, from_version: int, to_version: int
-    ):
-        """Apply schema migrations between *from_version* and *to_version*.
+            # Create schema version tracking table
+            cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS _schema_version(
+                version INTEGER NOT NULL UNIQUE
+            )
+            """
+            )
 
-        Each ``if version == X`` branch applies the changes needed to go
-        from version X to version X+1.  The version table is updated
-        separately by the caller.
-        """
-        if from_version == 1:
-            conn.execute(
+            # Create sync log table
+            cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sync_log(
+                id SERIAL PRIMARY KEY,
+                source TEXT,
+                last_sync TIMESTAMPTZ,
+                records_imported INTEGER
+            )
+            """
+            )
+
+            # Create session tracking table for real-time detection
+            cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS session_tracking(
+                id SERIAL PRIMARY KEY,
+                uas_id TEXT UNIQUE,
+                last_seen TIMESTAMPTZ,
+                current_session_id TEXT,
+                updated_at TIMESTAMPTZ
+            )
+            """
+            )
+
+            # Create geozone events table for alerting
+            cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS geozone_events(
+                id SERIAL PRIMARY KEY,
+                uas_id TEXT NOT NULL,
+                geozone_name TEXT NOT NULL,
+                entered_at TIMESTAMPTZ NOT NULL,
+                last_seen_at TIMESTAMPTZ NOT NULL,
+                exited_at TIMESTAMPTZ,
+                exited_reason TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+            """
+            )
+
+            # Create sent_alerts table for cross-process alert deduplication.
+            cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sent_alerts(
+                id SERIAL PRIMARY KEY,
+                alert_type TEXT NOT NULL,
+                dedup_key TEXT NOT NULL,
+                uas_id TEXT,
+                session_id TEXT,
+                sent_at TIMESTAMPTZ NOT NULL,
+                UNIQUE (alert_type, dedup_key)
+            )
+            """
+            )
+
+            # Create collector positions table
+            cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS collector_positions(
+                name TEXT PRIMARY KEY,
+                latitude DOUBLE PRECISION NOT NULL,
+                longitude DOUBLE PRECISION NOT NULL,
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+            """
+            )
+
+            # Create users table
+            cur.execute(
             """
             CREATE TABLE IF NOT EXISTS users(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 name TEXT NOT NULL,
                 email TEXT,
                 role_name TEXT NOT NULL DEFAULT 'guest',
                 is_ephemeral INTEGER NOT NULL DEFAULT 0,
                 is_active INTEGER NOT NULL DEFAULT 1,
                 login_token_hash TEXT UNIQUE,
-                login_token_expires_at DATETIME,
+                login_token_expires_at TIMESTAMPTZ,
                 auth_method TEXT NOT NULL DEFAULT 'ephemeral',
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMPTZ DEFAULT NOW()
             )
             """
             )
-            conn.execute(
+
+            # Create auth_tokens table
+            cur.execute(
             """
             CREATE TABLE IF NOT EXISTS auth_tokens(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 token_hash TEXT NOT NULL,
-                expires_at DATETIME NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
                 FOREIGN KEY (user_id) REFERENCES users(id)
             )
             """
             )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_auth_tokens_hash "
-                "ON auth_tokens(token_hash)"
+
+            # Create indexes
+            cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_uas_time ON remoteid(uas_id, timestamp)"
             )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_auth_tokens_user "
-                "ON auth_tokens(user_id)"
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_source ON remoteid(source)")
+            cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_uas_time_unique "
+            "ON remoteid(uas_id, timestamp)"
             )
-            from_version = 2
-
-        if from_version == 2:
-            WebDatabase._ensure_latest_positions_table(conn)
-            WebDatabase._backfill_latest_positions(conn)
-            from_version = 3
-
-        if from_version == 3:
-            for table in ("remoteid", "latest_positions"):
-                try:
-                    conn.execute(f"ALTER TABLE {table} ADD COLUMN height REAL")
-                except sqlite3.OperationalError:
-                    pass  # column already exists
-                try:
-                    conn.execute(f"ALTER TABLE {table} ADD COLUMN height_type TEXT")
-                except sqlite3.OperationalError:
-                    pass
-            from_version = 4
-
-        if from_version == 4:
-            conn.execute("DROP TABLE IF EXISTS push_subscriptions")
-            from_version = 5
-
-        if from_version == 5:
-            try:
-                conn.execute(
-                    "ALTER TABLE latest_positions ADD COLUMN max_height REAL"
-                )
-            except sqlite3.OperationalError:
-                pass  # column already exists
-            conn.execute("DELETE FROM latest_positions")
-            WebDatabase._backfill_latest_positions(conn)
-            from_version = 6
-
-        if from_version == 6:
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_sync_log_source "
-                "ON sync_log(source, last_sync)"
+            cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_timestamp ON remoteid(timestamp)"
             )
-            from_version = 7
-
-        if from_version == 7:
-            # Cross-process alert dedup + atomic geozone event lifecycle.
-            # The table/index are also created idempotently in _init_db(),
-            # but are repeated here so upgrades are versioned and the
-            # duplicate-active-event cleanup is part of the migration.
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS sent_alerts(
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    alert_type TEXT NOT NULL,
-                    dedup_key TEXT NOT NULL,
-                    uas_id TEXT,
-                    session_id TEXT,
-                    sent_at DATETIME NOT NULL,
-                    UNIQUE (alert_type, dedup_key)
-                )
-                """
+            cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_computed_session ON remoteid(computed_session_id)"
             )
-            conn.execute(
+            cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_geozone_events_active "
+            "ON geozone_events(uas_id, geozone_name, exited_at)"
+            )
+            cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_geozone_events_stale "
+            "ON geozone_events(exited_at, last_seen_at)"
+            )
+            # At most one active event per (uas_id, geozone_name). Closing any
+            # duplicates left by older per-process races must happen before the
+            # unique index is created, otherwise the CREATE would fail on
+            # databases that accumulated duplicate active events.
+            cur.execute(
                 """
                 UPDATE geozone_events
                 SET exited_at = last_seen_at, exited_reason = 'deduplicated'
@@ -434,62 +254,268 @@ class WebDatabase:
                 )
                 """
             )
-            conn.execute(
+            cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_geozone_events_active_unique "
+            "ON geozone_events(uas_id, geozone_name) WHERE exited_at IS NULL"
+            )
+            cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_auth_tokens_hash "
+            "ON auth_tokens(token_hash)"
+            )
+            cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_auth_tokens_user "
+            "ON auth_tokens(user_id)"
+            )
+            cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sync_log_source "
+            "ON sync_log(source, last_sync)"
+            )
+
+            # Materialized latest_positions table — O(sessions) instead of O(rows)
+            cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS latest_positions(
+                uas_id TEXT NOT NULL,
+                computed_session_id TEXT NOT NULL DEFAULT '',
+                max_ts TIMESTAMPTZ NOT NULL,
+                min_ts TIMESTAMPTZ NOT NULL,
+                latitude DOUBLE PRECISION,
+                longitude DOUBLE PRECISION,
+                altitude DOUBLE PRECISION,
+                height DOUBLE PRECISION,
+                height_type TEXT,
+                max_height DOUBLE PRECISION,
+                operator_id TEXT,
+                operator_latitude DOUBLE PRECISION,
+                operator_longitude DOUBLE PRECISION,
+                source TEXT,
+                collector_latitude DOUBLE PRECISION,
+                collector_longitude DOUBLE PRECISION,
+                PRIMARY KEY (uas_id, computed_session_id)
+            )
+            """
+            )
+            cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lp_max_ts "
+            "ON latest_positions(max_ts)"
+            )
+
+            conn.autocommit = False
+            self._ensure_schema_version(conn)
+            self._ensure_latest_positions_backfilled(conn)
+            self._commit(conn)
+            logger.debug("Database initialized")
+        finally:
+            self._put_conn(conn)
+
+    def _ensure_schema_version(self, conn):
+        """Check the schema version and apply any pending migrations."""
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COALESCE(MAX(version), 0) FROM _schema_version"
+        )
+        current = cur.fetchone()[0]
+
+        if current < SCHEMA_VERSION:
+            self._migrate(conn, current, SCHEMA_VERSION)
+            cur.execute(
+                "INSERT INTO _schema_version (version) VALUES (%s) "
+                "ON CONFLICT (version) DO NOTHING",
+                (SCHEMA_VERSION,),
+            )
+            self._commit(conn)
+
+    @staticmethod
+    def _column_exists(cur, table: str, column: str) -> bool:
+        """Return True if *table* has *column* (via information_schema).
+
+        Used instead of attempting an ALTER and catching DuplicateColumn,
+        which would abort the surrounding transaction.
+        """
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = %s AND column_name = %s",
+            (table, column),
+        )
+        return cur.fetchone() is not None
+
+    @staticmethod
+    def _migrate(  # pylint: disable=unused-argument
+        conn, from_version: int, to_version: int
+    ):
+        """Apply schema migrations between *from_version* and *to_version*.
+
+        Each ``if version == X`` branch applies the changes needed to go
+        from version X to version X+1.  The version table is updated
+        separately by the caller.
+        """
+        cur = conn.cursor()
+
+        if from_version == 1:
+            cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users(
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                email TEXT,
+                role_name TEXT NOT NULL DEFAULT 'guest',
+                is_ephemeral INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                login_token_hash TEXT UNIQUE,
+                login_token_expires_at TIMESTAMPTZ,
+                auth_method TEXT NOT NULL DEFAULT 'ephemeral',
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+            """
+            )
+            cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auth_tokens(
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                token_hash TEXT NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+            """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_auth_tokens_hash "
+                "ON auth_tokens(token_hash)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_auth_tokens_user "
+                "ON auth_tokens(user_id)"
+            )
+            from_version = 2
+
+        if from_version == 2:
+            WebDatabase._ensure_latest_positions_table(cur)
+            WebDatabase._backfill_latest_positions(cur)
+            from_version = 3
+
+        if from_version == 3:
+            for table in ("remoteid", "latest_positions"):
+                if not WebDatabase._column_exists(cur, table, "height"):
+                    cur.execute(
+                        f"ALTER TABLE {table} ADD COLUMN height DOUBLE PRECISION"
+                    )
+                if not WebDatabase._column_exists(cur, table, "height_type"):
+                    cur.execute(f"ALTER TABLE {table} ADD COLUMN height_type TEXT")
+            from_version = 4
+
+        if from_version == 4:
+            cur.execute("DROP TABLE IF EXISTS push_subscriptions")
+            from_version = 5
+
+        if from_version == 5:
+            if not WebDatabase._column_exists(cur, "latest_positions", "max_height"):
+                cur.execute(
+                    "ALTER TABLE latest_positions ADD COLUMN max_height DOUBLE PRECISION"
+                )
+            cur.execute("DELETE FROM latest_positions")
+            WebDatabase._backfill_latest_positions(cur)
+            from_version = 6
+
+        if from_version == 6:
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sync_log_source "
+                "ON sync_log(source, last_sync)"
+            )
+            from_version = 7
+
+        if from_version == 7:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sent_alerts(
+                    id SERIAL PRIMARY KEY,
+                    alert_type TEXT NOT NULL,
+                    dedup_key TEXT NOT NULL,
+                    uas_id TEXT,
+                    session_id TEXT,
+                    sent_at TIMESTAMPTZ NOT NULL,
+                    UNIQUE (alert_type, dedup_key)
+                )
+                """
+            )
+            cur.execute(
+                """
+                UPDATE geozone_events
+                SET exited_at = last_seen_at, exited_reason = 'deduplicated'
+                WHERE id IN (
+                    SELECT id FROM (
+                        SELECT id,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY uas_id, geozone_name
+                                   ORDER BY entered_at DESC
+                               ) AS rn
+                        FROM geozone_events
+                        WHERE exited_at IS NULL
+                    )
+                    WHERE rn > 1
+                )
+                """
+            )
+            cur.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_geozone_events_active_unique "
                 "ON geozone_events(uas_id, geozone_name) WHERE exited_at IS NULL"
             )
             from_version = 8
 
     @staticmethod
-    def _ensure_latest_positions_table(conn: sqlite3.Connection):
+    def _ensure_latest_positions_table(cur):
         """Create the latest_positions table and index (idempotent)."""
-        conn.execute(
+        cur.execute(
         """
         CREATE TABLE IF NOT EXISTS latest_positions(
             uas_id TEXT NOT NULL,
             computed_session_id TEXT NOT NULL DEFAULT '',
-            max_ts DATETIME NOT NULL,
-            min_ts DATETIME NOT NULL,
-            latitude REAL,
-            longitude REAL,
-            altitude REAL,
-            height REAL,
+            max_ts TIMESTAMPTZ NOT NULL,
+            min_ts TIMESTAMPTZ NOT NULL,
+            latitude DOUBLE PRECISION,
+            longitude DOUBLE PRECISION,
+            altitude DOUBLE PRECISION,
+            height DOUBLE PRECISION,
             height_type TEXT,
-            max_height REAL,
+            max_height DOUBLE PRECISION,
             operator_id TEXT,
-            operator_latitude REAL,
-            operator_longitude REAL,
+            operator_latitude DOUBLE PRECISION,
+            operator_longitude DOUBLE PRECISION,
             source TEXT,
-            collector_latitude REAL,
-            collector_longitude REAL,
+            collector_latitude DOUBLE PRECISION,
+            collector_longitude DOUBLE PRECISION,
             PRIMARY KEY (uas_id, computed_session_id)
         )
         """
         )
-        conn.execute(
+        cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_lp_max_ts "
             "ON latest_positions(max_ts)"
         )
 
-    def _ensure_latest_positions_backfilled(self, conn: sqlite3.Connection):
+    def _ensure_latest_positions_backfilled(self, conn):
         """Safety net: if latest_positions is empty but remoteid has rows, backfill."""
-        remoteid_count = conn.execute("SELECT COUNT(*) FROM remoteid").fetchone()[0]
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM remoteid")
+        remoteid_count = cur.fetchone()[0]
         if remoteid_count == 0:
             return
-        lp_count = conn.execute("SELECT COUNT(*) FROM latest_positions").fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM latest_positions")
+        lp_count = cur.fetchone()[0]
         if lp_count > 0:
             return
         logger.warning(
             "latest_positions is empty but remoteid has %d rows — backfilling",
             remoteid_count,
         )
-        WebDatabase._backfill_latest_positions(conn)
+        WebDatabase._backfill_latest_positions(cur)
         self._commit(conn)
 
     @staticmethod
-    def _backfill_latest_positions(conn: sqlite3.Connection):
+    def _backfill_latest_positions(cur):
         """Populate latest_positions from existing remoteid data (one-time migration)."""
-        conn.execute(
+        cur.execute(
         """
         INSERT INTO latest_positions
             (uas_id, computed_session_id, max_ts, min_ts,
@@ -518,6 +544,7 @@ class WebDatabase:
                 ) as max_height
             FROM remoteid
         )
+        sub
         WHERE rn = 1
         """
         )
@@ -528,68 +555,55 @@ class WebDatabase:
         Called after session re-detection to fix up the materialized table.
         """
         conn = self._get_conn()
-        if uas_ids:
-            placeholders = ','.join('?' for _ in uas_ids)
-            conn.execute(
-                f"DELETE FROM latest_positions WHERE uas_id IN ({placeholders})",
-                uas_ids,
-            )
-            conn.execute(
-                f"""
-                INSERT INTO latest_positions
-                    (uas_id, computed_session_id, max_ts, min_ts,
-                     latitude, longitude, altitude, height, height_type, max_height,
-                     operator_id, operator_latitude, operator_longitude, source,
-                     collector_latitude, collector_longitude)
-                SELECT
-                    uas_id,
-                    COALESCE(computed_session_id, ''),
-                    timestamp,
-                    min_ts,
-                    latitude, longitude, altitude, height, height_type, max_height,
-                    operator_id, operator_latitude, operator_longitude, source,
-                    collector_latitude, collector_longitude
-                FROM (
-                    SELECT *,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY uas_id, COALESCE(computed_session_id, '')
-                            ORDER BY timestamp DESC
-                        ) as rn,
-                        MIN(timestamp) OVER (
-                            PARTITION BY uas_id, COALESCE(computed_session_id, '')
-                        ) as min_ts,
-                        MAX(height) OVER (
-                            PARTITION BY uas_id, COALESCE(computed_session_id, '')
-                        ) as max_height
-                    FROM remoteid
-                    WHERE uas_id IN ({placeholders})
+        try:
+            cur = conn.cursor()
+            if uas_ids:
+                placeholders = ','.join(['%s'] * len(uas_ids))
+                cur.execute(
+                    f"DELETE FROM latest_positions WHERE uas_id IN ({placeholders})",
+                    uas_ids,
                 )
-                WHERE rn = 1
-                """,
-                uas_ids,
-            )
-        else:
-            conn.execute("DELETE FROM latest_positions")
-            self._backfill_latest_positions(conn)
-        self._commit(conn)
-
-    def _get_conn(self) -> sqlite3.Connection:
-        """Get a thread-local database connection, creating one if needed.
-
-        Each calling thread gets its own persistent connection so there is
-        no cross-thread sharing and no repeated connect/disconnect overhead.
-        """
-        conn = getattr(self._tlocal, "conn", None)
-        if conn is None:
-            conn = sqlite3.connect(
-                self.db_path,
-                detect_types=sqlite3.PARSE_DECLTYPES,
-                timeout=10,
-            )
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=10000")
-            self._tlocal.conn = conn
-        return conn
+                cur.execute(
+                    f"""
+                    INSERT INTO latest_positions
+                        (uas_id, computed_session_id, max_ts, min_ts,
+                         latitude, longitude, altitude, height, height_type, max_height,
+                         operator_id, operator_latitude, operator_longitude, source,
+                         collector_latitude, collector_longitude)
+                    SELECT
+                        uas_id,
+                        COALESCE(computed_session_id, ''),
+                        timestamp,
+                        min_ts,
+                        latitude, longitude, altitude, height, height_type, max_height,
+                        operator_id, operator_latitude, operator_longitude, source,
+                        collector_latitude, collector_longitude
+                    FROM (
+                        SELECT *,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY uas_id, COALESCE(computed_session_id, '')
+                                ORDER BY timestamp DESC
+                            ) as rn,
+                            MIN(timestamp) OVER (
+                                PARTITION BY uas_id, COALESCE(computed_session_id, '')
+                            ) as min_ts,
+                            MAX(height) OVER (
+                                PARTITION BY uas_id, COALESCE(computed_session_id, '')
+                            ) as max_height
+                        FROM remoteid
+                        WHERE uas_id IN ({placeholders})
+                    )
+                    sub
+                    WHERE rn = 1
+                    """,
+                    uas_ids,
+                )
+            else:
+                cur.execute("DELETE FROM latest_positions")
+                self._backfill_latest_positions(cur)
+            self._commit(conn)
+        finally:
+            self._put_conn(conn)
 
     @staticmethod
     def _validate_record(row: tuple) -> Optional[tuple]:
@@ -705,11 +719,11 @@ class WebDatabase:
         collector_lat: Optional[float] = None,
         collector_lon: Optional[float] = None,
     ) -> int:
-        # pylint: disable=too-many-locals,too-many-positional-arguments
+        # pylint: disable=too-many-locals,too-many-positional-arguments,too-many-branches
         """Import new records from a collector's database with session detection
 
         Args:
-            source_db_path: Path to the source collector database
+            source_db_path: Path to the source collector database (SQLite)
             source_name: Name of the source collector
             session_gap_threshold: Time gap in seconds to trigger a new session (default: 600)
             source_tz: IANA timezone name (e.g. "America/Denver") to interpret
@@ -718,20 +732,23 @@ class WebDatabase:
             collector_lat: Collector latitude to stamp on each record (optional)
             collector_lon: Collector longitude to stamp on each record (optional)
         """
+        import sqlite3 as _sqlite3  # pylint: disable=import-outside-toplevel
+
         count = 0
         skipped = 0
+        dest_conn = None
         try:
             # Get last sync time for this source
             last_sync = self._get_last_sync(source_name)
 
-            # Connect to source database and query new records
+            # Connect to source SQLite database and query new records
             columns = (
                 "id, timestamp, mac_address, uas_id, session_id, latitude, longitude, "
                 "altitude, operator_id, operator_latitude, operator_longitude"
             )
 
-            with sqlite3.connect(
-                source_db_path, detect_types=sqlite3.PARSE_DECLTYPES, timeout=5
+            with _sqlite3.connect(
+                source_db_path, detect_types=_sqlite3.PARSE_DECLTYPES, timeout=5
             ) as src_conn:
                 if last_sync:
                     cursor = src_conn.execute(
@@ -744,81 +761,95 @@ class WebDatabase:
                         f"SELECT {columns} FROM remoteid ORDER BY uas_id, timestamp"
                     )
 
-                # Import into web database using named parameters
+                # Import into web database using named parameters.
+                # Duplicate (uas_id, timestamp) rows are skipped via the
+                # unique index instead of a SELECT-then-INSERT race.
                 dest_conn = self._get_conn()
                 # Track session state per UAS for this import batch
                 uas_sessions = {}
                 affected_uas_ids = set()
 
                 for row in cursor:
-                    # Skip if already exists (check uas_id + timestamp)
-                    existing = dest_conn.execute(
-                        "SELECT 1 FROM remoteid WHERE uas_id = ? AND timestamp = ?",
-                        (row[3], row[1]),
-                    ).fetchone()
+                    # Validate and sanitize the record
+                    validated = self._validate_record(row)
+                    if validated is None:
+                        skipped += 1
+                        continue
 
-                    if not existing:
-                        # Validate and sanitize the record
-                        validated = self._validate_record(row)
-                        if validated is None:
+                    timestamp = validated[0]
+                    if isinstance(timestamp, str):
+                        try:
+                            timestamp = datetime.fromisoformat(
+                                timestamp.replace("Z", "+00:00")
+                            )
+                        except ValueError:
+                            logger.debug(
+                                "Invalid timestamp %s for uas_id %s, skipping",
+                                validated[0], validated[2],
+                            )
                             skipped += 1
                             continue
-
-                        timestamp = validated[0]
-                        if source_tz and timestamp.tzinfo is None:
+                    if timestamp.tzinfo is None:
+                        if source_tz:
                             timestamp = timestamp.replace(
                                 tzinfo=ZoneInfo(source_tz)
                             ).astimezone(timezone.utc)
-                        uas_id = validated[2]
+                        else:
+                            timestamp = timestamp.replace(tzinfo=timezone.utc)
+                    else:
+                        timestamp = timestamp.astimezone(timezone.utc)
+                    uas_id = validated[2]
 
-                        # Determine computed_session_id based on time gap
-                        computed_session_id = self._detect_session(
-                            dest_conn,
-                            uas_id,
-                            timestamp,
-                            uas_sessions,
-                            session_gap_threshold,
-                        )
+                    # Determine computed_session_id based on time gap
+                    computed_session_id = self._detect_session(
+                        dest_conn,
+                        uas_id,
+                        timestamp,
+                        uas_sessions,
+                        session_gap_threshold,
+                    )
 
-                        dest_conn.execute(
-                            """
-                            INSERT INTO remoteid
-                            (source, timestamp, mac_address, uas_id, session_id,
-                             latitude, longitude, altitude, height, height_type,
-                             operator_id,
-                             operator_latitude, operator_longitude,
-                             computed_session_id, session_detected_at,
-                             collector_latitude, collector_longitude)
-                            VALUES (:source, :timestamp, :mac_address, :uas_id, :session_id,
-                                    :latitude, :longitude, :altitude, :height, :height_type,
-                                    :operator_id,
-                                    :operator_latitude, :operator_longitude,
-                                    :computed_session_id, :session_detected_at,
-                                    :collector_latitude, :collector_longitude)
-                        """,
-                            {
-                                "source": source_name,
-                                "timestamp": timestamp,
-                                "mac_address": validated[1],
-                                "uas_id": uas_id,
-                                "session_id": validated[3],
-                                "latitude": validated[4],
-                                "longitude": validated[5],
-                                "altitude": validated[6],
-                                "height": validated[10],
-                                "height_type": validated[11],
-                                "operator_id": validated[7],
-                                "operator_latitude": validated[8],
-                                "operator_longitude": validated[9],
-                                "computed_session_id": computed_session_id,
-                                "session_detected_at": datetime.now(timezone.utc),
-                                "collector_latitude": collector_lat,
-                                "collector_longitude": collector_lon,
-                            },
-                        )
+                    dest_cur = dest_conn.cursor()
+                    dest_cur.execute(
+                        """
+                        INSERT INTO remoteid
+                        (source, timestamp, mac_address, uas_id, session_id,
+                         latitude, longitude, altitude, height, height_type,
+                         operator_id,
+                         operator_latitude, operator_longitude,
+                         computed_session_id, session_detected_at,
+                         collector_latitude, collector_longitude)
+                        VALUES (%(source)s, %(timestamp)s, %(mac_address)s, %(uas_id)s, %(session_id)s,
+                                %(latitude)s, %(longitude)s, %(altitude)s, %(height)s, %(height_type)s,
+                                %(operator_id)s,
+                                %(operator_latitude)s, %(operator_longitude)s,
+                                %(computed_session_id)s, %(session_detected_at)s,
+                                %(collector_latitude)s, %(collector_longitude)s)
+                        ON CONFLICT (uas_id, timestamp) DO NOTHING
+                    """,
+                        {
+                            "source": source_name,
+                            "timestamp": timestamp,
+                            "mac_address": validated[1],
+                            "uas_id": uas_id,
+                            "session_id": validated[3],
+                            "latitude": validated[4],
+                            "longitude": validated[5],
+                            "altitude": validated[6],
+                            "height": validated[10],
+                            "height_type": validated[11],
+                            "operator_id": validated[7],
+                            "operator_latitude": validated[8],
+                            "operator_longitude": validated[9],
+                            "computed_session_id": computed_session_id,
+                            "session_detected_at": datetime.now(timezone.utc),
+                            "collector_latitude": collector_lat,
+                            "collector_longitude": collector_lon,
+                        },
+                    )
+                    if dest_cur.rowcount == 1:
                         count += 1
                         affected_uas_ids.add(uas_id)
-
                         # Update session tracking for this batch
                         uas_sessions[uas_id] = (timestamp, computed_session_id)
 
@@ -841,31 +872,23 @@ class WebDatabase:
                 logger.info("Imported %d records from %s", count, source_name)
             return count
 
-        except sqlite3.Error as e:
+        except (psycopg2.DatabaseError, _sqlite3.Error) as e:
             logger.error("Database import error from %s: %s", source_name, e)
             return 0
+        finally:
+            if dest_conn is not None:
+                self._put_conn(dest_conn)
 
     def _detect_session(
         self,
-        conn: sqlite3.Connection,
+        conn,
         uas_id: str,
         timestamp: datetime,
         uas_sessions: dict,
         gap_threshold: int,
     ) -> str:
         # pylint: disable=too-many-arguments,too-many-positional-arguments
-        """Detect session based on time gap from last seen record
-
-        Args:
-            conn: Database connection
-            uas_id: The UAS ID
-            timestamp: Current record timestamp
-            uas_sessions: Dictionary tracking session state for current import batch
-            gap_threshold: Gap threshold in seconds
-
-        Returns:
-            Computed session ID string
-        """
+        """Detect session based on time gap from last seen record"""
         # First check if we have this UAS in the current batch
         if uas_id in uas_sessions:
             last_seen, current_session = uas_sessions[uas_id]
@@ -881,12 +904,13 @@ class WebDatabase:
             return new_session
 
         # Check the database for most recent record of this UAS
-        cursor = conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             "SELECT timestamp, computed_session_id FROM remoteid "
-            "WHERE uas_id = ? ORDER BY timestamp DESC LIMIT 1",
+            "WHERE uas_id = %s ORDER BY timestamp DESC LIMIT 1",
             (uas_id,),
         )
-        row = cursor.fetchone()
+        row = cur.fetchone()
 
         if row:
             last_seen = row[0]
@@ -910,10 +934,7 @@ class WebDatabase:
 
     @staticmethod
     def _sanitize_record(record: dict) -> dict:
-        """Sanitize a record for API response, ensuring safe values.
-
-        Converts any non-numeric values to None, ensuring frontend doesn't crash.
-        """
+        """Sanitize a record for API response, ensuring safe values."""
         sanitized = {}
         coord_keys = [
             "latitude",
@@ -952,23 +973,18 @@ class WebDatabase:
 
     @staticmethod
     def _sanitize_timestamp(value) -> Optional[str]:
-        """Sanitize a timestamp value, ensuring timezone info is present.
-
-        Naive datetimes are assumed to be UTC (the standard for stored data).
-        """
+        """Sanitize a timestamp value, ensuring timezone info is present."""
         if value is None:
             return None
         if isinstance(value, datetime):
             if value.tzinfo is None:
                 return value.isoformat() + "Z"
             return value.isoformat()
-        # Handle string values from SQL aggregates - add Z if it looks like a naive datetime
         s = str(value)
         if s and len(s) >= 19:
-            # Check if it matches ISO datetime pattern YYYY-MM-DDTHH:MM:SS
             is_datetime = (s[4] == '-' and s[7] == '-' and s[10] == 'T'
                         and s[13] == ':' and s[16] == ':')
-            has_tz = s.endswith("Z") or "+" in s[-6:]
+            has_tz = s.endswith("Z") or "+" in s[-6:] or "-" in s[-6:]
             if is_datetime and not has_tz:
                 return s + "Z"
         return s
@@ -976,242 +992,256 @@ class WebDatabase:
     def _get_last_sync(self, source_name: str) -> Optional[datetime]:
         """Get the last sync time for a source"""
         conn = self._get_conn()
-        cursor = conn.execute(
-            "SELECT last_sync FROM sync_log WHERE source = ? ORDER BY last_sync DESC LIMIT 1",
-            (source_name,),
-        )
-        row = cursor.fetchone()
-        return row[0] if row else None
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT last_sync FROM sync_log WHERE source = %s ORDER BY last_sync DESC LIMIT 1",
+                (source_name,),
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
+        finally:
+            self._put_conn(conn)
 
     def _update_sync_log(self, source_name: str, count: int):
         """Update the sync log for a source"""
         conn = self._get_conn()
-        conn.execute(
-            "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (?, ?, ?)",
-            (source_name, datetime.now(timezone.utc), count),
-        )
-        self._commit(conn)
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (%s, %s, %s)",
+                (source_name, datetime.now(timezone.utc), count),
+            )
+            self._commit(conn)
+        finally:
+            self._put_conn(conn)
 
     def log_submission(self, source_name: str, records_count: int):
         """Log an HTTP data submission to the sync log"""
         conn = self._get_conn()
-        conn.execute(
-            "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (?, ?, ?)",
-            (source_name, datetime.now(timezone.utc), records_count),
-        )
-        self._commit(conn)
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (%s, %s, %s)",
+                (source_name, datetime.now(timezone.utc), records_count),
+            )
+            self._commit(conn)
+        finally:
+            self._put_conn(conn)
 
     def cleanup_expired_auth_tokens(self) -> int:
-        """Delete session tokens whose expiry has passed.
-
-        Returns the number of rows deleted.
-        """
+        """Delete session tokens whose expiry has passed."""
         conn = self._get_conn()
-        count = conn.execute(
-            "DELETE FROM auth_tokens WHERE expires_at < ?",
-            (datetime.now(timezone.utc),),
-        ).rowcount
-        self._commit(conn)
-        return count
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM auth_tokens WHERE expires_at < %s",
+                (datetime.now(timezone.utc),),
+            )
+            count = cur.rowcount
+            self._commit(conn)
+            return count
+        finally:
+            self._put_conn(conn)
 
     def cleanup_expired_login_tokens(self) -> int:
-        """Delete pre-created user records whose one-time login token has expired.
-
-        This covers both:
-        - Users with an expired login_token_expires_at (login window closed)
-        - Deactivated users (is_active = 0) whose accounts were soft-deleted
-
-        Returns the number of rows deleted.
-        """
+        """Delete pre-created user records whose one-time login token has expired."""
         conn = self._get_conn()
-        count = conn.execute(
-            "DELETE FROM users WHERE login_token_expires_at < ?",
-            (datetime.now(timezone.utc),),
-        ).rowcount
-        # Also clean up dangling auth_tokens for the deleted users
-        # (SQLite ON DELETE CASCADE is not set, so we do it manually)
-        self._commit(conn)
-        return count
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM users WHERE login_token_expires_at < %s",
+                (datetime.now(timezone.utc),),
+            )
+            count = cur.rowcount
+            self._commit(conn)
+            return count
+        finally:
+            self._put_conn(conn)
 
     def cleanup_orphaned_ephemeral_users(self) -> int:
-        """Delete ephemeral (guest) users whose session tokens have all expired.
-
-        A guest user with no valid session tokens can never authenticate again,
-        so its record and any leftover auth_tokens are safe to remove.
-
-        Returns the number of users deleted.
-        """
+        """Delete ephemeral (guest) users whose session tokens have all expired."""
         conn = self._get_conn()
-        now = datetime.now(timezone.utc)
-        # Find ephemeral users whose MAX(expires_at) < now (no valid tokens)
-        count = conn.execute(
-            """
-            DELETE FROM users WHERE id IN (
-                SELECT u.id FROM users u
-                LEFT JOIN auth_tokens t ON t.user_id = u.id
-                WHERE u.is_ephemeral = 1
-                GROUP BY u.id
-                HAVING MAX(t.expires_at) IS NULL
-                    OR MAX(t.expires_at) < ?
+        try:
+            cur = conn.cursor()
+            now = datetime.now(timezone.utc)
+            # Tokens must be removed before users to satisfy the FK constraint
+            # (auth_tokens.user_id -> users.id), which was not enforced in SQLite.
+            cur.execute(
+                """
+                DELETE FROM auth_tokens WHERE user_id IN (
+                    SELECT u.id FROM users u
+                    LEFT JOIN auth_tokens t ON t.user_id = u.id
+                    WHERE u.is_ephemeral = 1
+                    GROUP BY u.id
+                    HAVING MAX(t.expires_at) IS NULL
+                        OR MAX(t.expires_at) < %s
+                )
+                """,
+                (now,),
             )
-            """,
-            (now,),
-        ).rowcount
-        # Clean up any orphaned auth_tokens (users deleted but tokens remain)
-        conn.execute(
-            "DELETE FROM auth_tokens WHERE user_id NOT IN (SELECT id FROM users)"
-        )
-        self._commit(conn)
-        return count
+            cur.execute(
+                """
+                DELETE FROM users WHERE id IN (
+                    SELECT u.id FROM users u
+                    LEFT JOIN auth_tokens t ON t.user_id = u.id
+                    WHERE u.is_ephemeral = 1
+                    GROUP BY u.id
+                    HAVING MAX(t.expires_at) IS NULL
+                        OR MAX(t.expires_at) < %s
+                )
+                """,
+                (now,),
+            )
+            count = cur.rowcount
+            # Clean up any orphaned auth_tokens
+            cur.execute(
+                "DELETE FROM auth_tokens WHERE user_id NOT IN (SELECT id FROM users)"
+            )
+            self._commit(conn)
+            return count
+        finally:
+            self._put_conn(conn)
 
     def cleanup_old_sync_log(self, retention_days: int) -> int:
-        """Delete sync_log rows older than *retention_days*.
-
-        Always preserves at least one row per source so that
-        ``_get_last_sync`` never returns NULL for an active source.
-
-        Returns the number of rows deleted.
-        """
+        """Delete sync_log rows older than *retention_days*."""
         conn = self._get_conn()
-        cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
-        count = conn.execute(
-            """
-            DELETE FROM sync_log
-            WHERE id NOT IN (
-                SELECT id FROM (
-                    SELECT id FROM sync_log
-                    WHERE last_sync >= ?
-                    UNION
-                    SELECT MAX(id) FROM sync_log GROUP BY source
+        try:
+            cur = conn.cursor()
+            cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+            cur.execute(
+                """
+                DELETE FROM sync_log
+                WHERE id NOT IN (
+                    SELECT id FROM (
+                        SELECT id FROM sync_log
+                        WHERE last_sync >= %s
+                        UNION
+                        SELECT MAX(id) FROM sync_log GROUP BY source
+                    )
+                    sub
                 )
+                AND last_sync < %s
+                """,
+                (cutoff, cutoff),
             )
-            AND last_sync < ?
-            """,
-            (cutoff, cutoff),
-        ).rowcount
-        self._commit(conn)
-        return count
+            count = cur.rowcount
+            self._commit(conn)
+            return count
+        finally:
+            self._put_conn(conn)
 
     def get_all_sources(self) -> List[Dict]:
-        """Get all unique data sources from sync_log and remoteid tables.
-
-        Each entry includes ``last_data`` (most recent position timestamp)
-        so callers don't need an extra per-source query.
-        """
+        """Get all unique data sources from sync_log and remoteid tables."""
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
-        # Get sources from sync_log
-        sync_cursor = conn.execute(
-            "SELECT source, MAX(last_sync) as last_sync, "
-            "SUM(records_imported) as total_records "
-            "FROM sync_log GROUP BY source ORDER BY source"
-        )
-        sync_rows = sync_cursor.fetchall()
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            cur.execute(
+                "SELECT source, MAX(last_sync) as last_sync, "
+                "SUM(records_imported) as total_records "
+                "FROM sync_log GROUP BY source ORDER BY source"
+            )
+            sync_rows = cur.fetchall()
 
-        # Also get sources that have data in remoteid but may not be in sync_log
-        data_cursor = conn.execute(
-            "SELECT source, MAX(timestamp) as last_ts "
-            "FROM remoteid WHERE source IS NOT NULL "
-            "GROUP BY source ORDER BY source"
-        )
-        data_rows = data_cursor.fetchall()
+            cur.execute(
+                "SELECT source, MAX(timestamp) as last_ts "
+                "FROM remoteid WHERE source IS NOT NULL "
+                "GROUP BY source ORDER BY source"
+            )
+            data_rows = cur.fetchall()
 
-        def _parse_ts(val):
-            """Parse a timestamp value into a datetime object."""
-            if isinstance(val, datetime):
-                return val
-            if isinstance(val, str):
-                try:
-                    return datetime.fromisoformat(val)
-                except (ValueError, TypeError):
-                    return None
-            return None
+            def _parse_ts(val):
+                if isinstance(val, datetime):
+                    return val
+                if isinstance(val, str):
+                    try:
+                        return datetime.fromisoformat(val)
+                    except (ValueError, TypeError):
+                        return None
+                return None
 
-        # Build last_data lookup from remoteid data
-        data_lookup = {}
-        for row in data_rows:
-            data_lookup[row["source"]] = _parse_ts(row["last_ts"])
+            data_lookup = {}
+            for row in data_rows:
+                data_lookup[row["source"]] = _parse_ts(row["last_ts"])
 
-        # Merge: sync_log entries take priority, supplement with remoteid-only sources
-        source_map = {}
-        for row in sync_rows:
-            name = row["source"]
-            source_map[name] = {
-                "source": name,
-                "last_sync": _parse_ts(row["last_sync"]),
-                "total_records": row["total_records"],
-                "last_data": data_lookup.get(name),
-            }
-
-        for row in data_rows:
-            name = row["source"]
-            if name not in source_map:
+            source_map = {}
+            for row in sync_rows:
+                name = row["source"]
                 source_map[name] = {
                     "source": name,
-                    "last_sync": _parse_ts(row["last_ts"]),
-                    "total_records": None,
-                    "last_data": _parse_ts(row["last_ts"]),
+                    "last_sync": _parse_ts(row["last_sync"]),
+                    "total_records": row["total_records"],
+                    "last_data": data_lookup.get(name),
                 }
 
-        return sorted(source_map.values(), key=lambda s: s["source"])
+            for row in data_rows:
+                name = row["source"]
+                if name not in source_map:
+                    source_map[name] = {
+                        "source": name,
+                        "last_sync": _parse_ts(row["last_ts"]),
+                        "total_records": None,
+                        "last_data": _parse_ts(row["last_ts"]),
+                    }
+
+            return sorted(source_map.values(), key=lambda s: s["source"])
+        finally:
+            self._put_conn(conn)
 
     def _get_drones_query(
         self, start_time: datetime, end_time: datetime
     ) -> List[Dict]:
-        """Return latest position per session in the time window.
-
-        Uses the materialized ``latest_positions`` table (O(sessions) instead of
-        O(rows) in the time window).
-        """
+        """Return latest position per session in the time window."""
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute(
-            """
-            SELECT
-                uas_id,
-                NULLIF(computed_session_id, '') as computed_session_id,
-                max_ts as timestamp,
-                min_ts as session_start,
-                latitude, longitude, altitude, height, height_type, max_height,
-                operator_id,
-                operator_latitude, operator_longitude, source,
-                collector_latitude, collector_longitude
-            FROM latest_positions
-            WHERE max_ts BETWEEN ? AND ?
-            ORDER BY uas_id, computed_session_id
-        """,
-            (start_time, end_time),
-        )
-        return [self._sanitize_record(dict(row)) for row in cursor.fetchall()]
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            cur.execute(
+                """
+                SELECT
+                    uas_id,
+                    NULLIF(computed_session_id, '') as computed_session_id,
+                    max_ts as timestamp,
+                    min_ts as session_start,
+                    latitude, longitude, altitude, height, height_type, max_height,
+                    operator_id,
+                    operator_latitude, operator_longitude, source,
+                    collector_latitude, collector_longitude
+                FROM latest_positions
+                WHERE max_ts BETWEEN %s AND %s
+                ORDER BY uas_id, computed_session_id
+            """,
+                (start_time, end_time),
+            )
+            return [self._sanitize_record(dict(row)) for row in cur.fetchall()]
+        finally:
+            self._put_conn(conn)
 
     def get_live_drones(self, stale_minutes: int) -> List[Dict]:
-        """Return all sessions with a position newer than *stale_minutes*.
-
-        Used by Live mode — no time window, purely staleness-based.
-        Uses a Python-side cutoff to avoid SQLite ISO-format string comparison
-        mismatches (``T`` vs space separator).
-        """
+        """Return all sessions with a position newer than *stale_minutes*."""
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)
-        cursor = conn.execute(
-            """
-            SELECT
-                uas_id,
-                NULLIF(computed_session_id, '') as computed_session_id,
-                max_ts as timestamp,
-                min_ts as session_start,
-                latitude, longitude, altitude, height, height_type, max_height,
-                operator_id,
-                operator_latitude, operator_longitude, source,
-                collector_latitude, collector_longitude
-            FROM latest_positions
-            WHERE max_ts > ?
-            ORDER BY uas_id, computed_session_id
-        """,
-            (cutoff,),
-        )
-        return [self._sanitize_record(dict(row)) for row in cursor.fetchall()]
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)
+            cur.execute(
+                """
+                SELECT
+                    uas_id,
+                    NULLIF(computed_session_id, '') as computed_session_id,
+                    max_ts as timestamp,
+                    min_ts as session_start,
+                    latitude, longitude, altitude, height, height_type, max_height,
+                    operator_id,
+                    operator_latitude, operator_longitude, source,
+                    collector_latitude, collector_longitude
+                FROM latest_positions
+                WHERE max_ts > %s
+                ORDER BY uas_id, computed_session_id
+            """,
+                (cutoff,),
+            )
+            return [self._sanitize_record(dict(row)) for row in cur.fetchall()]
+        finally:
+            self._put_conn(conn)
 
     def get_drones(self, start_time: datetime, end_time: datetime) -> List[Dict]:
         """Get list of unique drones seen in time window with latest positions"""
@@ -1222,33 +1252,36 @@ class WebDatabase:
     ) -> Tuple[List[Dict], int]:
         """Get all sessions for a UAS ID with pagination, ignoring time constraints."""
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
-        cursor = conn.execute(
-            "SELECT COUNT(*) FROM latest_positions WHERE uas_id = ?",
-            (uas_id,),
-        )
-        total = cursor.fetchone()[0]
+            cur.execute(
+                "SELECT COUNT(*) FROM latest_positions WHERE uas_id = %s",
+                (uas_id,),
+            )
+            total = cur.fetchone()[0]
 
-        cursor = conn.execute(
-            """
-            SELECT
-                uas_id,
-                NULLIF(computed_session_id, '') as computed_session_id,
-                max_ts as timestamp,
-                min_ts as session_start,
-                latitude, longitude, altitude, height, height_type, max_height,
-                operator_id, operator_latitude, operator_longitude, source,
-                collector_latitude, collector_longitude
-            FROM latest_positions
-            WHERE uas_id = ?
-            ORDER BY max_ts DESC
-            LIMIT ? OFFSET ?
-            """,
-            (uas_id, limit, offset),
-        )
-        sessions = [self._sanitize_record(dict(row)) for row in cursor.fetchall()]
-        return sessions, total
+            cur.execute(
+                """
+                SELECT
+                    uas_id,
+                    NULLIF(computed_session_id, '') as computed_session_id,
+                    max_ts as timestamp,
+                    min_ts as session_start,
+                    latitude, longitude, altitude, height, height_type, max_height,
+                    operator_id, operator_latitude, operator_longitude, source,
+                    collector_latitude, collector_longitude
+                FROM latest_positions
+                WHERE uas_id = %s
+                ORDER BY max_ts DESC
+                LIMIT %s OFFSET %s
+                """,
+                (uas_id, limit, offset),
+            )
+            sessions = [self._sanitize_record(dict(row)) for row in cur.fetchall()]
+            return sessions, total
+        finally:
+            self._put_conn(conn)
 
     def get_drones_incremental(
         self,
@@ -1256,69 +1289,76 @@ class WebDatabase:
         end_time: datetime,
         known_timestamps: Dict[str, str],
     ) -> List[Dict]:
-        """Get drones that have newer data than the client's known timestamps.
-
-        Uses the materialized ``latest_positions`` table instead of GROUP BY
-        on the full ``remoteid`` table, reducing scans from O(rows-in-window)
-        to O(sessions).
-
-        Args:
-            start_time: Start of time window
-            end_time: End of time window
-            known_timestamps: Map of "uas_id:session_id" -> last known timestamp ISO string
-
-        Returns:
-            List of drones with data newer than known_timestamps, or all drones if known_timestamps is empty
-        """
+        """Get drones that have newer data than the client's known timestamps."""
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
-        if not known_timestamps:
-            return self._get_drones_query(start_time, end_time)
+            if not known_timestamps:
+                return self._get_drones_query(start_time, end_time)
 
-        # Early exit: nothing changed since client's latest known
-        most_recent = self.get_most_recent_timestamp()
-        if most_recent and isinstance(most_recent, datetime):
-            most_recent_str = most_recent.isoformat()
-            known_vals = list(known_timestamps.values())
-            if known_vals and most_recent_str <= max(known_vals):
-                return []
+            # Early exit: nothing changed since client's latest known
+            most_recent = self.get_most_recent_timestamp()
+            if most_recent and isinstance(most_recent, datetime):
+                most_recent_str = most_recent.isoformat()
+                known_vals = list(known_timestamps.values())
+                if known_vals and most_recent_str <= max(known_vals):
+                    return []
 
-        known_uas_sessions = set(known_timestamps.keys())
-        oldest_known = (
-            min(known_timestamps.values()) if known_timestamps
-            else start_time.isoformat()
-        )
+            known_uas_sessions = set(known_timestamps.keys())
+            oldest_known = (
+                min(known_timestamps.values()) if known_timestamps
+                else start_time.isoformat()
+            )
 
-        conditions = []
-        params = []
+            conditions = []
+            params = []
 
-        for key, ts in known_timestamps.items():
-            if ':' in key:
-                uas_id, session_id = key.split(':', 1)
-                if session_id != 'unknown':
-                    conditions.append(
-                        "(uas_id = ? AND computed_session_id = ? AND max_ts > ?)"
-                    )
-                    params.extend([uas_id, session_id, ts])
+            for key, ts in known_timestamps.items():
+                if ':' in key:
+                    uas_id, session_id = key.split(':', 1)
+                    if session_id != 'unknown':
+                        conditions.append(
+                            "(uas_id = %s AND computed_session_id = %s AND max_ts > %s)"
+                        )
+                        params.extend([uas_id, session_id, ts])
+                    else:
+                        conditions.append(
+                            "(uas_id = %s AND computed_session_id = '' AND max_ts > %s)"
+                        )
+                        params.extend([uas_id, ts])
                 else:
                     conditions.append(
-                        "(uas_id = ? AND computed_session_id = '' AND max_ts > ?)"
+                        "(uas_id = %s AND computed_session_id = '' AND max_ts > %s)"
                     )
-                    params.extend([uas_id, ts])
-            else:
-                conditions.append(
-                    "(uas_id = ? AND computed_session_id = '' AND max_ts > ?)"
+                    params.extend([key, ts])
+
+            results = []
+
+            # Known sessions — query latest_positions directly
+            if conditions:
+                where_clause = " OR ".join(conditions)
+                cur.execute(
+                    f"""
+                    SELECT
+                        uas_id,
+                        NULLIF(computed_session_id, '') as computed_session_id,
+                        max_ts as timestamp, min_ts as session_start,
+                        latitude, longitude, altitude, height, height_type, max_height,
+                        operator_id,
+                        operator_latitude, operator_longitude, source,
+                        collector_latitude, collector_longitude
+                    FROM latest_positions
+                    WHERE ({where_clause})
+                    ORDER BY uas_id, computed_session_id
+                """,
+                    params,
                 )
-                params.extend([key, ts])
+                results.extend(cur.fetchall())
 
-        results = []
-
-        # Known sessions — query latest_positions directly
-        if conditions:
-            where_clause = " OR ".join(conditions)
-            cursor = conn.execute(
-                f"""
+            # New sessions (not in known_timestamps).
+            cur.execute(
+                """
                 SELECT
                     uas_id,
                     NULLIF(computed_session_id, '') as computed_session_id,
@@ -1328,39 +1368,21 @@ class WebDatabase:
                     operator_latitude, operator_longitude, source,
                     collector_latitude, collector_longitude
                 FROM latest_positions
-                WHERE ({where_clause})
+                WHERE max_ts BETWEEN %s AND %s
+                  AND max_ts > %s
                 ORDER BY uas_id, computed_session_id
             """,
-                params,
+                (start_time, end_time, oldest_known),
             )
-            results.extend(cursor.fetchall())
+            for row in cur.fetchall():
+                sid = row['computed_session_id'] or 'unknown'
+                key = f"{row['uas_id']}:{sid}"
+                if key not in known_uas_sessions:
+                    results.append(row)
 
-        # New sessions (not in known_timestamps).
-        # Only scan sessions with max_ts > client's oldest known ts.
-        cursor = conn.execute(
-            """
-            SELECT
-                uas_id,
-                NULLIF(computed_session_id, '') as computed_session_id,
-                max_ts as timestamp, min_ts as session_start,
-                latitude, longitude, altitude, height, height_type, max_height,
-                operator_id,
-                operator_latitude, operator_longitude, source,
-                collector_latitude, collector_longitude
-            FROM latest_positions
-            WHERE max_ts BETWEEN ? AND ?
-              AND max_ts > ?
-            ORDER BY uas_id, computed_session_id
-        """,
-            (start_time, end_time, oldest_known),
-        )
-        for row in cursor.fetchall():
-            sid = row['computed_session_id'] or 'unknown'
-            key = f"{row['uas_id']}:{sid}"
-            if key not in known_uas_sessions:
-                results.append(row)
-
-        return [self._sanitize_record(dict(row)) for row in results]
+            return [self._sanitize_record(dict(row)) for row in results]
+        finally:
+            self._put_conn(conn)
 
     def get_positions(
         self,
@@ -1371,161 +1393,171 @@ class WebDatabase:
     ) -> List[Dict]:
         """Get positions within time window"""
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
-        if uas_id:
-            cursor = conn.execute(
-                """
-                SELECT * FROM remoteid
-                WHERE uas_id = ? AND timestamp BETWEEN ? AND ?
-                ORDER BY timestamp DESC
-                LIMIT ?
-            """,
-                (uas_id, start_time, end_time, limit),
-            )
-        else:
-            cursor = conn.execute(
-                """
-                SELECT * FROM remoteid
-                WHERE timestamp BETWEEN ? AND ?
-                ORDER BY timestamp DESC
-                LIMIT ?
-            """,
-                (start_time, end_time, limit),
-            )
+            if uas_id:
+                cur.execute(
+                    """
+                    SELECT * FROM remoteid
+                    WHERE uas_id = %s AND timestamp BETWEEN %s AND %s
+                    ORDER BY timestamp DESC
+                    LIMIT %s
+                """,
+                    (uas_id, start_time, end_time, limit),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT * FROM remoteid
+                    WHERE timestamp BETWEEN %s AND %s
+                    ORDER BY timestamp DESC
+                    LIMIT %s
+                """,
+                    (start_time, end_time, limit),
+                )
 
-        return [self._sanitize_record(dict(row)) for row in cursor.fetchall()]
+            return [self._sanitize_record(dict(row)) for row in cur.fetchall()]
+        finally:
+            self._put_conn(conn)
 
     def get_track(
         self, uas_id: str, start_time: datetime, end_time: datetime
     ) -> List[Dict]:
         """Get track (ordered positions) for a specific drone with session info"""
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
-        cursor = conn.execute(
-            """
-            SELECT latitude, longitude, altitude, height, height_type, timestamp,
-                   operator_id, operator_latitude, operator_longitude,
-                   computed_session_id
-            FROM remoteid
-            WHERE uas_id = ? AND timestamp BETWEEN ? AND ?
-            ORDER BY timestamp ASC
-        """,
-            (uas_id, start_time, end_time),
-        )
+            cur.execute(
+                """
+                SELECT latitude, longitude, altitude, height, height_type, timestamp,
+                       operator_id, operator_latitude, operator_longitude,
+                       computed_session_id
+                FROM remoteid
+                WHERE uas_id = %s AND timestamp BETWEEN %s AND %s
+                ORDER BY timestamp ASC
+            """,
+                (uas_id, start_time, end_time),
+            )
 
-        return [self._sanitize_record(dict(row)) for row in cursor.fetchall()]
+            return [self._sanitize_record(dict(row)) for row in cur.fetchall()]
+        finally:
+            self._put_conn(conn)
 
     def get_track_session_positions(
         self, uas_id: str, session_id: str
     ) -> List[Dict]:
-        """Get positions for a specific session using indexed lookup.
-
-        Uses the computed_session_id index directly instead of scanning
-        the full time window. Much faster when loading individual sessions.
-        """
+        """Get positions for a specific session using indexed lookup."""
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
-        cursor = conn.execute(
-            """
-            SELECT latitude, longitude, altitude, height, height_type, timestamp,
-                   operator_id, operator_latitude, operator_longitude,
-                   computed_session_id, collector_latitude, collector_longitude
-            FROM remoteid
-            WHERE uas_id = ? AND computed_session_id = ?
-            ORDER BY timestamp ASC
-        """,
-            (uas_id, session_id),
-        )
+            cur.execute(
+                """
+                SELECT latitude, longitude, altitude, height, height_type, timestamp,
+                       operator_id, operator_latitude, operator_longitude,
+                       computed_session_id, collector_latitude, collector_longitude,
+                       source
+                FROM remoteid
+                WHERE uas_id = %s AND computed_session_id = %s
+                ORDER BY timestamp ASC
+            """,
+                (uas_id, session_id),
+            )
 
-        return [self._sanitize_record(dict(row)) for row in cursor.fetchall()]
+            return [self._sanitize_record(dict(row)) for row in cur.fetchall()]
+        finally:
+            self._put_conn(conn)
 
     def get_track_sessions(
         self, uas_id: str, start_time: datetime, end_time: datetime
     ) -> List[Dict]:
-        """Get track grouped by session
-
-        Returns a list of session objects, each containing positions for that session.
-        This is useful when a UAS has multiple sessions in the time window.
-        """
+        """Get track grouped by session"""
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
-        # Get all positions with session info
-        cursor = conn.execute(
-            """
-            SELECT latitude, longitude, altitude, height, height_type, timestamp,
-                   operator_id, operator_latitude, operator_longitude,
-                   computed_session_id
-            FROM remoteid
-            WHERE uas_id = ? AND timestamp BETWEEN ? AND ?
-            ORDER BY timestamp ASC
-        """,
-            (uas_id, start_time, end_time),
-        )
+            cur.execute(
+                """
+                SELECT latitude, longitude, altitude, height, height_type, timestamp,
+                       operator_id, operator_latitude, operator_longitude,
+                       computed_session_id
+                FROM remoteid
+                WHERE uas_id = %s AND timestamp BETWEEN %s AND %s
+                ORDER BY timestamp ASC
+            """,
+                (uas_id, start_time, end_time),
+            )
 
-        positions = [dict(row) for row in cursor.fetchall()]
+            positions = [dict(row) for row in cur.fetchall()]
 
-        # Group by session
-        sessions = {}
-        for pos in positions:
-            session_id = pos.get('computed_session_id') or 'unknown'
-            if session_id not in sessions:
-                sessions[session_id] = {
-                    'session_id': session_id,
-                    'positions': []
-                }
-            sessions[session_id]['positions'].append(pos)
+            # Group by session
+            sessions = {}
+            for pos in positions:
+                session_id = pos.get('computed_session_id') or 'unknown'
+                if session_id not in sessions:
+                    sessions[session_id] = {
+                        'session_id': session_id,
+                        'positions': []
+                    }
+                sessions[session_id]['positions'].append(pos)
 
-        # Sort sessions by start time
-        result = list(sessions.values())
-        result.sort(key=lambda s: s['positions'][0]['timestamp'] if s['positions'] else datetime.min)
+            result = list(sessions.values())
+            result.sort(key=lambda s: s['positions'][0]['timestamp'] if s['positions'] else datetime.min)
 
-        return result
+            return result
+        finally:
+            self._put_conn(conn)
 
     def get_operators(self, start_time: datetime, end_time: datetime) -> List[Dict]:
         """Get latest operator positions for drones in time window"""
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
-        cursor = conn.execute(
-            """
-            SELECT r1.uas_id, r1.operator_id, r1.operator_latitude,
-                   r1.operator_longitude, r1.timestamp
-            FROM remoteid r1
-            INNER JOIN (
-                SELECT uas_id, MAX(timestamp) as max_ts
-                FROM remoteid
-                WHERE timestamp BETWEEN ? AND ?
-                AND operator_latitude IS NOT NULL
-                AND operator_latitude != 0
-                GROUP BY uas_id
-            ) r2 ON r1.uas_id = r2.uas_id AND r1.timestamp = r2.max_ts
-            ORDER BY r1.uas_id
-        """,
-            (start_time, end_time),
-        )
+            cur.execute(
+                """
+                SELECT r1.uas_id, r1.operator_id, r1.operator_latitude,
+                       r1.operator_longitude, r1.timestamp
+                FROM remoteid r1
+                INNER JOIN (
+                    SELECT uas_id, MAX(timestamp) as max_ts
+                    FROM remoteid
+                    WHERE timestamp BETWEEN %s AND %s
+                    AND operator_latitude IS NOT NULL
+                    AND operator_latitude != 0
+                    GROUP BY uas_id
+                ) r2 ON r1.uas_id = r2.uas_id AND r1.timestamp = r2.max_ts
+                ORDER BY r1.uas_id
+            """,
+                (start_time, end_time),
+            )
 
-        return [self._sanitize_record(dict(row)) for row in cursor.fetchall()]
+            return [self._sanitize_record(dict(row)) for row in cur.fetchall()]
+        finally:
+            self._put_conn(conn)
 
     def get_bounds(self, start_time: datetime, end_time: datetime) -> Optional[Tuple]:
         """Get bounding box of all positions in time window"""
         conn = self._get_conn()
-        cursor = conn.execute(
-            """
-            SELECT MIN(latitude), MAX(latitude), MIN(longitude), MAX(longitude)
-            FROM remoteid
-            WHERE timestamp BETWEEN ? AND ?
-        """,
-            (start_time, end_time),
-        )
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT MIN(latitude), MAX(latitude), MIN(longitude), MAX(longitude)
+                FROM remoteid
+                WHERE timestamp BETWEEN %s AND %s
+            """,
+                (start_time, end_time),
+            )
 
-        row = cursor.fetchone()
-        if row and row[0] is not None:
-            return row
-        return None
+            row = cur.fetchone()
+            if row and row[0] is not None:
+                return row
+            return None
+        finally:
+            self._put_conn(conn)
 
     def insert_remoteid_records(
         self,
@@ -1536,24 +1568,11 @@ class WebDatabase:
         collector_lat: Optional[float] = None,
         collector_lon: Optional[float] = None,
     ) -> Tuple[int, List[Dict], Optional[datetime]]:
-        # pylint: disable=too-many-locals,too-many-positional-arguments
+        # pylint: disable=too-many-locals,too-many-positional-arguments,too-many-branches
         """Insert multiple records into remoteid table with session detection.
 
-        Uses INSERT OR IGNORE with a UNIQUE index on (uas_id, timestamp)
-        to skip duplicates without per-record SELECT checks.
-
-        Args:
-            source: The source name to associate with records
-            records: List of record dictionaries
-            session_gap_threshold: Time gap in seconds to trigger a new session (default: 600)
-            source_tz: IANA timezone name (e.g. "America/Denver") to interpret
-                       naive timestamps from this source. If None, naive
-                       timestamps are assumed to be UTC.
-            collector_lat: Collector latitude to stamp on each record (optional)
-            collector_lon: Collector longitude to stamp on each record (optional)
-
-        Returns:
-            Tuple of (inserted_count, errors, most_recent_timestamp)
+        Uses INSERT ... ON CONFLICT DO NOTHING with a UNIQUE index on
+        (uas_id, timestamp) to skip duplicates without per-record SELECT checks.
         """
         errors = []
         batch_params = []
@@ -1591,7 +1610,6 @@ class WebDatabase:
                     )
                     continue
 
-                # Strict validation: reject records with invalid lat/lon/alt
                 lat = self._sanitize_float(record.get("latitude"), "latitude")
                 if record.get("latitude") is not None and lat is None:
                     errors.append({"index": idx, "reason": "Invalid latitude"})
@@ -1606,7 +1624,6 @@ class WebDatabase:
                     continue
                 height = self._sanitize_float(record.get("height"), "height")
                 height_type = record.get("height_type")
-                # Operator coordinates: permissive (set to None if invalid)
                 op_lat = self._sanitize_float(
                     record.get("operator_latitude"), "operator_latitude"
                 )
@@ -1644,195 +1661,207 @@ class WebDatabase:
 
         # Phase 2: batch insert with session detection (single DB round-trip)
         conn = self._get_conn()
-        before = conn.execute("SELECT COUNT(*) FROM remoteid").fetchone()[0]
+        try:
+            cur = conn.cursor()
 
-        rows = []
-        for rec in batch_params:
-            uas_id = rec["uas_id"]
-            timestamp = rec["timestamp"]
-            computed_session_id = self._detect_session(
-                conn, uas_id, timestamp, uas_sessions, session_gap_threshold
+            rows = []
+            for rec in batch_params:
+                uas_id = rec["uas_id"]
+                timestamp = rec["timestamp"]
+                computed_session_id = self._detect_session(
+                    conn, uas_id, timestamp, uas_sessions, session_gap_threshold
+                )
+                rec["computed_session_id"] = computed_session_id
+                rows.append((
+                    rec["source"], rec["timestamp"], rec["mac_address"],
+                    rec["uas_id"], rec["session_id"], rec["latitude"],
+                    rec["longitude"], rec["altitude"], rec["height"],
+                    rec["height_type"], rec["operator_id"],
+                    rec["operator_latitude"], rec["operator_longitude"],
+                    rec["computed_session_id"], rec["session_detected_at"],
+                    rec["collector_latitude"], rec["collector_longitude"],
+                ))
+                uas_sessions[uas_id] = (timestamp, computed_session_id)
+
+            # Collect UAS IDs with new data for latest_positions rebuild
+            affected_uas_ids = list(dict.fromkeys(r[3] for r in rows))
+
+            # Use execute_values for efficient batch insert. RETURNING id
+            # counts exactly the rows actually inserted (ON CONFLICT rows are
+            # excluded), avoiding a full-table COUNT before/after.
+            inserted_rows = psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO remoteid
+                (source, timestamp, mac_address, uas_id, session_id,
+                 latitude, longitude, altitude, height, height_type,
+                 operator_id, operator_latitude, operator_longitude,
+                 computed_session_id, session_detected_at,
+                 collector_latitude, collector_longitude)
+                VALUES %s
+                ON CONFLICT (uas_id, timestamp) DO NOTHING
+                RETURNING id
+                """,
+                rows,
+                page_size=1000,
+                fetch=True,
             )
-            rec["computed_session_id"] = computed_session_id
-            rows.append((
-                rec["source"], rec["timestamp"], rec["mac_address"],
-                rec["uas_id"], rec["session_id"], rec["latitude"],
-                rec["longitude"], rec["altitude"], rec["height"],
-                rec["height_type"], rec["operator_id"],
-                rec["operator_latitude"], rec["operator_longitude"],
-                rec["computed_session_id"], rec["session_detected_at"],
-                rec["collector_latitude"], rec["collector_longitude"],
-            ))
-            uas_sessions[uas_id] = (timestamp, computed_session_id)
+            self._commit(conn)
 
-        # Collect UAS IDs with new data for latest_positions rebuild
-        affected_uas_ids = list(dict.fromkeys(r[3] for r in rows))
+            inserted = len(inserted_rows)
 
-        conn.executemany(
-            """
-            INSERT OR IGNORE INTO remoteid
-            (source, timestamp, mac_address, uas_id, session_id,
-             latitude, longitude, altitude, height, height_type,
-             operator_id, operator_latitude, operator_longitude,
-             computed_session_id, session_detected_at,
-             collector_latitude, collector_longitude)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            rows,
-        )
-        self._commit(conn)
+            # Update materialized latest_positions for affected UAS IDs
+            if inserted > 0:
+                self.rebuild_latest_positions(affected_uas_ids)
 
-        after = conn.execute("SELECT COUNT(*) FROM remoteid").fetchone()[0]
-        inserted = after - before
-
-        # Update materialized latest_positions for affected UAS IDs
-        if inserted > 0:
-            self.rebuild_latest_positions(affected_uas_ids)
-
-        return inserted, errors, most_recent
+            return inserted, errors, most_recent
+        finally:
+            self._put_conn(conn)
 
     def get_most_recent_timestamp(
         self, source: Optional[str] = None
     ) -> Optional[datetime]:
-        """Get the most recent timestamp in the database.
-
-        Args:
-            source: Optional source name to filter by. If None, returns max across all sources.
-
-        Returns:
-            Most recent datetime or None if no records
-        """
+        """Get the most recent timestamp in the database."""
         conn = self._get_conn()
-        if source:
-            cursor = conn.execute(
-                "SELECT MAX(timestamp) FROM remoteid WHERE source = ?",
-                (source,),
-            )
-        else:
-            cursor = conn.execute("SELECT MAX(timestamp) FROM remoteid")
+        try:
+            cur = conn.cursor()
+            if source:
+                cur.execute(
+                    "SELECT MAX(timestamp) FROM remoteid WHERE source = %s",
+                    (source,),
+                )
+            else:
+                cur.execute("SELECT MAX(timestamp) FROM remoteid")
 
-        row = cursor.fetchone()
-        if row and row[0]:
-            val = row[0]
-            if isinstance(val, str):
-                return datetime.fromisoformat(val)
-            return val
-        return None
+            row = cur.fetchone()
+            if row and row[0]:
+                return row[0]
+            return None
+        finally:
+            self._put_conn(conn)
 
     def get_stats(self, start_time: datetime, end_time: datetime) -> Dict:
-        """Get aggregate statistics for the given time window.
-
-        Returns dict with total_drones, total_sessions, total_positions,
-        active_alerts, and total_alerts_in_window.
-        """
+        """Get aggregate statistics for the given time window."""
         conn = self._get_conn()
-        # Total unique drones, distinct sessions, and total positions in one pass
-        cursor = conn.execute(
-            """
-            SELECT
-                COUNT(DISTINCT uas_id),
-                COUNT(DISTINCT CASE WHEN computed_session_id IS NOT NULL THEN computed_session_id END),
-                COUNT(*)
-            FROM remoteid WHERE timestamp BETWEEN ? AND ?
-            """,
-            (start_time, end_time),
-        )
-        row = cursor.fetchone()
-        total_drones = row[0] or 0
-        total_sessions = row[1] or 0
-        total_positions = row[2] or 0
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT
+                    COUNT(DISTINCT uas_id),
+                    COUNT(DISTINCT CASE WHEN computed_session_id IS NOT NULL THEN computed_session_id END),
+                    COUNT(*)
+                FROM remoteid WHERE timestamp BETWEEN %s AND %s
+                """,
+                (start_time, end_time),
+            )
+            row = cur.fetchone()
+            total_drones = row[0] or 0
+            total_sessions = row[1] or 0
+            total_positions = row[2] or 0
 
-        # Active geozone events
-        cursor = conn.execute(
-            "SELECT COUNT(*) FROM geozone_events WHERE exited_at IS NULL"
-        )
-        active_alerts = cursor.fetchone()[0] or 0
+            cur.execute(
+                "SELECT COUNT(*) FROM geozone_events WHERE exited_at IS NULL"
+            )
+            active_alerts = cur.fetchone()[0] or 0
 
-        # Total geozone events in time window (by entered_at)
-        cursor = conn.execute(
-            "SELECT COUNT(*) FROM geozone_events WHERE entered_at BETWEEN ? AND ?",
-            (start_time, end_time),
-        )
-        total_alerts = cursor.fetchone()[0] or 0
+            cur.execute(
+                "SELECT COUNT(*) FROM geozone_events WHERE entered_at BETWEEN %s AND %s",
+                (start_time, end_time),
+            )
+            total_alerts = cur.fetchone()[0] or 0
 
-        return {
-        "total_drones": total_drones,
-        "total_sessions": total_sessions,
-        "total_positions": total_positions,
-        "active_alerts": active_alerts,
-        "total_alerts": total_alerts,
-        }
+            return {
+            "total_drones": total_drones,
+            "total_sessions": total_sessions,
+            "total_positions": total_positions,
+            "active_alerts": active_alerts,
+            "total_alerts": total_alerts,
+            }
+        finally:
+            self._put_conn(conn)
 
     def get_drones_for_alert_check(
         self, since: Optional[datetime] = None
     ) -> List[str]:
         """Get distinct UAS IDs with positions since *since* (for alert evaluation)."""
         conn = self._get_conn()
-        if since:
-            cursor = conn.execute(
-                "SELECT DISTINCT uas_id FROM remoteid WHERE timestamp >= ?",
-                (since,),
-            )
-        else:
-            cursor = conn.execute("SELECT DISTINCT uas_id FROM remoteid")
-        return [row[0] for row in cursor.fetchall()]
+        try:
+            cur = conn.cursor()
+            if since:
+                cur.execute(
+                    "SELECT DISTINCT uas_id FROM remoteid WHERE timestamp >= %s",
+                    (since,),
+                )
+            else:
+                cur.execute("SELECT DISTINCT uas_id FROM remoteid")
+            return [row[0] for row in cur.fetchall()]
+        finally:
+            self._put_conn(conn)
 
     def get_positions_for_alert_check(
         self, uas_id: str, since: Optional[datetime] = None
     ) -> List[Dict]:
         """Get positions for a UAS since *since* (for alert evaluation)."""
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
-        if since:
-            cursor = conn.execute(
-                """SELECT latitude, longitude, timestamp
-                   FROM remoteid
-                   WHERE uas_id = ? AND timestamp >= ?
-                   ORDER BY timestamp ASC""",
-                (uas_id, since),
-            )
-        else:
-            cursor = conn.execute(
-                """SELECT latitude, longitude, timestamp
-                   FROM remoteid
-                   WHERE uas_id = ?
-                   ORDER BY timestamp ASC""",
-                (uas_id,),
-            )
-        return [dict(row) for row in cursor.fetchall()]
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            if since:
+                cur.execute(
+                    """SELECT latitude, longitude, timestamp
+                       FROM remoteid
+                       WHERE uas_id = %s AND timestamp >= %s
+                       ORDER BY timestamp ASC""",
+                    (uas_id, since),
+                )
+            else:
+                cur.execute(
+                    """SELECT latitude, longitude, timestamp
+                       FROM remoteid
+                       WHERE uas_id = %s
+                       ORDER BY timestamp ASC""",
+                    (uas_id,),
+                )
+            return [dict(row) for row in cur.fetchall()]
+        finally:
+            self._put_conn(conn)
 
     # --- Session tracking helpers ---
 
     def get_latest_session_id(self, uas_id: str) -> Optional[str]:
         """Get the most recent ``computed_session_id`` for a UAS, or ``None``."""
         conn = self._get_conn()
-        cursor = conn.execute(
-            """SELECT computed_session_id FROM remoteid
-               WHERE uas_id = ? AND computed_session_id IS NOT NULL
-               ORDER BY timestamp DESC LIMIT 1""",
-            (uas_id,),
-        )
-        row = cursor.fetchone()
-        return row[0] if row else None
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """SELECT computed_session_id FROM remoteid
+                   WHERE uas_id = %s AND computed_session_id IS NOT NULL
+                   ORDER BY timestamp DESC LIMIT 1""",
+                (uas_id,),
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
+        finally:
+            self._put_conn(conn)
 
     def get_all_current_sessions(self) -> Dict[str, str]:
-        """Return the latest ``computed_session_id`` for every UAS that has one.
-
-        Used by ``AlertEngine`` to pre-populate known sessions at startup so
-        existing flights don't trigger false "new session" notifications.
-        """
+        """Return the latest ``computed_session_id`` for every UAS that has one."""
         conn = self._get_conn()
-        cursor = conn.execute(
-            """SELECT r.uas_id, r.computed_session_id
-               FROM remoteid r
-               INNER JOIN (
-                   SELECT uas_id, MAX(timestamp) AS max_ts
-                   FROM remoteid WHERE computed_session_id IS NOT NULL
-                   GROUP BY uas_id
-               ) latest ON r.uas_id = latest.uas_id AND r.timestamp = latest.max_ts
-               WHERE r.computed_session_id IS NOT NULL"""
-        )
-        return {row[0]: row[1] for row in cursor.fetchall()}
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """SELECT r.uas_id, r.computed_session_id
+                   FROM remoteid r
+                   INNER JOIN (
+                       SELECT uas_id, MAX(timestamp) AS max_ts
+                       FROM remoteid WHERE computed_session_id IS NOT NULL
+                       GROUP BY uas_id
+                   ) latest ON r.uas_id = latest.uas_id AND r.timestamp = latest.max_ts
+                   WHERE r.computed_session_id IS NOT NULL"""
+            )
+            return {row[0]: row[1] for row in cur.fetchall()}
+        finally:
+            self._put_conn(conn)
 
     # --- Alert dedup helpers ---
 
@@ -1845,114 +1874,115 @@ class WebDatabase:
     ) -> bool:
         """Atomically claim the right to fire an alert for *dedup_key*.
 
-        Uses ``INSERT OR IGNORE`` against the unique ``(alert_type, dedup_key)``
-        constraint on ``sent_alerts``. Returns True only for the first caller
-        across all processes and threads; every later caller for the same key
-        gets False. This makes alert deduplication shared and restart-safe
-        instead of per-process in-memory state, which is what caused duplicate
-        notifications under gunicorn's forked workers.
+        Uses ``INSERT ... ON CONFLICT DO NOTHING`` against the unique
+        ``(alert_type, dedup_key)`` constraint on ``sent_alerts``.
         """
         conn = self._get_conn()
-        cursor = conn.execute(
-            """
-            INSERT OR IGNORE INTO sent_alerts
-                (alert_type, dedup_key, uas_id, session_id, sent_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (alert_type, dedup_key, uas_id, session_id, datetime.now(timezone.utc)),
-        )
-        self._commit(conn)
-        return cursor.rowcount == 1
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO sent_alerts
+                    (alert_type, dedup_key, uas_id, session_id, sent_at)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (alert_type, dedup_key) DO NOTHING
+                """,
+                (alert_type, dedup_key, uas_id, session_id, datetime.now(timezone.utc)),
+            )
+            self._commit(conn)
+            return cur.rowcount == 1
+        finally:
+            self._put_conn(conn)
 
     # --- Geozone event methods ---
 
     def get_active_geozone_events(self) -> List[Dict]:
         """Get all active (not yet exited) geozone events."""
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute(
-            """
-            SELECT * FROM geozone_events
-            WHERE exited_at IS NULL
-            ORDER BY entered_at DESC
-            """
-        )
-        return [dict(row) for row in cursor.fetchall()]
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            cur.execute(
+                """
+                SELECT * FROM geozone_events
+                WHERE exited_at IS NULL
+                ORDER BY entered_at DESC
+                """
+            )
+            return [dict(row) for row in cur.fetchall()]
+        finally:
+            self._put_conn(conn)
 
     def get_geozone_events_for_uas(self, uas_id: str) -> List[Dict]:
         """Get all events for a specific UAS, active first."""
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute(
-            """
-            SELECT * FROM geozone_events
-            WHERE uas_id = ?
-            ORDER BY exited_at IS NULL DESC, entered_at DESC
-            """,
-            (uas_id,),
-        )
-        return [dict(row) for row in cursor.fetchall()]
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            cur.execute(
+                """
+                SELECT * FROM geozone_events
+                WHERE uas_id = %s
+                ORDER BY exited_at IS NULL DESC, entered_at DESC
+                """,
+                (uas_id,),
+            )
+            return [dict(row) for row in cur.fetchall()]
+        finally:
+            self._put_conn(conn)
 
     def enter_geozone(
         self, uas_id: str, geozone_name: str, timestamp: datetime
     ) -> Tuple[int, bool]:
-        """Create a new geozone entry event if no active event exists.
-
-        Atomic across processes: the partial unique index
-        ``idx_geozone_events_active_unique`` guarantees at most one active
-        event per ``(uas_id, geozone_name)``, so exactly one caller observes
-        ``created=True`` and fires the entry notification.
-
-        Returns ``(event_id, created)`` where *created* is False when an
-        active event already exists (and *event_id* is that existing event).
-        """
+        """Create a new geozone entry event if no active event exists."""
         conn = self._get_conn()
-        cursor = conn.execute(
-            """
-            INSERT OR IGNORE INTO geozone_events (uas_id, geozone_name, entered_at, last_seen_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (uas_id, geozone_name, timestamp, timestamp),
-        )
-        if cursor.rowcount == 1:
-            event_id = cursor.lastrowid
-            created = True
-        else:
-            row = conn.execute(
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO geozone_events (uas_id, geozone_name, entered_at, last_seen_at)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+                """,
+                (uas_id, geozone_name, timestamp, timestamp),
+            )
+            created = cur.rowcount == 1
+            cur.execute(
                 "SELECT id FROM geozone_events "
-                "WHERE uas_id = ? AND geozone_name = ? AND exited_at IS NULL",
+                "WHERE uas_id = %s AND geozone_name = %s AND exited_at IS NULL",
                 (uas_id, geozone_name),
-            ).fetchone()
-            event_id = row[0]
-            created = False
-        self._commit(conn)
-        return event_id, created
+            )
+            event_id = cur.fetchone()[0]
+            self._commit(conn)
+            return event_id, created
+        finally:
+            self._put_conn(conn)
 
     def update_geozone_last_seen(self, event_id: int, timestamp: datetime):
         """Update last_seen_at for an active event."""
         conn = self._get_conn()
-        conn.execute(
-            "UPDATE geozone_events SET last_seen_at = ? WHERE id = ?",
-            (timestamp, event_id),
-        )
-        self._commit(conn)
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE geozone_events SET last_seen_at = %s WHERE id = %s",
+                (timestamp, event_id),
+            )
+            self._commit(conn)
+        finally:
+            self._put_conn(conn)
 
     def exit_geozone(self, event_id: int, timestamp: datetime, reason: str = "left") -> int:
-        """Mark a geozone event as exited.
-
-        Returns 1 if this call performed the exit, 0 if the event was already
-        exited. The ``exited_at IS NULL`` guard makes the transition atomic
-        across processes — only the first caller sees rowcount 1 and fires the
-        exit notification.
-        """
+        """Mark a geozone event as exited."""
         conn = self._get_conn()
-        cursor = conn.execute(
-            "UPDATE geozone_events SET exited_at = ?, exited_reason = ? "
-            "WHERE id = ? AND exited_at IS NULL",
-            (timestamp, reason, event_id),
-        )
-        self._commit(conn)
-        return cursor.rowcount
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE geozone_events SET exited_at = %s, exited_reason = %s "
+                "WHERE id = %s AND exited_at IS NULL",
+                (timestamp, reason, event_id),
+            )
+            self._commit(conn)
+            return cur.rowcount
+        finally:
+            self._put_conn(conn)
 
     def get_geozone_event_history(
         self,
@@ -1964,116 +1994,124 @@ class WebDatabase:
         offset: int = 0,
     ) -> Tuple[List[Dict], int]:
         # pylint: disable=too-many-positional-arguments
-        """Get geozone event history with filtering and pagination.
-
-        Returns (events, total_count) tuple.
-        """
+        """Get geozone event history with filtering and pagination."""
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
-        conditions = []
-        params = []
+            conditions = []
+            params = []
 
-        if uas_id:
-            conditions.append("uas_id = ?")
-            params.append(uas_id)
-        if geozone_name:
-            conditions.append("geozone_name = ?")
-            params.append(geozone_name)
-        if from_date:
-            conditions.append("entered_at >= ?")
-            params.append(from_date)
-        if to_date:
-            conditions.append("entered_at <= ?")
-            params.append(to_date)
+            if uas_id:
+                conditions.append("uas_id = %s")
+                params.append(uas_id)
+            if geozone_name:
+                conditions.append("geozone_name = %s")
+                params.append(geozone_name)
+            if from_date:
+                conditions.append("entered_at >= %s")
+                params.append(from_date)
+            if to_date:
+                conditions.append("entered_at <= %s")
+                params.append(to_date)
 
-        where = " AND ".join(conditions) if conditions else "1=1"
+            where = " AND ".join(conditions) if conditions else "1=1"
 
-        # Get total count
-        count_cursor = conn.execute(
-            f"SELECT COUNT(*) FROM geozone_events WHERE {where}", params
-        )
-        total = count_cursor.fetchone()[0]
+            # Get total count
+            cur.execute(
+                f"SELECT COUNT(*) FROM geozone_events WHERE {where}", params
+            )
+            total = cur.fetchone()[0]
 
-        # Get paginated results
-        query_params = params + [limit, offset]
-        cursor = conn.execute(
-            f"""
-            SELECT * FROM geozone_events
-            WHERE {where}
-            ORDER BY entered_at DESC
-            LIMIT ? OFFSET ?
-            """,
-            query_params,
-        )
-        events = [dict(row) for row in cursor.fetchall()]
+            # Get paginated results
+            query_params = params + [limit, offset]
+            cur.execute(
+                f"""
+                SELECT * FROM geozone_events
+                WHERE {where}
+                ORDER BY entered_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                query_params,
+            )
+            events = [dict(row) for row in cur.fetchall()]
 
-        return events, total
+            return events, total
+        finally:
+            self._put_conn(conn)
 
     def check_stale_geozone_events(
         self, stale_timeout: int, reference_time: datetime
     ) -> int:
-        """Mark events stale (timed out) where last_seen_at is older than timeout.
-
-        Returns the number of events marked as stale.
-        """
+        """Mark events stale (timed out) where last_seen_at is older than timeout."""
         conn = self._get_conn()
-        cursor = conn.execute(
-            """
-            UPDATE geozone_events
-            SET exited_at = last_seen_at, exited_reason = 'timeout'
-            WHERE exited_at IS NULL
-            AND last_seen_at < ?
-            """,
-            (reference_time - timedelta(seconds=stale_timeout),),
-        )
-        self._commit(conn)
-        return cursor.rowcount
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE geozone_events
+                SET exited_at = last_seen_at, exited_reason = 'timeout'
+                WHERE exited_at IS NULL
+                AND last_seen_at < %s
+                """,
+                (reference_time - timedelta(seconds=stale_timeout),),
+            )
+            self._commit(conn)
+            return cur.rowcount
+        finally:
+            self._put_conn(conn)
 
     def get_live_positions(self, since: datetime) -> List[Dict]:
-        """Get the most recent position for each drone that has been updated since *since*.
-
-        Returns one row per UAS ID with ``uas_id``, ``latitude``, ``longitude``,
-        and ``max_ts`` (the timestamp of the latest position).  Used by the
-        drone-proximity alert to find pairs of drones that are close in both
-        space and time.
-        """
+        """Get the most recent position for each drone that has been updated since *since*."""
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute(
-            """
-            SELECT uas_id, latitude, longitude, MAX(max_ts) AS max_ts
-            FROM latest_positions
-            WHERE latitude IS NOT NULL
-              AND longitude IS NOT NULL
-              AND max_ts >= ?
-            GROUP BY uas_id
-            """,
-            (since,),
-        )
-        return [dict(row) for row in cursor.fetchall()]
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            cur.execute(
+                """
+                SELECT DISTINCT ON (uas_id) uas_id, latitude, longitude, max_ts
+                FROM latest_positions
+                WHERE latitude IS NOT NULL
+                  AND longitude IS NOT NULL
+                  AND max_ts >= %s
+                ORDER BY uas_id, max_ts DESC
+                """,
+                (since,),
+            )
+            return [dict(row) for row in cur.fetchall()]
+        finally:
+            self._put_conn(conn)
 
     def update_collector_position(self, name: str, lat: float, lon: float):
         """Insert or replace a collector's current position"""
         conn = self._get_conn()
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO collector_positions
-            (name, latitude, longitude, updated_at)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-            """,
-            (name, lat, lon),
-        )
-        self._commit(conn)
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO collector_positions (name, latitude, longitude, updated_at)
+                VALUES (%s, %s, %s, NOW())
+                ON CONFLICT (name) DO UPDATE SET
+                    latitude = EXCLUDED.latitude,
+                    longitude = EXCLUDED.longitude,
+                    updated_at = NOW()
+                """,
+                (name, lat, lon),
+            )
+            self._commit(conn)
+        finally:
+            self._put_conn(conn)
 
     def get_collector_positions(self) -> List[Dict]:
         """Get all current collector positions"""
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute(
-            "SELECT name, latitude, longitude, updated_at FROM collector_positions ORDER BY name"
-        )
-        return [dict(row) for row in cursor.fetchall()]
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            cur.execute(
+                "SELECT name, latitude, longitude, updated_at FROM collector_positions ORDER BY name"
+            )
+            return [dict(row) for row in cur.fetchall()]
+        finally:
+            self._put_conn(conn)
 
     # --- Auth methods ---
 
@@ -2081,134 +2119,141 @@ class WebDatabase:
         self, name: str, email: str, role_name: str,
         login_token: str, login_token_expires_at: datetime
     ) -> dict:
-        """Create a pre-created user with a login token.
-
-        Returns the user row as a dict.
-        """
+        """Create a pre-created user with a login token."""
         token_hash = hashlib.sha256(login_token.encode()).hexdigest()
         conn = self._get_conn()
-        conn.execute(
-            """
-            INSERT INTO users (name, email, role_name, is_ephemeral, is_active,
-                               login_token_hash, login_token_expires_at, auth_method)
-            VALUES (?, ?, ?, 0, 1, ?, ?, 'login_link')
-            """,
-            (name, email, role_name, token_hash, login_token_expires_at),
-        )
-        self._commit(conn)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute("SELECT * FROM users WHERE login_token_hash = ?", (token_hash,))
-        return dict(cursor.fetchone())
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            cur.execute(
+                """
+                INSERT INTO users (name, email, role_name, is_ephemeral, is_active,
+                                   login_token_hash, login_token_expires_at, auth_method)
+                VALUES (%s, %s, %s, 0, 1, %s, %s, 'login_link')
+                RETURNING *
+                """,
+                (name, email, role_name, token_hash, login_token_expires_at),
+            )
+            self._commit(conn)
+            return dict(cur.fetchone())
+        finally:
+            self._put_conn(conn)
 
     def create_ephemeral_user(self) -> Tuple[str, int]:
-        """Create an ephemeral visitor user and an auth token.
-
-        Returns (session_token, user_id).
-        """
+        """Create an ephemeral visitor user and an auth token."""
         name = f"Guest-{_secrets.token_hex(4)}"
         conn = self._get_conn()
-        cursor = conn.execute(
-            """INSERT INTO users (name, role_name, is_ephemeral, is_active, auth_method)
-               VALUES (?, 'guest', 1, 1, 'ephemeral')""",
-            (name,),
-        )
-        user_id = cursor.lastrowid
-        session_token = _secrets.token_urlsafe(32)
-        token_hash = hashlib.sha256(session_token.encode()).hexdigest()
-        expires_at = datetime.now(timezone.utc) + timedelta(days=90)
-        conn.execute(
-            "INSERT INTO auth_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)",
-            (user_id, token_hash, expires_at),
-        )
-        self._commit(conn)
-        return session_token, user_id
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """INSERT INTO users (name, role_name, is_ephemeral, is_active, auth_method)
+                   VALUES (%s, 'guest', 1, 1, 'ephemeral')
+                   RETURNING id""",
+                (name,),
+            )
+            user_id = cur.fetchone()[0]
+            session_token = _secrets.token_urlsafe(32)
+            token_hash = hashlib.sha256(session_token.encode()).hexdigest()
+            expires_at = datetime.now(timezone.utc) + timedelta(days=90)
+            cur.execute(
+                "INSERT INTO auth_tokens (user_id, token_hash, expires_at) VALUES (%s, %s, %s)",
+                (user_id, token_hash, expires_at),
+            )
+            self._commit(conn)
+            return session_token, user_id
+        finally:
+            self._put_conn(conn)
 
     def exchange_login_token(self, login_token: str) -> Optional[Tuple[str, dict]]:
-        """Exchange a one-time login token for a session token.
-
-        Returns (session_token, user_dict) on success, or None if the token is
-        invalid or expired.
-        """
+        """Exchange a one-time login token for a session token."""
         token_hash = hashlib.sha256(login_token.encode()).hexdigest()
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute(
-            "SELECT * FROM users WHERE login_token_hash = ? AND login_token_expires_at > ? AND is_active = 1",
-            (token_hash, datetime.now(timezone.utc)),
-        )
-        user = cursor.fetchone()
-        if not user:
-            return None
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            cur.execute(
+                "SELECT * FROM users WHERE login_token_hash = %s AND login_token_expires_at > %s AND is_active = 1",
+                (token_hash, datetime.now(timezone.utc)),
+            )
+            user = cur.fetchone()
+            if not user:
+                return None
 
-        # Clear the one-time login token
-        conn.execute(
-            "UPDATE users SET login_token_hash = NULL, login_token_expires_at = NULL WHERE id = ?",
-            (user["id"],),
-        )
+            # Clear the one-time login token
+            cur.execute(
+                "UPDATE users SET login_token_hash = NULL, login_token_expires_at = NULL WHERE id = %s",
+                (user["id"],),
+            )
 
-        # Create session token
-        session_token = _secrets.token_urlsafe(32)
-        session_hash = hashlib.sha256(session_token.encode()).hexdigest()
-        expires_at = datetime.now(timezone.utc) + timedelta(days=90)
-        conn.execute(
-            "INSERT INTO auth_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)",
-            (user["id"], session_hash, expires_at),
-        )
-        self._commit(conn)
+            # Create session token
+            session_token = _secrets.token_urlsafe(32)
+            session_hash = hashlib.sha256(session_token.encode()).hexdigest()
+            expires_at = datetime.now(timezone.utc) + timedelta(days=90)
+            cur.execute(
+                "INSERT INTO auth_tokens (user_id, token_hash, expires_at) VALUES (%s, %s, %s)",
+                (user["id"], session_hash, expires_at),
+            )
+            self._commit(conn)
 
-        return session_token, dict(user)
+            return session_token, dict(user)
+        finally:
+            self._put_conn(conn)
 
     def get_user_by_auth_token(self, token: str) -> Optional[dict]:
-        """Look up a user by their session auth token.
-
-        Returns user dict (including role info) or None if the token is invalid
-        or expired.
-        """
+        """Look up a user by their session auth token."""
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute(
-            """SELECT u.* FROM users u JOIN auth_tokens t ON u.id = t.user_id
-               WHERE t.token_hash = ? AND t.expires_at > ? AND u.is_active = 1""",
-            (token_hash, datetime.now(timezone.utc)),
-        )
-        user = cursor.fetchone()
-        return dict(user) if user else None
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            cur.execute(
+                """SELECT u.* FROM users u JOIN auth_tokens t ON u.id = t.user_id
+                   WHERE t.token_hash = %s AND t.expires_at > %s AND u.is_active = 1""",
+                (token_hash, datetime.now(timezone.utc)),
+            )
+            user = cur.fetchone()
+            return dict(user) if user else None
+        finally:
+            self._put_conn(conn)
 
     def revoke_token(self, token: str):
         """Revoke (delete) an auth token."""
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         conn = self._get_conn()
-        conn.execute("DELETE FROM auth_tokens WHERE token_hash = ?", (token_hash,))
-        self._commit(conn)
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM auth_tokens WHERE token_hash = %s", (token_hash,))
+            self._commit(conn)
+        finally:
+            self._put_conn(conn)
 
     def revoke_all_user_tokens(self, user_id: int):
         """Revoke all auth tokens for a given user."""
         conn = self._get_conn()
-        conn.execute("DELETE FROM auth_tokens WHERE user_id = ?", (user_id,))
-        self._commit(conn)
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM auth_tokens WHERE user_id = %s", (user_id,))
+            self._commit(conn)
+        finally:
+            self._put_conn(conn)
 
     def upgrade_ephemeral_user(self, ephemeral_user_id: int, target_user_id: int) -> bool:
-        """Merge a pre-created user into an ephemeral user record.
-
-        Transfers name, email, role_name from the target to the ephemeral,
-        deletes any session tokens created for the target, and deactivates
-        the target record so the ephemeral becomes a full account.
-        """
+        """Merge a pre-created user into an ephemeral user record."""
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
-        target = conn.execute(
-            "SELECT name, email, role_name FROM users WHERE id = ? AND is_active = 1",
-            (target_user_id,),
-        ).fetchone()
-        if not target:
-            return False
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            cur.execute(
+                "SELECT name, email, role_name FROM users WHERE id = %s AND is_active = 1",
+                (target_user_id,),
+            )
+            target = cur.fetchone()
+            if not target:
+                return False
 
-        conn.execute(
-            "UPDATE users SET name=?, email=?, role_name=?, auth_method='upgraded' WHERE id=?",
-            (target["name"], target["email"], target["role_name"], ephemeral_user_id),
-        )
-        conn.execute("DELETE FROM auth_tokens WHERE user_id = ?", (target_user_id,))
-        conn.execute("UPDATE users SET is_active = 0 WHERE id = ?", (target_user_id,))
-        self._commit(conn)
-        return True
+            cur.execute(
+                "UPDATE users SET name=%s, email=%s, role_name=%s, auth_method='upgraded' WHERE id=%s",
+                (target["name"], target["email"], target["role_name"], ephemeral_user_id),
+            )
+            cur.execute("DELETE FROM auth_tokens WHERE user_id = %s", (target_user_id,))
+            cur.execute("UPDATE users SET is_active = 0 WHERE id = %s", (target_user_id,))
+            self._commit(conn)
+            return True
+        finally:
+            self._put_conn(conn)

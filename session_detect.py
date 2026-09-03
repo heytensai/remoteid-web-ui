@@ -5,37 +5,24 @@ time gaps between consecutive messages from the same UAS. A new session is
 started when there's a gap larger than the configured threshold.
 
 Usage:
-    python session_detect.py --db data/web.db --gap 600
+    python session_detect.py --db postgresql://remoteid:pass@localhost:5432/remoteid --gap 600
 
 The default gap threshold is 600 seconds (10 minutes).
 """
 
 import argparse
 import logging
-import sqlite3
+import os
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import List, Tuple, Optional
+
+import psycopg2
+import psycopg2.extras
 
 logger = logging.getLogger(__name__)
 
 # Default gap threshold in seconds (10 minutes)
 DEFAULT_GAP_THRESHOLD = 600
-
-
-def _adapt_datetime(dt: datetime) -> str:
-    """Adapt datetime to ISO format string for SQLite"""
-    return dt.isoformat()
-
-
-def _convert_datetime(s: bytes) -> datetime:
-    """Convert ISO format string from SQLite to datetime"""
-    return datetime.fromisoformat(s.decode())
-
-
-# Register adapters for datetime handling
-sqlite3.register_adapter(datetime, _adapt_datetime)
-sqlite3.register_converter("DATETIME", _convert_datetime)
 
 
 def _ensure_tz(dt: datetime) -> datetime:
@@ -45,54 +32,55 @@ def _ensure_tz(dt: datetime) -> datetime:
     return dt
 
 
-def get_uas_list(db_path: str, since: Optional[datetime] = None) -> List[str]:
+def get_uas_list(conn, since: Optional[datetime] = None) -> List[str]:
     """Get list of all unique UAS IDs in the database.
 
     When *since* is provided, only UAS with at least one position
     at or after that timestamp are returned.
     """
-    with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES, timeout=5) as conn:
-        if since is not None:
-            cursor = conn.execute(
-                "SELECT DISTINCT uas_id FROM remoteid WHERE uas_id IS NOT NULL AND timestamp >= ?",
-                (since,),
-            )
-        else:
-            cursor = conn.execute(
-                "SELECT DISTINCT uas_id FROM remoteid WHERE uas_id IS NOT NULL"
-            )
-        return [row[0] for row in cursor.fetchall()]
-
-
-def get_positions_for_uas(db_path: str, uas_id: str) -> List[Tuple[int, datetime]]:
-    """Get all positions for a UAS ordered by timestamp
-
-    Returns list of (id, timestamp) tuples
-    """
-    with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES, timeout=5) as conn:
-        cursor = conn.execute(
-            "SELECT id, timestamp FROM remoteid WHERE uas_id = ? ORDER BY timestamp",
-            (uas_id,)
+    cur = conn.cursor()
+    if since is not None:
+        cur.execute(
+            "SELECT DISTINCT uas_id FROM remoteid "
+            "WHERE uas_id IS NOT NULL AND timestamp >= %s",
+            (since,),
         )
-        return [(row[0], _ensure_tz(row[1])) for row in cursor.fetchall()]
+    else:
+        cur.execute(
+            "SELECT DISTINCT uas_id FROM remoteid WHERE uas_id IS NOT NULL"
+        )
+    return [row[0] for row in cur.fetchall()]
+
+
+def get_positions_for_uas(conn, uas_id: str) -> List[Tuple[int, datetime]]:
+    """Get all positions for a UAS ordered by timestamp.
+
+    Returns list of (id, timestamp) tuples.
+    """
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, timestamp FROM remoteid WHERE uas_id = %s ORDER BY timestamp",
+        (uas_id,),
+    )
+    return [(row[0], _ensure_tz(row[1])) for row in cur.fetchall()]
 
 
 def _get_unassigned_positions(
-    db_path: str, uas_id: str,
+    conn, uas_id: str,
 ) -> List[Tuple[int, datetime]]:
     """Get positions for *uas_id* that lack a ``computed_session_id``."""
-    with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES, timeout=5) as conn:
-        cursor = conn.execute(
-            "SELECT id, timestamp FROM remoteid "
-            "WHERE uas_id = ? AND computed_session_id IS NULL "
-            "ORDER BY timestamp",
-            (uas_id,),
-        )
-        return [(row[0], _ensure_tz(row[1])) for row in cursor.fetchall()]
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, timestamp FROM remoteid "
+        "WHERE uas_id = %s AND computed_session_id IS NULL "
+        "ORDER BY timestamp",
+        (uas_id,),
+    )
+    return [(row[0], _ensure_tz(row[1])) for row in cur.fetchall()]
 
 
 def detect_sessions(positions: List[Tuple[int, datetime]], gap_threshold: int) -> List[Tuple[int, str]]:
-    """Detect sessions based on time gaps
+    """Detect sessions based on time gaps.
 
     Session IDs are deterministic — derived from the first position's database
     ID — so re-running detection on the same data produces identical results.
@@ -129,80 +117,75 @@ def detect_sessions(positions: List[Tuple[int, datetime]], gap_threshold: int) -
     return sessions
 
 
-def update_session_ids(db_path: str, updates: List[Tuple[str, datetime, int]]):
-    """Update computed_session_id for a batch of records
+def update_session_ids(conn, updates: List[Tuple[str, datetime, int]]):
+    """Update computed_session_id for a batch of records.
 
     Args:
         updates: List of (session_id, detected_at, id) tuples
     """
-    with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES, timeout=5) as conn:
-        conn.executemany(
-            """UPDATE remoteid
-               SET computed_session_id = ?,
-                   session_detected_at = ?
-               WHERE id = ?""",
-            updates
-        )
-        conn.commit()
+    cur = conn.cursor()
+    psycopg2.extras.execute_values(
+        cur,
+        "UPDATE remoteid SET computed_session_id = v.session_id, "
+        "session_detected_at = v.detected_at "
+        "FROM (VALUES %s) AS v(session_id, detected_at, id) "
+        "WHERE remoteid.id = v.id",
+        updates,
+        page_size=5000,
+    )
+    conn.commit()
 
 
-def analyze_sessions(db_path: str, uas_id: Optional[str] = None) -> dict:
-    """Analyze sessions for a UAS or all UAS
+def analyze_sessions(conn, uas_id: Optional[str] = None) -> dict:
+    """Analyze sessions for a UAS or all UAS.
 
-    Returns dictionary with session statistics
+    Returns dictionary with session statistics.
     """
-    with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES, timeout=5) as conn:
-        conn.row_factory = sqlite3.Row
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
-        if uas_id:
-            cursor = conn.execute(
-                """SELECT computed_session_id,
-                          COUNT(*) as count,
-                          MIN(timestamp) as start_time,
-                          MAX(timestamp) as end_time
-                   FROM remoteid
-                   WHERE uas_id = ? AND computed_session_id IS NOT NULL
-                   GROUP BY computed_session_id
-                   ORDER BY start_time""",
-                (uas_id,)
-            )
-        else:
-            cursor = conn.execute(
-                """SELECT uas_id,
-                          computed_session_id,
-                          COUNT(*) as count,
-                          MIN(timestamp) as start_time,
-                          MAX(timestamp) as end_time
-                   FROM remoteid
-                   WHERE computed_session_id IS NOT NULL
-                   GROUP BY uas_id, computed_session_id
-                   ORDER BY uas_id, start_time"""
-            )
+    if uas_id:
+        cur.execute(
+            """SELECT computed_session_id,
+                      COUNT(*) as count,
+                      MIN(timestamp) as start_time,
+                      MAX(timestamp) as end_time
+               FROM remoteid
+               WHERE uas_id = %s AND computed_session_id IS NOT NULL
+               GROUP BY computed_session_id
+               ORDER BY start_time""",
+            (uas_id,),
+        )
+    else:
+        cur.execute(
+            """SELECT uas_id,
+                      computed_session_id,
+                      COUNT(*) as count,
+                      MIN(timestamp) as start_time,
+                      MAX(timestamp) as end_time
+               FROM remoteid
+               WHERE computed_session_id IS NOT NULL
+               GROUP BY uas_id, computed_session_id
+               ORDER BY uas_id, start_time"""
+        )
 
-        results = []
-        for row in cursor.fetchall():
-            row_dict = dict(row)
-            # Parse datetime strings if needed
-            start_time = row_dict.get('start_time')
-            end_time = row_dict.get('end_time')
+    results = []
+    for row in cur.fetchall():
+        row_dict = dict(row)
+        start_time = row_dict.get('start_time')
+        end_time = row_dict.get('end_time')
 
-            if isinstance(start_time, str):
-                start_time = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
-            if isinstance(end_time, str):
-                end_time = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+        if start_time and end_time:
+            duration = (end_time - start_time).total_seconds()
+            row_dict['duration_seconds'] = duration
+            row_dict['start_time'] = start_time
+            row_dict['end_time'] = end_time
+        results.append(row_dict)
 
-            if start_time and end_time:
-                duration = (end_time - start_time).total_seconds()
-                row_dict['duration_seconds'] = duration
-                row_dict['start_time'] = start_time
-                row_dict['end_time'] = end_time
-            results.append(row_dict)
-
-        return {"sessions": results, "total_count": len(results)}
+    return {"sessions": results, "total_count": len(results)}
 
 
 def process_database(
-    db_path: str,
+    conn,
     gap_threshold: int,
     dry_run: bool = False,
     since: Optional[datetime] = None,
@@ -226,19 +209,12 @@ def process_database(
     if force:
         since = None
 
-    db_path = Path(db_path)
-
-    if not db_path.exists():
-        logger.error("Database not found: %s", db_path)
-        return "database not found", []
-
-    logger.debug("Processing database: %s", db_path)
     logger.debug("Gap threshold: %i seconds", gap_threshold)
     if since is not None:
         logger.debug("Incremental mode: only UAS with activity since %s", since)
 
     # Get relevant UAS IDs (filtered by activity window when since is set)
-    uas_list = get_uas_list(str(db_path), since=since)
+    uas_list = get_uas_list(conn, since=since)
     logger.debug("Found %i unique UAS IDs", len(uas_list))
 
     total_sessions = 0
@@ -247,8 +223,8 @@ def process_database(
     for uas_id in uas_list:
         # Fetch ALL positions for correct gap detection, but also get the
         # set of already-assigned IDs so we can skip them when writing.
-        all_positions = get_positions_for_uas(str(db_path), uas_id)
-        unassigned = _get_unassigned_positions(str(db_path), uas_id)
+        all_positions = get_positions_for_uas(conn, uas_id)
+        unassigned = _get_unassigned_positions(conn, uas_id)
 
         if not unassigned:
             continue
@@ -258,8 +234,8 @@ def process_database(
             if unassigned and not dry_run:
                 session_id = f"session_{unassigned[0][0]}"
                 update_session_ids(
-                    str(db_path),
-                    [(session_id, datetime.now(), unassigned[0][0])],
+                    conn,
+                    [(session_id, datetime.now(timezone.utc), unassigned[0][0])],
                 )
             continue
 
@@ -278,12 +254,12 @@ def process_database(
                 # Only update records that don't already have a session ID
                 unassigned_ids = {pos_id for pos_id, _ in unassigned}
                 updates = [
-                    (session_map[pos_id], datetime.now(), pos_id)
+                    (session_map[pos_id], datetime.now(timezone.utc), pos_id)
                     for pos_id in unassigned_ids
                     if pos_id in session_map
                 ]
                 if updates:
-                    update_session_ids(str(db_path), updates)
+                    update_session_ids(conn, updates)
 
     logger.debug(
         "Session detection: %i UAS, %i records, %i sessions detected",
@@ -303,8 +279,8 @@ def main():
     )
     parser.add_argument(
         "--db",
-        default="./data/web.db",
-        help="Path to SQLite database (default: ./data/web.db)"
+        default="",
+        help="PostgreSQL connection URL (or leave empty to use DATABASE_URL env var)",
     )
     parser.add_argument(
         "--gap",
@@ -340,23 +316,29 @@ def main():
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
-    if args.analyze:
-        # Just analyze and show sessions
-        stats = analyze_sessions(args.db, args.analyze)
-        print(f"\nSession analysis for UAS: {args.analyze}")
-        print(f"Total sessions: {stats['total_count']}")
-        print("-" * 80)
-        for session in stats["sessions"]:
-            duration = session.get('duration_seconds', 0)
-            print(f"Session: {session['computed_session_id']}")
-            print(f"  Records: {session['count']}")
-            print(f"  Start: {session['start_time']}")
-            print(f"  End: {session['end_time']}")
-            print(f"  Duration: {duration/60:.1f} minutes")
-            print()
-    else:
-        # Process the database
-        process_database(args.db, args.gap, args.dry_run, force=args.force)
+    db_url = args.db or os.environ.get("DATABASE_URL", "")
+    if not db_url:
+        parser.error("--db or DATABASE_URL environment variable required")
+
+    conn = psycopg2.connect(db_url)
+    try:
+        if args.analyze:
+            stats = analyze_sessions(conn, args.analyze)
+            print(f"\nSession analysis for UAS: {args.analyze}")
+            print(f"Total sessions: {stats['total_count']}")
+            print("-" * 80)
+            for session in stats["sessions"]:
+                duration = session.get('duration_seconds', 0)
+                print(f"Session: {session['computed_session_id']}")
+                print(f"  Records: {session['count']}")
+                print(f"  Start: {session['start_time']}")
+                print(f"  End: {session['end_time']}")
+                print(f"  Duration: {duration/60:.1f} minutes")
+                print()
+        else:
+            process_database(conn, args.gap, args.dry_run, force=args.force)
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":

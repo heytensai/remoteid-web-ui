@@ -6,10 +6,12 @@ web_interface:
   host: "0.0.0.0"
   port: 5000
 
-  # Path to web interface database (SQLite)
-  # For Docker: use "/app/data/web.db" to persist in the data volume
-  # For local dev: use "./data/web.db" or "./web.db"
-  database_path: "./data/web.db"
+  # PostgreSQL connection URL
+  # Format: postgresql://user:password@host:5432/dbname
+  # For Docker: use "postgresql://remoteid:${POSTGRES_PASSWORD}@db:5432/remoteid"
+  # For local dev: use "postgresql://remoteid:password@localhost:5432/remoteid"
+  # Can also be set via DATABASE_URL environment variable (env var takes precedence)
+  database_url: ""
 
   # Map configuration
   # If center_lat/center_lon are not specified, map will auto-fit to show all drones

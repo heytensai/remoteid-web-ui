@@ -1,149 +1,76 @@
-"""Tests for database.py - database operations"""
+"""Tests for database.py - database operations (PostgreSQL)"""
 
 import hashlib
 from datetime import datetime, timedelta, timezone
 
+import psycopg2
+import psycopg2.extras
 import pytest
 
 from database import WebDatabase
+from tests.conftest import TEST_DATABASE_URL
 
 
 def test_database_init(db):
-    assert db.db_path is not None
-    assert db.db_path.exists()
+    assert db._pool is not None
+
+
+def test_pool_is_lazy(db):
+    """The pool must not open connections at construction (minconn=0)."""
+    assert db._pool.minconn == 0
+
+
+def test_reset_pool_fresh_pool_usable(db):
+    """reset_pool() must replace the pool with a fresh, usable one.
+
+    Reusing the inherited pool is unsafe (shared sockets, and its lock may
+    be held from a forked thread and deadlock), so reset_pool() must swap in
+    a brand-new pool object the worker can get connections from.
+    """
+    old_pool = db._pool
+    db.reset_pool()
+    assert db._pool is not old_pool
+    assert not db._pool.closed
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        assert cur.fetchone() == (1,)
+    finally:
+        db._put_conn(conn)
+
+
+def test_reset_pool_is_idempotent(db):
+    """reset_pool() can be called multiple times safely."""
+    db.reset_pool()
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        assert cur.fetchone() == (1,)
+    finally:
+        db._put_conn(conn)
+    db.reset_pool()
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        assert cur.fetchone() == (1,)
+    finally:
+        db._put_conn(conn)
 
 
 def test_schema_version_created(db):
     """_schema_version table exists at current version."""
-    import sqlite3
-    conn = sqlite3.connect(db.db_path)
     from database import SCHEMA_VERSION
-
-    version = conn.execute(
-        "SELECT MAX(version) FROM _schema_version"
-    ).fetchone()[0]
-    conn.close()
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT MAX(version) FROM _schema_version")
+        version = cur.fetchone()[0]
+    finally:
+        db._put_conn(conn)
     assert version == SCHEMA_VERSION
-
-
-def test_schema_version_upgrade(tmp_path):
-    """Opening a pre-v1 database upgrades it to the current version."""
-    import sqlite3
-    from database import SCHEMA_VERSION
-
-    db_path = tmp_path / "test_upgrade.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.execute("CREATE TABLE _schema_version (version INTEGER NOT NULL)")
-    conn.execute("INSERT INTO _schema_version (version) VALUES (0)")
-    conn.commit()
-    conn.close()
-
-    WebDatabase(str(db_path))
-
-    conn = sqlite3.connect(str(db_path))
-    version = conn.execute(
-        "SELECT MAX(version) FROM _schema_version"
-    ).fetchone()[0]
-    conn.close()
-    assert version == SCHEMA_VERSION
-
-
-def test_migration_6_to_7_adds_sync_log_index(tmp_path):
-    """Migration from schema 6 creates idx_sync_log_source."""
-    import sqlite3
-    db_path = tmp_path / "test_migrate_6.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.execute("CREATE TABLE _schema_version (version INTEGER NOT NULL)")
-    conn.execute("INSERT INTO _schema_version (version) VALUES (6)")
-    conn.execute(
-        "CREATE TABLE sync_log("
-        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        "source TEXT, last_sync DATETIME, records_imported INTEGER)"
-    )
-    conn.commit()
-    conn.close()
-
-    WebDatabase(str(db_path))
-
-    conn = sqlite3.connect(str(db_path))
-    index_names = [row[1] for row in conn.execute(
-        "PRAGMA index_list(sync_log)"
-    ).fetchall()]
-    conn.close()
-    assert "idx_sync_log_source" in index_names
-
-
-def test_migration_7_to_8_adds_sent_alerts_and_active_index(tmp_path):
-    """Migration from schema 7 creates sent_alerts and the partial unique index."""
-    import sqlite3
-    db_path = tmp_path / "test_migrate_7.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.execute("CREATE TABLE _schema_version (version INTEGER NOT NULL)")
-    conn.execute("INSERT INTO _schema_version (version) VALUES (7)")
-    conn.execute(
-        "CREATE TABLE geozone_events("
-        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        "uas_id TEXT NOT NULL, geozone_name TEXT NOT NULL,"
-        "entered_at DATETIME NOT NULL, last_seen_at DATETIME NOT NULL,"
-        "exited_at DATETIME, exited_reason TEXT,"
-        "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
-    )
-    conn.commit()
-    conn.close()
-
-    WebDatabase(str(db_path))
-
-    conn = sqlite3.connect(str(db_path))
-    tables = [row[0] for row in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'"
-    ).fetchall()]
-    index_names = [row[1] for row in conn.execute(
-        "PRAGMA index_list(geozone_events)"
-    ).fetchall()]
-    conn.close()
-    assert "sent_alerts" in tables
-    assert "idx_geozone_events_active_unique" in index_names
-
-
-def test_migration_7_to_8_dedupes_active_events(tmp_path):
-    """Migration deduplicates pre-existing duplicate active geozone events."""
-    import sqlite3
-    db_path = tmp_path / "test_migrate_7_dup.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.execute("CREATE TABLE _schema_version (version INTEGER NOT NULL)")
-    conn.execute("INSERT INTO _schema_version (version) VALUES (7)")
-    conn.execute(
-        "CREATE TABLE geozone_events("
-        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        "uas_id TEXT NOT NULL, geozone_name TEXT NOT NULL,"
-        "entered_at DATETIME NOT NULL, last_seen_at DATETIME NOT NULL,"
-        "exited_at DATETIME, exited_reason TEXT,"
-        "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
-    )
-    now = datetime.now(timezone.utc)
-    # Two duplicate active events for the same (uas, geozone) — left behind by
-    # the old per-process race — must be collapsed before the unique index.
-    conn.execute(
-        "INSERT INTO geozone_events (uas_id, geozone_name, entered_at, last_seen_at) "
-        "VALUES ('drone-001', 'ZoneA', ?, ?)",
-        (now, now),
-    )
-    conn.execute(
-        "INSERT INTO geozone_events (uas_id, geozone_name, entered_at, last_seen_at) "
-        "VALUES ('drone-001', 'ZoneA', ?, ?)",
-        (now, now),
-    )
-    conn.commit()
-    conn.close()
-
-    WebDatabase(str(db_path))
-
-    conn = sqlite3.connect(str(db_path))
-    active = conn.execute(
-        "SELECT COUNT(*) FROM geozone_events WHERE exited_at IS NULL"
-    ).fetchone()[0]
-    conn.close()
-    assert active == 1
 
 
 def test_claim_alert_first_wins(db):
@@ -161,14 +88,18 @@ def test_claim_alert_different_keys_independent(db):
 
 def test_claim_alert_persists_across_connections(db):
     """The claim survives a new database connection (restart-safety)."""
-    import sqlite3
     assert db.claim_alert("new_session", "uas-001:session_abc") is True
-    conn = sqlite3.connect(db.db_path)
-    count = conn.execute(
-        "SELECT COUNT(*) FROM sent_alerts WHERE alert_type = 'new_session' "
-        "AND dedup_key = 'uas-001:session_abc'"
-    ).fetchone()[0]
-    conn.close()
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM sent_alerts WHERE alert_type = %s "
+            "AND dedup_key = %s",
+            ("new_session", "uas-001:session_abc"),
+        )
+        count = cur.fetchone()[0]
+    finally:
+        db._put_conn(conn)
     assert count == 1
 
 
@@ -239,13 +170,9 @@ def test_sanitize_float_valid():
 def test_sanitize_timestamp():
     mc = WebDatabase
     assert mc._sanitize_timestamp(None) is None
-    # Naive datetime strings get Z suffix
     assert mc._sanitize_timestamp("2024-01-15T10:00:00") == "2024-01-15T10:00:00Z"
-    # Already has Z suffix, stays the same
     assert mc._sanitize_timestamp("2024-01-15T10:00:00Z") == "2024-01-15T10:00:00Z"
-    # Has timezone offset, stays the same
     assert mc._sanitize_timestamp("2024-01-15T10:00:00+05:00") == "2024-01-15T10:00:00+05:00"
-    # Non-datetime strings pass through
     assert mc._sanitize_timestamp(12345) == "12345"
 
 
@@ -365,6 +292,7 @@ def test_get_track_session_positions(db):
     assert len(positions) == len(target["positions"])
     for p in positions:
         assert p["computed_session_id"] == target["session_id"]
+        assert p["source"] == "test-source"
 
 
 def test_get_track_session_positions_nonexistent(db):
@@ -417,7 +345,7 @@ def test_get_most_recent_timestamp_by_source(db):
 
 
 def test_session_detection(db):
-    db2 = WebDatabase(db.db_path)
+    db2 = WebDatabase(TEST_DATABASE_URL)
     now = datetime.now(timezone.utc)
     records = [
         {"timestamp": (now - timedelta(seconds=10)).isoformat(), "uas_id": "session-test", "latitude": 37.0, "longitude": -122.0},
@@ -433,7 +361,7 @@ def test_session_detection(db):
 
 
 def test_session_detection_gap(db):
-    db2 = WebDatabase(db.db_path)
+    db2 = WebDatabase(TEST_DATABASE_URL)
     now = datetime.now(timezone.utc)
     records = [
         {"timestamp": (now - timedelta(minutes=30)).isoformat(), "uas_id": "gap-test", "latitude": 37.0, "longitude": -122.0},
@@ -459,7 +387,6 @@ def test_sanitize_record():
     assert sanitized["latitude"] == 37.7749
     assert sanitized["altitude"] is None
     assert sanitized["operator_latitude"] is None
-    # Naive timestamp strings get Z suffix
     assert sanitized["timestamp"] == "2024-01-15T10:00:00Z"
 
 
@@ -519,11 +446,10 @@ def test_get_geozone_event_history_pagination(db):
 
 def test_get_geozone_event_history_orders_by_entered_desc(db):
     now = datetime.now()
-    e1 = db.enter_geozone("drone-001", "ZoneA", now - timedelta(hours=2))
-    e2 = db.enter_geozone("drone-001", "ZoneB", now - timedelta(hours=1))
+    db.enter_geozone("drone-001", "ZoneA", now - timedelta(hours=2))
+    db.enter_geozone("drone-001", "ZoneB", now - timedelta(hours=1))
     events, total = db.get_geozone_event_history(uas_id="drone-001")
     assert total == 2
-    # Most recent first
     assert events[0]["geozone_name"] == "ZoneB"
     assert events[1]["geozone_name"] == "ZoneA"
 
@@ -582,12 +508,11 @@ def test_get_stats_empty(db):
 
 def test_get_stats_with_data(db):
     """db fixture inserts 4 records for drone-001, drone-002, drone-003."""
-    start = datetime.now() - timedelta(hours=24)
-    end = datetime.now()
+    start = datetime.now(timezone.utc) - timedelta(hours=24)
+    end = datetime.now(timezone.utc)
     stats = db.get_stats(start, end)
     assert stats["total_drones"] == 3
     assert stats["total_positions"] == 4
-    # Sessions depend on session detection; at minimum 1 per drone
     assert stats["total_drones"] == 3
 
 
@@ -656,7 +581,7 @@ def test_get_drones_incremental_empty_known(db):
 
 
 def test_get_drones_incremental_with_known_all_fresh(db):
-    """All known timestamps ahead of data → no drones returned."""
+    """All known timestamps ahead of data -> no drones returned."""
     now = datetime.now(timezone.utc)
     start = now - timedelta(days=1)
     end = now + timedelta(days=1)
@@ -682,7 +607,7 @@ def test_get_drones_for_alert_check(db):
 
 
 def test_get_drones_for_alert_check_since(db):
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     drones = db.get_drones_for_alert_check(since=now - timedelta(hours=5))
     assert len(drones) >= 3
     drones_old = db.get_drones_for_alert_check(since=now + timedelta(hours=1))
@@ -698,7 +623,7 @@ def test_get_positions_for_alert_check(db):
 
 
 def test_get_positions_for_alert_check_since(db):
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     positions = db.get_positions_for_alert_check("drone-001", since=now - timedelta(hours=3))
     assert len(positions) >= 2
     positions_future = db.get_positions_for_alert_check("drone-001", since=now + timedelta(hours=1))
@@ -767,9 +692,7 @@ def test_log_submission(db):
 # --- Auth method tests ---
 
 
-def test_create_user(tmp_path):
-    db_path = tmp_path / "test_create_user.db"
-    db = WebDatabase(str(db_path))
+def test_create_user(db):
     expires_at = datetime.now(timezone.utc) + timedelta(days=7)
     user = db.create_user("Alice", "alice@example.com", "operator", "login-token-123", expires_at)
     assert user["name"] == "Alice"
@@ -781,32 +704,30 @@ def test_create_user(tmp_path):
     assert user["id"] > 0
 
 
-def test_create_user_stores_login_token_hash(tmp_path):
+def test_create_user_stores_login_token_hash(db):
     """The login token is stored as a SHA-256 hash, not plaintext."""
-    db_path = tmp_path / "test_login_hash.db"
-    db = WebDatabase(str(db_path))
     expires_at = datetime.now(timezone.utc) + timedelta(days=7)
     db.create_user("Bob", "bob@example.com", "viewer", "my-raw-token", expires_at)
 
-    import sqlite3
-    conn = sqlite3.connect(str(db_path))
-    row = conn.execute(
-        "SELECT login_token_hash FROM users WHERE name = ?", ("Bob",)
-    ).fetchone()
-    conn.close()
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT login_token_hash FROM users WHERE name = %s", ("Bob",)
+        )
+        row = cur.fetchone()
+    finally:
+        db._put_conn(conn)
     assert row is not None
-    assert row[0] != "my-raw-token"  # not stored in plaintext
+    assert row[0] != "my-raw-token"
     assert row[0] == hashlib.sha256("my-raw-token".encode()).hexdigest()
 
 
-def test_create_ephemeral_user(tmp_path):
-    db_path = tmp_path / "test_ephemeral.db"
-    db = WebDatabase(str(db_path))
+def test_create_ephemeral_user(db):
     session_token, user_id = db.create_ephemeral_user()
     assert len(session_token) > 0
     assert user_id > 0
 
-    # The token can be used to look up the user
     user = db.get_user_by_auth_token(session_token)
     assert user is not None
     assert user["id"] == user_id
@@ -816,10 +737,8 @@ def test_create_ephemeral_user(tmp_path):
     assert user["name"].startswith("Guest-")
 
 
-def test_create_ephemeral_user_multiple(tmp_path):
+def test_create_ephemeral_user_multiple(db):
     """Each ephemeral user gets a unique name."""
-    db_path = tmp_path / "test_ephemeral_multi.db"
-    db = WebDatabase(str(db_path))
     token1, uid1 = db.create_ephemeral_user()
     token2, uid2 = db.create_ephemeral_user()
     assert uid1 != uid2
@@ -828,9 +747,7 @@ def test_create_ephemeral_user_multiple(tmp_path):
     assert u1["name"] != u2["name"]
 
 
-def test_exchange_login_token_valid(tmp_path):
-    db_path = tmp_path / "test_exchange.db"
-    db = WebDatabase(str(db_path))
+def test_exchange_login_token_valid(db):
     expires_at = datetime.now(timezone.utc) + timedelta(days=7)
     db.create_user("Carol", "carol@example.com", "operator", "valid-login-token", expires_at)
 
@@ -840,16 +757,13 @@ def test_exchange_login_token_valid(tmp_path):
     assert user["name"] == "Carol"
     assert user["role_name"] == "operator"
 
-    # The session token works for auth
     looked_up = db.get_user_by_auth_token(session_token)
     assert looked_up is not None
     assert looked_up["id"] == user["id"]
 
 
-def test_exchange_login_token_single_use(tmp_path):
+def test_exchange_login_token_single_use(db):
     """A login token can only be used once."""
-    db_path = tmp_path / "test_single_use.db"
-    db = WebDatabase(str(db_path))
     expires_at = datetime.now(timezone.utc) + timedelta(days=7)
     db.create_user("Dave", "dave@example.com", "viewer", "one-time-token", expires_at)
 
@@ -860,105 +774,84 @@ def test_exchange_login_token_single_use(tmp_path):
     assert result2 is None
 
 
-def test_exchange_login_token_expired(tmp_path):
-    db_path = tmp_path / "test_expired_token.db"
-    db = WebDatabase(str(db_path))
-    expires_at = datetime.now(timezone.utc) - timedelta(hours=1)  # already expired
+def test_exchange_login_token_expired(db):
+    expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
     db.create_user("Eve", "eve@example.com", "viewer", "expired-token", expires_at)
 
     result = db.exchange_login_token("expired-token")
     assert result is None
 
 
-def test_exchange_login_token_invalid(tmp_path):
-    db_path = tmp_path / "test_invalid_token.db"
-    db = WebDatabase(str(db_path))
+def test_exchange_login_token_invalid(db):
     result = db.exchange_login_token("nonexistent-token")
     assert result is None
 
 
-def test_get_user_by_auth_token_valid(tmp_path):
-    db_path = tmp_path / "test_get_user.db"
-    db = WebDatabase(str(db_path))
+def test_get_user_by_auth_token_valid(db):
     token, user_id = db.create_ephemeral_user()
     user = db.get_user_by_auth_token(token)
     assert user is not None
     assert user["id"] == user_id
 
 
-def test_get_user_by_auth_token_invalid(tmp_path):
-    db_path = tmp_path / "test_get_user_invalid.db"
-    db = WebDatabase(str(db_path))
+def test_get_user_by_auth_token_invalid(db):
     user = db.get_user_by_auth_token("invalid-token")
     assert user is None
 
 
-def test_get_user_by_auth_token_expired(tmp_path):
-    db_path = tmp_path / "test_get_user_expired.db"
-    db = WebDatabase(str(db_path))
-
+def test_get_user_by_auth_token_expired(db):
     # Manually insert a token with an expired date
-    import sqlite3
-    conn = sqlite3.connect(str(db_path))
-    conn.execute("INSERT INTO users (name, role_name, is_ephemeral) VALUES (?, 'guest', 1)",
-                 ("ExpiredUser",))
-    user_id = conn.execute("SELECT id FROM users WHERE name = 'ExpiredUser'").fetchone()[0]
-    token_hash = hashlib.sha256("stale-token".encode()).hexdigest()
-    expired = datetime.now(timezone.utc) - timedelta(days=1)
-    conn.execute(
-        "INSERT INTO auth_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)",
-        (user_id, token_hash, expired),
-    )
-    conn.commit()
-    conn.close()
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO users (name, role_name, is_ephemeral) VALUES (%s, 'guest', 1) RETURNING id",
+            ("ExpiredUser",),
+        )
+        user_id = cur.fetchone()[0]
+        token_hash = hashlib.sha256("stale-token".encode()).hexdigest()
+        expired = datetime.now(timezone.utc) - timedelta(days=1)
+        cur.execute(
+            "INSERT INTO auth_tokens (user_id, token_hash, expires_at) VALUES (%s, %s, %s)",
+            (user_id, token_hash, expired),
+        )
+        conn.commit()
+    finally:
+        db._put_conn(conn)
 
     user = db.get_user_by_auth_token("stale-token")
     assert user is None
 
 
-def test_revoke_token(tmp_path):
-    db_path = tmp_path / "test_revoke.db"
-    db = WebDatabase(str(db_path))
+def test_revoke_token(db):
     token, _ = db.create_ephemeral_user()
-
-    # Token works before revocation
     assert db.get_user_by_auth_token(token) is not None
 
     db.revoke_token(token)
 
-    # Token no longer works after revocation
     assert db.get_user_by_auth_token(token) is None
 
 
-def test_revoke_all_user_tokens(tmp_path):
-    db_path = tmp_path / "test_revoke_all.db"
-    db = WebDatabase(str(db_path))
+def test_revoke_all_user_tokens(db):
     token1, uid1 = db.create_ephemeral_user()
     token2, _ = db.create_ephemeral_user()
 
-    # Both tokens work
     assert db.get_user_by_auth_token(token1) is not None
     assert db.get_user_by_auth_token(token2) is not None
 
     db.revoke_all_user_tokens(uid1)
 
-    # Only user1's tokens are revoked
     assert db.get_user_by_auth_token(token1) is None
     assert db.get_user_by_auth_token(token2) is not None
 
 
-def test_revoke_nonexistent_token(tmp_path):
+def test_revoke_nonexistent_token(db):
     """Revoking a nonexistent token does not raise."""
-    db_path = tmp_path / "test_revoke_nonexistent.db"
-    db = WebDatabase(str(db_path))
-    db.revoke_token("i-dont-exist")  # should not raise
+    db.revoke_token("i-dont-exist")
 
 
-def test_create_user_defaults(tmp_path):
+def test_create_user_defaults(db):
     """A user with 'guest' role is created correctly."""
-    db_path = tmp_path / "test_user_defaults.db"
-    db = WebDatabase(str(db_path))
-    import hashlib
     expires_at = datetime.now(timezone.utc) + timedelta(days=1)
     user = db.create_user("GuestUser", "", "guest", "guest-token", expires_at)
     assert user["role_name"] == "guest"
@@ -971,280 +864,279 @@ def test_create_user_defaults(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_cleanup_expired_auth_tokens(tmp_path):
+def test_cleanup_expired_auth_tokens(db):
     """cleanup_expired_auth_tokens removes tokens past expires_at."""
-    import sqlite3
-    db_path = tmp_path / "test_cleanup_tokens.db"
-    db = WebDatabase(str(db_path))
     token, uid = db.create_ephemeral_user()
-
-    # Token is valid (just created, expires in 90d)
     assert db.get_user_by_auth_token(token) is not None
 
     # Manually expire the token
-    conn = sqlite3.connect(str(db_path))
-    conn.execute(
-        "UPDATE auth_tokens SET expires_at = ? WHERE user_id = ?",
-        (datetime.now(timezone.utc) - timedelta(hours=1), uid),
-    )
-    conn.commit()
-    conn.close()
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE auth_tokens SET expires_at = %s WHERE user_id = %s",
+            (datetime.now(timezone.utc) - timedelta(hours=1), uid),
+        )
+        conn.commit()
+    finally:
+        db._put_conn(conn)
 
     assert db.cleanup_expired_auth_tokens() == 1
-
-    # Token should be gone
     assert db.get_user_by_auth_token(token) is None
 
 
-def test_cleanup_expired_auth_tokens_none(tmp_path):
+def test_cleanup_expired_auth_tokens_none(db):
     """cleanup_expired_auth_tokens returns 0 when nothing is expired."""
-    db_path = tmp_path / "test_cleanup_tokens_none.db"
-    db = WebDatabase(str(db_path))
-    db.create_ephemeral_user()  # 90d into the future
+    db.create_ephemeral_user()
     assert db.cleanup_expired_auth_tokens() == 0
 
 
-def test_cleanup_expired_login_tokens(tmp_path):
+def test_cleanup_expired_login_tokens(db):
     """cleanup_expired_login_tokens removes users with expired login tokens."""
-    import hashlib
-    import sqlite3
-    db_path = tmp_path / "test_cleanup_login.db"
-    db = WebDatabase(str(db_path))
-
-    expires_at = datetime.now(timezone.utc) - timedelta(hours=1)  # already expired
+    expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
     db.create_user("OldUser", "old@example.com", "operator", "old-token", expires_at)
 
     token_hash = hashlib.sha256("old-token".encode()).hexdigest()
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.execute(
-        "SELECT id FROM users WHERE login_token_hash = ?", (token_hash,)
-    )
-    assert cursor.fetchone() is not None
-    conn.close()
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM users WHERE login_token_hash = %s", (token_hash,)
+        )
+        assert cur.fetchone() is not None
+    finally:
+        db._put_conn(conn)
 
     assert db.cleanup_expired_login_tokens() == 1
 
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.execute(
-        "SELECT id FROM users WHERE login_token_hash = ?", (token_hash,)
-    )
-    assert cursor.fetchone() is None
-    conn.close()
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM users WHERE login_token_hash = %s", (token_hash,)
+        )
+        assert cur.fetchone() is None
+    finally:
+        db._put_conn(conn)
 
 
-def test_cleanup_expired_login_tokens_skips_valid(tmp_path):
+def test_cleanup_expired_login_tokens_skips_valid(db):
     """cleanup_expired_login_tokens does not remove users with valid tokens."""
-    import hashlib
-    import sqlite3
-    db_path = tmp_path / "test_cleanup_login_skip.db"
-    db = WebDatabase(str(db_path))
-
-    expires_at = datetime.now(timezone.utc) + timedelta(days=1)  # still valid
+    expires_at = datetime.now(timezone.utc) + timedelta(days=1)
     db.create_user("ValidUser", "v@example.com", "operator", "valid-token", expires_at)
 
     assert db.cleanup_expired_login_tokens() == 0
 
     token_hash = hashlib.sha256("valid-token".encode()).hexdigest()
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.execute(
-        "SELECT id FROM users WHERE login_token_hash = ?", (token_hash,)
-    )
-    assert cursor.fetchone() is not None
-    conn.close()
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM users WHERE login_token_hash = %s", (token_hash,)
+        )
+        assert cur.fetchone() is not None
+    finally:
+        db._put_conn(conn)
 
 
-def test_cleanup_orphaned_ephemeral_users(tmp_path):
+def test_cleanup_orphaned_ephemeral_users(db):
     """cleanup_orphaned_ephemeral_users removes guests with no valid tokens."""
-    import sqlite3
-    db_path = tmp_path / "test_cleanup_orphan.db"
-    db = WebDatabase(str(db_path))
     _token, uid = db.create_ephemeral_user()
 
     # Expire all tokens for this user
-    conn = sqlite3.connect(str(db_path))
-    conn.execute(
-        "UPDATE auth_tokens SET expires_at = ? WHERE user_id = ?",
-        (datetime.now(timezone.utc) - timedelta(hours=1), uid),
-    )
-    conn.commit()
-    conn.close()
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE auth_tokens SET expires_at = %s WHERE user_id = %s",
+            (datetime.now(timezone.utc) - timedelta(hours=1), uid),
+        )
+        conn.commit()
+    finally:
+        db._put_conn(conn)
 
     assert db.cleanup_orphaned_ephemeral_users() == 1
 
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.execute("SELECT id FROM users WHERE id = ?", (uid,))
-    assert cursor.fetchone() is None
-    cursor = conn.execute("SELECT id FROM auth_tokens WHERE user_id = ?", (uid,))
-    assert cursor.fetchone() is None  # no orphaned tokens
-    conn.close()
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM users WHERE id = %s", (uid,))
+        assert cur.fetchone() is None
+        cur.execute("SELECT id FROM auth_tokens WHERE user_id = %s", (uid,))
+        assert cur.fetchone() is None
+    finally:
+        db._put_conn(conn)
 
 
-def test_cleanup_orphaned_ephemeral_skips_active(tmp_path):
+def test_cleanup_orphaned_ephemeral_skips_active(db):
     """cleanup_orphaned_ephemeral_users does not remove users with valid tokens."""
-    import sqlite3
-    db_path = tmp_path / "test_cleanup_orphan_skip.db"
-    db = WebDatabase(str(db_path))
-    _token, uid = db.create_ephemeral_user()  # 90d into the future
+    _token, uid = db.create_ephemeral_user()
 
     assert db.cleanup_orphaned_ephemeral_users() == 0
 
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.execute("SELECT id FROM users WHERE id = ?", (uid,))
-    assert cursor.fetchone() is not None
-    conn.close()
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM users WHERE id = %s", (uid,))
+        assert cur.fetchone() is not None
+    finally:
+        db._put_conn(conn)
 
 
-def test_cleanup_orphaned_ephemeral_no_tokens(tmp_path):
+def test_cleanup_orphaned_ephemeral_no_tokens(db):
     """cleanup_orphaned_ephemeral_users removes guests that have zero tokens."""
-    import sqlite3
-    db_path = tmp_path / "test_cleanup_orphan_notokens.db"
-    db = WebDatabase(str(db_path))
-
-    # Create a guest user directly with no tokens
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.execute(
-        """INSERT INTO users (name, role_name, is_ephemeral, is_active, auth_method)
-           VALUES ('Ghost', 'guest', 1, 1, 'ephemeral')"""
-    )
-    uid = cursor.lastrowid
-    conn.commit()
-    conn.close()
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO users (name, role_name, is_ephemeral, is_active, auth_method) "
+            "VALUES ('Ghost', 'guest', 1, 1, 'ephemeral') RETURNING id"
+        )
+        uid = cur.fetchone()[0]
+        conn.commit()
+    finally:
+        db._put_conn(conn)
 
     assert db.cleanup_orphaned_ephemeral_users() == 1
 
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.execute("SELECT id FROM users WHERE id = ?", (uid,))
-    assert cursor.fetchone() is None
-    conn.close()
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM users WHERE id = %s", (uid,))
+        assert cur.fetchone() is None
+    finally:
+        db._put_conn(conn)
 
 
-def test_cleanup_old_sync_log(tmp_path):
+def test_cleanup_old_sync_log(db):
     """cleanup_old_sync_log removes old rows but keeps at least 1 per source."""
-    import sqlite3
-    db_path = tmp_path / "test_cleanup_synclog.db"
-    db = WebDatabase(str(db_path))
-
     now = datetime.now(timezone.utc)
-    conn = sqlite3.connect(str(db_path))
-
-    # Source A: 1 old row + 1 recent row
-    conn.execute(
-        "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (?, ?, ?)",
-        ("A", now - timedelta(days=10), 100),
-    )
-    conn.execute(
-        "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (?, ?, ?)",
-        ("A", now - timedelta(hours=1), 200),
-    )
-    # Source B: only 1 old row (must be preserved)
-    conn.execute(
-        "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (?, ?, ?)",
-        ("B", now - timedelta(days=20), 50),
-    )
-    # Source C: all recent rows
-    conn.execute(
-        "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (?, ?, ?)",
-        ("C", now - timedelta(hours=2), 75),
-    )
-    conn.commit()
-    conn.close()
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        # Source A: 1 old row + 1 recent row
+        cur.execute(
+            "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (%s, %s, %s)",
+            ("A", now - timedelta(days=10), 100),
+        )
+        cur.execute(
+            "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (%s, %s, %s)",
+            ("A", now - timedelta(hours=1), 200),
+        )
+        # Source B: only 1 old row (must be preserved)
+        cur.execute(
+            "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (%s, %s, %s)",
+            ("B", now - timedelta(days=20), 50),
+        )
+        # Source C: all recent rows
+        cur.execute(
+            "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (%s, %s, %s)",
+            ("C", now - timedelta(hours=2), 75),
+        )
+        conn.commit()
+    finally:
+        db._put_conn(conn)
 
     deleted = db.cleanup_old_sync_log(retention_days=7)
-    assert deleted == 1  # only source A's old row
+    assert deleted == 1
 
-    conn = sqlite3.connect(str(db_path))
-    rows = conn.execute("SELECT source, records_imported FROM sync_log ORDER BY source").fetchall()
-    conn.close()
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT source, records_imported FROM sync_log ORDER BY source")
+        rows = cur.fetchall()
+    finally:
+        db._put_conn(conn)
 
-    # Source A: kept recent row, source B: kept only row, source C: kept all
     assert len(rows) == 3
     assert ("A", 200) in rows
     assert ("B", 50) in rows
     assert ("C", 75) in rows
 
 
-def test_cleanup_old_sync_log_none(tmp_path):
+def test_cleanup_old_sync_log_none(db):
     """cleanup_old_sync_log returns 0 when all rows are within retention."""
-    db_path = tmp_path / "test_cleanup_synclog_none.db"
-    db = WebDatabase(str(db_path))
     now = datetime.now(timezone.utc)
-    import sqlite3
-    conn = sqlite3.connect(str(db_path))
-    conn.execute(
-        "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (?, ?, ?)",
-        ("X", now - timedelta(hours=1), 10),
-    )
-    conn.commit()
-    conn.close()
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (%s, %s, %s)",
+            ("X", now - timedelta(hours=1), 10),
+        )
+        conn.commit()
+    finally:
+        db._put_conn(conn)
 
     assert db.cleanup_old_sync_log(retention_days=7) == 0
 
-    conn = sqlite3.connect(str(db_path))
-    assert conn.execute("SELECT COUNT(*) FROM sync_log").fetchone()[0] == 1
-    conn.close()
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM sync_log")
+        assert cur.fetchone()[0] == 1
+    finally:
+        db._put_conn(conn)
 
 
-def test_get_live_drones(tmp_path):
+def test_get_live_drones(db):
     """get_live_drones returns sessions with recent positions only."""
-    import sqlite3
-    db_path = tmp_path / "test_live_drones.db"
-    db = WebDatabase(str(db_path))
     now = datetime.now(timezone.utc)
-    conn = sqlite3.connect(str(db_path))
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        # Recent position (1 minute ago)
+        cur.execute(
+            """INSERT INTO latest_positions
+               (uas_id, computed_session_id, max_ts, min_ts, latitude, longitude,
+                altitude, height, height_type, max_height, source)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            ("drone-recent", "session_1",
+             (now - timedelta(minutes=1)).isoformat(),
+             (now - timedelta(minutes=5)).isoformat(),
+             37.7, -122.4, 100, 50, "agl", 80, "test"),
+        )
+        # Old position (2 hours ago)
+        cur.execute(
+            """INSERT INTO latest_positions
+               (uas_id, computed_session_id, max_ts, min_ts, latitude, longitude,
+                altitude, height, height_type, max_height, source)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            ("drone-old", "session_2",
+             (now - timedelta(hours=2)).isoformat(),
+             (now - timedelta(hours=3)).isoformat(),
+             38.0, -122.0, 200, 100, "agl", 150, "test"),
+        )
+        conn.commit()
+    finally:
+        db._put_conn(conn)
 
-    # Recent position (1 minute ago) — should be returned
-    conn.execute(
-        """INSERT INTO latest_positions
-           (uas_id, computed_session_id, max_ts, min_ts, latitude, longitude,
-            altitude, height, height_type, max_height, source)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        ("drone-recent", "session_1",
-         (now - timedelta(minutes=1)).isoformat(),
-         (now - timedelta(minutes=5)).isoformat(),
-         37.7, -122.4, 100, 50, "agl", 80, "test"),
-    )
-    # Old position (2 hours ago) — should NOT be returned
-    conn.execute(
-        """INSERT INTO latest_positions
-           (uas_id, computed_session_id, max_ts, min_ts, latitude, longitude,
-            altitude, height, height_type, max_height, source)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        ("drone-old", "session_2",
-         (now - timedelta(hours=2)).isoformat(),
-         (now - timedelta(hours=3)).isoformat(),
-         38.0, -122.0, 200, 100, "agl", 150, "test"),
-    )
-    conn.commit()
-    conn.close()
-
-    # With 30-minute stale window, only the recent drone is live
     result = db.get_live_drones(stale_minutes=30)
     uas_ids = [r["uas_id"] for r in result]
     assert "drone-recent" in uas_ids
     assert "drone-old" not in uas_ids
 
 
-def test_get_live_drones_empty(tmp_path):
+def test_get_live_drones_empty(db):
     """get_live_drones returns empty list when no recent data exists."""
-    import sqlite3
-    db_path = tmp_path / "test_live_empty.db"
-    db = WebDatabase(str(db_path))
     now = datetime.now(timezone.utc)
-    conn = sqlite3.connect(str(db_path))
-
-    # Only old data (6 hours ago)
-    conn.execute(
-        """INSERT INTO latest_positions
-           (uas_id, computed_session_id, max_ts, min_ts, latitude, longitude,
-            altitude, height, height_type, max_height, source)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        ("drone-stale", "session_1",
-         (now - timedelta(hours=6)).isoformat(),
-         (now - timedelta(hours=7)).isoformat(),
-         37.7, -122.4, 100, 50, "agl", 80, "test"),
-    )
-    conn.commit()
-    conn.close()
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        # Only old data (6 hours ago)
+        cur.execute(
+            """INSERT INTO latest_positions
+               (uas_id, computed_session_id, max_ts, min_ts, latitude, longitude,
+                altitude, height, height_type, max_height, source)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            ("drone-stale", "session_1",
+             (now - timedelta(hours=6)).isoformat(),
+             (now - timedelta(hours=7)).isoformat(),
+             37.7, -122.4, 100, 50, "agl", 80, "test"),
+        )
+        conn.commit()
+    finally:
+        db._put_conn(conn)
 
     result = db.get_live_drones(stale_minutes=30)
     assert result == []

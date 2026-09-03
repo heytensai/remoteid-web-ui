@@ -5,6 +5,8 @@ from unittest.mock import call, patch
 
 import pytest
 
+from tests.conftest import TEST_DATABASE_URL
+
 
 @pytest.fixture
 def mock_process_database():
@@ -49,7 +51,7 @@ class TestSessionSchedulerConfig:
 
     def test_validation_passes(self, sample_config_yaml):
         """Valid session_detection config passes validation"""
-        config_path, _ = sample_config_yaml
+        config_path = sample_config_yaml
         from config import WebConfig
 
         cfg = WebConfig(config_path)
@@ -66,7 +68,7 @@ class TestSessionSchedulerConfig:
 
         data = {
             "web_interface": {
-                "database_path": "/tmp",
+                "database_url": "postgresql://test:test@localhost:5432/test",
                 "session_detection": {"enabled": True, "interval": -10},
             }
         }
@@ -86,7 +88,7 @@ class TestSessionSchedulerConfig:
 
         data = {
             "web_interface": {
-                "database_path": "/tmp",
+                "database_url": "postgresql://test:test@localhost:5432/test",
                 "session_detection": {"log_level": "TRACE"},
             }
         }
@@ -137,7 +139,7 @@ class TestSessionSchedulerLifecycle:
         class FakeConfig:
             session_detection = SessionDetectionConfig({"enabled": True, "interval": 1, "gap_threshold": 120})
 
-        scheduler = SessionScheduler(FakeConfig(), "/fake/db.sqlite")
+        scheduler = SessionScheduler(FakeConfig(), TEST_DATABASE_URL)
         scheduler.start()
 
         import time
@@ -145,10 +147,11 @@ class TestSessionSchedulerLifecycle:
 
         scheduler.stop()
 
-        # First call uses oldest-undetected heuristic. Since the fake DB
-        # doesn't exist, it falls back to "now" (skip all on first cycle).
+        # First call uses oldest-undetected heuristic. Since the DB
+        # has no undetected records, it falls back to "now" (skip all on first cycle).
         first_call = mock_process_database.call_args_list[0]
-        assert first_call.args == ("/fake/db.sqlite", 120)
+        assert first_call.args[1] == 120
+        assert hasattr(first_call.args[0], "cursor")
         assert first_call.kwargs["dry_run"] is False
         since = first_call.kwargs["since"]
         assert since is not None
@@ -230,7 +233,7 @@ class TestSessionSchedulerLifecycle:
 class TestConfigHotReload:
     def test_session_detection_reloadable(self, sample_config_yaml):
         """Changing session_detection in the YAML is picked up by reload_hot_config"""
-        config_path, _ = sample_config_yaml
+        config_path = sample_config_yaml
         from config import WebConfig
 
         cfg = WebConfig(config_path)
@@ -257,7 +260,7 @@ class TestConfigHotReload:
 
     def test_hot_reload_logs_change(self, sample_config_yaml, caplog):
         """reload_hot_config logs when session_detection changes"""
-        config_path, _ = sample_config_yaml
+        config_path = sample_config_yaml
         from config import WebConfig
 
         cfg = WebConfig(config_path)

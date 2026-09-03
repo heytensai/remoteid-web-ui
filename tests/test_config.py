@@ -43,7 +43,7 @@ def test_web_config_defaults():
         cfg = WebConfig(path)
         assert cfg.host == "0.0.0.0"
         assert cfg.port == 5000
-        assert cfg.database_path == "./web.db"
+        assert cfg.database_url == ""
         assert cfg.default_hours == 24
         assert cfg.max_positions_per_query == 5000
         assert cfg.use_metric is True
@@ -62,7 +62,7 @@ def test_web_config_full():
             "web_interface": {
                 "host": "0.0.0.0",
                 "port": 8080,
-                "database_path": os.path.join(td, "web.db"),
+                "database_url": "postgresql://test:test@localhost:5432/test",
                 "default_hours": 12,
                 "max_positions_per_query": 1000,
                 "use_metric": False,
@@ -88,7 +88,7 @@ def test_web_config_full():
             cfg = WebConfig(path)
             assert cfg.host == "0.0.0.0"
             assert cfg.port == 8080
-            assert cfg.database_path == os.path.join(td, "web.db")
+            assert cfg.database_url == "postgresql://test:test@localhost:5432/test"
             assert cfg.default_hours == 12
             assert cfg.max_positions_per_query == 1000
             assert cfg.use_metric is False
@@ -153,7 +153,7 @@ def test_waypoints_parsing():
     with tempfile.TemporaryDirectory() as td:
         config_data = {
             "web_interface": {
-                "database_path": os.path.join(td, "web.db"),
+                "database_url": "postgresql://test:test@localhost:5432/test",
                 "waypoints": [
                     {
                         "name": "WP1",
@@ -229,7 +229,7 @@ def test_waypoints_parsing():
 
 
 def test_to_dict(sample_config_yaml):
-    config_path, _ = sample_config_yaml
+    config_path = sample_config_yaml
     cfg = WebConfig(config_path)
     d = cfg.to_dict()
     assert d["host"] == "127.0.0.1"
@@ -243,7 +243,7 @@ def test_to_dict_with_waypoints():
     with tempfile.TemporaryDirectory() as td:
         config_data = {
             "web_interface": {
-                "database_path": os.path.join(td, "web.db"),
+                "database_url": "postgresql://test:test@localhost:5432/test",
                 "waypoints": [
                     {
                         "name": "WP1",
@@ -307,7 +307,7 @@ def test_to_dict_with_alert_enabled():
     with tempfile.TemporaryDirectory() as td:
         config_data = {
             "web_interface": {
-                "database_path": os.path.join(td, "web.db"),
+                "database_url": "postgresql://test:test@localhost:5432/test",
                 "waypoints": [
                     {
                         "name": "AlertCircle",
@@ -408,14 +408,14 @@ class TestValidation:
         with pytest.raises(ValueError, match="default_hours"):
             WebConfig(path)
 
-    def test_invalid_database_path(self):
-        path = _write_config({"database_path": "/nonexistent/subdir/web.db"})
-        with pytest.raises(ValueError, match="database_path parent directory"):
+    def test_invalid_database_url(self):
+        path = _write_config({"database_url": "mysql://root@localhost/test"})
+        with pytest.raises(ValueError, match="database_url must start with 'postgresql://'"):
             WebConfig(path)
 
     def test_waypoint_lat_out_of_range(self):
         path = _write_config({
-            "database_path": "/tmp",
+            "database_url": "postgresql://test:test@localhost:5432/test",
             "waypoints": [{"name": "W", "lat": 100, "lon": 0}],
         })
         with pytest.raises(ValueError, match="waypoints.*lat.*between -90 and 90"):
@@ -423,7 +423,7 @@ class TestValidation:
 
     def test_waypoint_lon_out_of_range(self):
         path = _write_config({
-            "database_path": "/tmp",
+            "database_url": "postgresql://test:test@localhost:5432/test",
             "waypoints": [{"name": "W", "lat": 0, "lon": -200}],
         })
         with pytest.raises(ValueError, match="waypoints.*lon.*between -180 and 180"):
@@ -431,7 +431,7 @@ class TestValidation:
 
     def test_waypoint_lat_not_a_number(self):
         path = _write_config({
-            "database_path": "/tmp",
+            "database_url": "postgresql://test:test@localhost:5432/test",
             "waypoints": [{"name": "W", "lat": "abc", "lon": 0}],
         })
         with pytest.raises(ValueError, match="waypoints.*lat.*must be a number"):
@@ -439,7 +439,7 @@ class TestValidation:
 
     def test_waypoint_empty_name(self):
         path = _write_config({
-            "database_path": "/tmp",
+            "database_url": "postgresql://test:test@localhost:5432/test",
             "waypoints": [{"name": "", "lat": 37, "lon": -122}],
         })
         with pytest.raises(ValueError, match="waypoints.*name.*must be a non-empty string"):
@@ -447,7 +447,7 @@ class TestValidation:
 
     def test_circle_missing_radius(self):
         path = _write_config({
-            "database_path": "/tmp",
+            "database_url": "postgresql://test:test@localhost:5432/test",
             "waypoints": [{"name": "C", "lat": 37, "lon": -122, "type": "circle", "radius": 0}],
         })
         with pytest.raises(ValueError, match="radius.*> 0"):
@@ -455,7 +455,7 @@ class TestValidation:
 
     def test_rectangle_missing_width(self):
         path = _write_config({
-            "database_path": "/tmp",
+            "database_url": "postgresql://test:test@localhost:5432/test",
             "waypoints": [{"name": "R", "lat": 37, "lon": -122, "type": "rectangle", "width": 0, "height": 50}],
         })
         with pytest.raises(ValueError, match="width.*> 0"):
@@ -463,7 +463,7 @@ class TestValidation:
 
     def test_rectangle_missing_height(self):
         path = _write_config({
-            "database_path": "/tmp",
+            "database_url": "postgresql://test:test@localhost:5432/test",
             "waypoints": [{"name": "R", "lat": 37, "lon": -122, "type": "rectangle", "width": 50, "height": 0}],
         })
         with pytest.raises(ValueError, match="height.*> 0"):
@@ -471,7 +471,7 @@ class TestValidation:
 
     def test_invalid_waypoint_type(self):
         path = _write_config({
-            "database_path": "/tmp",
+            "database_url": "postgresql://test:test@localhost:5432/test",
             "waypoints": [{"name": "W", "lat": 37, "lon": -122, "type": "polygon"}],
         })
         with pytest.raises(ValueError, match="type.*must be.*point.*circle.*rectangle"):
@@ -481,7 +481,7 @@ class TestValidation:
         """Circle radius in feet should be converted to meters when use_metric=False"""
         path = _write_config({
             "use_metric": False,
-            "database_path": "/tmp/test_geozone_imperial.db",
+            "database_url": "postgresql://test:test@localhost:5432/test",
             "waypoints": [
                 {
                     "name": "Zone",
@@ -517,7 +517,7 @@ class TestValidation:
         with tempfile.TemporaryDirectory() as td:
             config_data = {
                 "port": 8080,
-                "database_path": os.path.join(td, "web.db"),
+                "database_url": "postgresql://test:test@localhost:5432/test",
                 "map": {
                     "center_lat": 37.0,
                     "center_lon": -122.0,
@@ -531,7 +531,7 @@ class TestValidation:
 
     def test_stale_timeout_negative(self):
         path = _write_config({
-            "database_path": "/tmp",
+            "database_url": "postgresql://test:test@localhost:5432/test",
             "alerts": {"stale_timeout": -1},
         })
         with pytest.raises(ValueError, match="stale_timeout.*positive"):
@@ -539,7 +539,7 @@ class TestValidation:
 
     def test_stale_timeout_zero(self):
         path = _write_config({
-            "database_path": "/tmp",
+            "database_url": "postgresql://test:test@localhost:5432/test",
             "alerts": {"stale_timeout": 0},
         })
         with pytest.raises(ValueError, match="stale_timeout.*positive"):
@@ -575,7 +575,7 @@ class TestApiKeysHotReload:
 
     def test_api_keys_reloadable(self, sample_config_yaml):
         """Changing api_keys in the YAML is picked up by reload_hot_config"""
-        config_path, _ = sample_config_yaml
+        config_path = sample_config_yaml
 
         cfg = WebConfig(config_path)
         assert cfg.api_keys == {"test-api-key-123": "test-source"}
@@ -597,7 +597,7 @@ class TestApiKeysHotReload:
 
     def test_api_keys_reload_removes_keys(self, sample_config_yaml):
         """Removing keys from YAML is reflected after reload"""
-        config_path, _ = sample_config_yaml
+        config_path = sample_config_yaml
 
         cfg = WebConfig(config_path)
         assert cfg.api_keys == {"test-api-key-123": "test-source"}
@@ -613,7 +613,7 @@ class TestApiKeysHotReload:
 
     def test_api_keys_hot_reload_logs_change(self, sample_config_yaml, caplog):
         """reload_hot_config logs when api_keys change"""
-        config_path, _ = sample_config_yaml
+        config_path = sample_config_yaml
 
         cfg = WebConfig(config_path)
 
@@ -630,7 +630,7 @@ class TestApiKeysHotReload:
 
     def test_api_keys_no_log_when_unchanged(self, sample_config_yaml, caplog):
         """reload_hot_config does not log when api_keys haven't changed"""
-        config_path, _ = sample_config_yaml
+        config_path = sample_config_yaml
 
         cfg = WebConfig(config_path)
 
@@ -655,7 +655,7 @@ def test_role_config_empty_permissions():
 
 
 def test_parse_roles_empty():
-    config_data = {"web_interface": {"database_path": "/tmp/test_empty_roles.db"}}
+    config_data = {"web_interface": {"database_url": "postgresql://test:test@localhost:5432/test"}}
     path = _write_config(config_data)
     try:
         cfg = WebConfig(path)
@@ -666,7 +666,7 @@ def test_parse_roles_empty():
 
 def test_parse_roles_with_data():
     config_data = {
-        "database_path": "/tmp/test_roles.db",
+        "database_url": "postgresql://test:test@localhost:5432/test",
         "roles": {
             "operator": {
                 "permissions": ["view_map", "view_drones", "view_tracks"],
@@ -691,7 +691,7 @@ def test_parse_roles_with_data():
 def test_parse_roles_with_wildcard():
     """A role with '*' permission gets full access."""
     config_data = {
-        "database_path": "/tmp/test_wildcard.db",
+        "database_url": "postgresql://test:test@localhost:5432/test",
         "roles": {
             "admin": {"permissions": ["*"]},
         },
@@ -706,7 +706,7 @@ def test_parse_roles_with_wildcard():
 
 def test_get_role_permissions_found():
     config_data = {
-        "database_path": "/tmp/test_get_perm.db",
+        "database_url": "postgresql://test:test@localhost:5432/test",
         "roles": {
             "viewer": {"permissions": ["view_map"]},
         },
@@ -722,7 +722,7 @@ def test_get_role_permissions_found():
 def test_get_role_permissions_not_found():
     config_data = {
         "web_interface": {
-            "database_path": "/tmp/test_get_perm_missing.db",
+            "database_url": "postgresql://test:test@localhost:5432/test",
             "roles": {
                 "viewer": {"permissions": ["view_map"]},
             },
@@ -738,7 +738,7 @@ def test_get_role_permissions_not_found():
 
 def test_roles_in_to_dict():
     config_data = {
-        "database_path": "/tmp/test_roles_dict.db",
+        "database_url": "postgresql://test:test@localhost:5432/test",
         "roles": {
             "operator": {"permissions": ["view_map", "view_drones"]},
         },
@@ -758,7 +758,7 @@ def test_roles_empty_in_to_dict():
     """When no roles configured, to_dict still includes empty 'roles' key."""
     config_data = {
         "web_interface": {
-            "database_path": "/tmp/test_empty_roles_dict.db",
+            "database_url": "postgresql://test:test@localhost:5432/test",
         }
     }
     path = _write_config(config_data)
@@ -776,7 +776,7 @@ class TestRolesHotReload:
 
     def test_roles_reloadable(self, sample_config_yaml):
         """Changing roles in the YAML is picked up by reload_hot_config"""
-        config_path, _ = sample_config_yaml
+        config_path = sample_config_yaml
 
         cfg = WebConfig(config_path)
         assert "custom" not in cfg.roles
@@ -795,7 +795,7 @@ class TestRolesHotReload:
 
     def test_roles_hot_reload_logs_change(self, sample_config_yaml, caplog):
         """reload_hot_config logs when roles change"""
-        config_path, _ = sample_config_yaml
+        config_path = sample_config_yaml
 
         cfg = WebConfig(config_path)
 
@@ -814,7 +814,7 @@ class TestRolesHotReload:
 
     def test_roles_no_log_when_unchanged(self, sample_config_yaml, caplog):
         """reload_hot_config does not log when roles haven't changed"""
-        config_path, _ = sample_config_yaml
+        config_path = sample_config_yaml
 
         cfg = WebConfig(config_path)
 
@@ -865,7 +865,7 @@ def test_maintenance_config_from_yaml():
     """MaintenanceConfig is parsed from the web_config YAML."""
     config_data = {
         "web_interface": {
-            "database_path": "/tmp",
+            "database_url": "postgresql://test:test@localhost:5432/test",
             "maintenance": {
                 "enabled": True,
                 "interval": 1800,
@@ -891,7 +891,7 @@ def test_maintenance_config_from_yaml():
 
 def test_maintenance_config_empty_yaml():
     """No maintenance block in YAML gives all-default values."""
-    config_data = {"web_interface": {"database_path": "/tmp"}}
+    config_data = {"web_interface": {"database_url": "postgresql://test:test@localhost:5432/test"}}
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
         yaml.dump(config_data, f)
         path = f.name
@@ -906,7 +906,7 @@ def test_maintenance_config_empty_yaml():
 
 def test_maintenance_hot_reload_logs_change(sample_config_yaml, caplog):
     """reload_hot_config logs when maintenance config changes."""
-    config_path, _ = sample_config_yaml
+    config_path = sample_config_yaml
     cfg = WebConfig(config_path)
 
     with open(config_path, encoding="utf-8") as f:
@@ -923,7 +923,7 @@ def test_maintenance_hot_reload_logs_change(sample_config_yaml, caplog):
 
 def test_maintenance_no_log_when_unchanged(sample_config_yaml, caplog):
     """reload_hot_config does not log when maintenance hasn't changed."""
-    config_path, _ = sample_config_yaml
+    config_path = sample_config_yaml
     cfg = WebConfig(config_path)
 
     with caplog.at_level("INFO"):
@@ -981,7 +981,7 @@ def test_notification_target_config_with_basic_auth():
 
 def test_parse_notifications_ntfy():
     config_data = {
-        "database_path": "/tmp",
+        "database_url": "postgresql://test:test@localhost:5432/test",
         "notifications": [
             {
                 "name": "Phone Alerts",
@@ -1009,7 +1009,7 @@ def test_parse_notifications_ntfy():
 def test_parse_notifications_ntfy_no_token():
     """ntfy target without token is valid (public topic)."""
     config_data = {
-        "database_path": "/tmp",
+        "database_url": "postgresql://test:test@localhost:5432/test",
         "notifications": [
             {
                 "name": "Public ntfy",
@@ -1030,7 +1030,7 @@ def test_parse_notifications_ntfy_no_token():
 
 def test_parse_notifications_ntfy_basic_auth():
     config_data = {
-        "database_path": "/tmp",
+        "database_url": "postgresql://test:test@localhost:5432/test",
         "notifications": [
             {
                 "name": "Self-Hosted",
@@ -1055,7 +1055,7 @@ def test_parse_notifications_ntfy_basic_auth():
 
 def test_parse_notifications_disabled():
     config_data = {
-        "database_path": "/tmp",
+        "database_url": "postgresql://test:test@localhost:5432/test",
         "notifications": [
             {
                 "name": "Paused",
@@ -1076,7 +1076,7 @@ def test_parse_notifications_disabled():
 
 def test_parse_notifications_enabled_defaults_true():
     config_data = {
-        "database_path": "/tmp",
+        "database_url": "postgresql://test:test@localhost:5432/test",
         "notifications": [
             {"name": "Active", "type": "discord", "events": ["geozone_enter"]},
         ],
@@ -1091,7 +1091,7 @@ def test_parse_notifications_enabled_defaults_true():
 
 def test_parse_notifications_multiple_types():
     config_data = {
-        "database_path": "/tmp",
+        "database_url": "postgresql://test:test@localhost:5432/test",
         "notifications": [
             {"name": "Discord", "type": "discord", "webhook_url": "https://discord.com/api/webhooks/...", "events": ["geozone_enter"]},
             {"name": "Discord2", "type": "discord", "webhook_url": "https://discord.com/api/webhooks/...", "events": ["new_session"]},
@@ -1110,7 +1110,7 @@ def test_parse_notifications_multiple_types():
 
 
 def test_notification_hot_reload_detects_token_change(sample_config_yaml):
-    config_path, _ = sample_config_yaml
+    config_path = sample_config_yaml
     cfg = WebConfig(config_path)
 
     with open(config_path, encoding="utf-8") as f:

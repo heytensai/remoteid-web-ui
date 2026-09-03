@@ -1,7 +1,6 @@
 """Configuration loader for web interface"""
 
 import logging
-import os
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
@@ -177,7 +176,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
 
     host: str = "0.0.0.0"
     port: int = 5000
-    database_path: str = "./web.db"
+    database_url: str = ""
     default_hours: int = 24
     max_positions_per_query: int = 5000
     map: MapConfig = field(default_factory=MapConfig)
@@ -225,7 +224,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         """Parse configuration values from raw web_interface dict."""
         self.host = web_data.get("host", "0.0.0.0")
         self.port = web_data.get("port", 5000)
-        self.database_path = web_data.get("database_path", "./web.db")
+        self.database_url = web_data.get("database_url", "")
         self.default_hours = web_data.get("default_hours", 24)
         self.max_positions_per_query = web_data.get("max_positions_per_query", 5000)
         self.url_prefix = web_data.get("url_prefix", "")
@@ -441,10 +440,9 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 f"got {sd.log_level!r}"
             )
 
-        db_dir = os.path.dirname(self.database_path)
-        if db_dir and not os.path.isdir(db_dir):
+        if self.database_url and not self.database_url.startswith("postgresql://"):
             errors.append(
-                f"database_path parent directory does not exist: {db_dir}"
+                f"database_url must start with 'postgresql://', got {self.database_url!r}"
             )
 
         if errors:
@@ -457,7 +455,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         return {
             "host": self.host,
             "port": self.port,
-            "database_path": self.database_path,
+            "database_url": self.database_url,
             "default_hours": self.default_hours,
             "max_positions_per_query": self.max_positions_per_query,
             "map": {

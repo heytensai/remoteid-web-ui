@@ -1,10 +1,10 @@
 """Shared test fixtures and configuration"""
 
 import os
-import tempfile
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlencode
 
+import psycopg2
+import psycopg2.extras
 import pytest
 import yaml
 
@@ -15,18 +15,88 @@ from app import _init_app, limiter
 
 SAMPLE_API_KEY = "test-api-key-123"
 
+# PostgreSQL test database URL — set TEST_DATABASE_URL to override
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql://postgres:postgres@localhost:5432/remoteid_test",
+)
+
+
+@pytest.fixture(scope="session")
+def pg_admin():
+    """Connect to PostgreSQL as admin (postgres DB) to create/drop the test DB."""
+    # Connect to the default 'postgres' database for admin operations
+    admin_url = TEST_DATABASE_URL.rsplit("/", 1)[0] + "/postgres"
+    conn = psycopg2.connect(admin_url)
+    conn.autocommit = True
+    yield conn
+    conn.close()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def setup_test_db(pg_admin):
+    """Create the test database if it doesn't exist, drop it on teardown."""
+    db_name = TEST_DATABASE_URL.rsplit("/", 1)[1]
+    cur = pg_admin.cursor()
+    # Terminate existing connections
+    cur.execute(
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+        "WHERE datname = %s AND pid <> pg_backend_pid()",
+        (db_name,),
+    )
+    # Drop and recreate
+    cur.execute(f"DROP DATABASE IF EXISTS {db_name}")
+    cur.execute(f"CREATE DATABASE {db_name}")
+    pg_admin.commit()
+    yield
+    # Teardown: drop the test DB
+    cur.execute(
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+        "WHERE datname = %s AND pid <> pg_backend_pid()",
+        (db_name,),
+    )
+    cur.execute(f"DROP DATABASE IF EXISTS {db_name}")
+    pg_admin.commit()
+
+
+@pytest.fixture(scope="session")
+def pg_conn(setup_test_db):
+    """Session-scoped connection to the test database."""
+    conn = psycopg2.connect(TEST_DATABASE_URL)
+    conn.autocommit = True
+    yield conn
+    conn.close()
+
+
+@pytest.fixture(scope="function")
+def _truncate_db(pg_conn):
+    """TRUNCATE all tables between tests for isolation."""
+    cur = pg_conn.cursor()
+    tables = [
+        "remoteid", "sync_log", "session_tracking", "geozone_events",
+        "sent_alerts", "collector_positions", "users", "auth_tokens",
+        "latest_positions", "_schema_version",
+    ]
+    for table in tables:
+        # Skip tables that don't exist yet (fresh DB: the schema is created
+        # lazily by the first WebDatabase initialization).
+        cur.execute("SELECT to_regclass(%s)", (table,))
+        if cur.fetchone()[0] is None:
+            continue
+        cur.execute(f"TRUNCATE TABLE {table} RESTART IDENTITY CASCADE")
+    pg_conn.commit()
+    yield
+
 
 @pytest.fixture
-def sample_config_yaml():
-    """Create a temporary config YAML file for testing"""
-    db_fd, db_path = tempfile.mkstemp(suffix=".db")
-    os.close(db_fd)
-
+def sample_config_yaml(_truncate_db):
+    """Create a temporary config YAML file for testing."""
+    import tempfile
     config = {
         "web_interface": {
             "host": "127.0.0.1",
             "port": 5001,
-            "database_path": db_path,
+            "database_url": TEST_DATABASE_URL,
             "default_hours": 24,
             "max_positions_per_query": 5000,
             "map": {
@@ -72,16 +142,15 @@ def sample_config_yaml():
     with os.fdopen(config_fd, "w") as f:
         yaml.dump(config, f)
 
-    yield config_path, db_path
+    yield config_path
 
     os.unlink(config_path)
-    os.unlink(db_path)
 
 
 @pytest.fixture
 def app(sample_config_yaml):
-    """Create a Flask app instance for testing"""
-    config_path, db_path = sample_config_yaml
+    """Create a Flask app instance for testing."""
+    config_path = sample_config_yaml
 
     app = _init_app(config_path)
     app.config["TESTING"] = True
@@ -100,16 +169,16 @@ def app(sample_config_yaml):
 
 @pytest.fixture
 def client(app):
-    """Flask test client"""
+    """Flask test client."""
     with app.test_client() as client:
         yield client
 
 
 @pytest.fixture
 def db(app):
-    """Get the test database instance with some sample data"""
+    """Get the test database instance with some sample data."""
     db = _app_module.DATABASE
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
 
     records = [
         {
@@ -167,8 +236,8 @@ def db(app):
 
 @pytest.fixture
 def sample_records():
-    """Sample records for insertion tests"""
-    now = datetime.now()
+    """Sample records for insertion tests."""
+    now = datetime.now(timezone.utc)
     return [
         {
             "timestamp": now.isoformat(),

@@ -424,7 +424,7 @@ class TestApiSubmit:
 
     def test_submit_after_hot_reload_new_key(self, client, sample_config_yaml):
         """A newly added API key works after hot reload"""
-        config_path, _ = sample_config_yaml
+        config_path = sample_config_yaml
 
         import yaml
         with open(config_path, encoding="utf-8") as f:
@@ -449,7 +449,7 @@ class TestApiSubmit:
 
     def test_submit_after_hot_reload_removed_key(self, client, sample_config_yaml):
         """A removed API key is rejected after hot reload"""
-        config_path, _ = sample_config_yaml
+        config_path = sample_config_yaml
 
         import yaml
         with open(config_path, encoding="utf-8") as f:
@@ -890,7 +890,7 @@ class TestApiCollectors:
     def test_collectors_with_fixed(self, client, app, sample_config_yaml):
         """A fixed collector appears in the response."""
         token = self._operator_token(client, app)
-        config_path, _ = sample_config_yaml
+        config_path = sample_config_yaml
         import yaml
         with open(config_path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
@@ -919,7 +919,7 @@ class TestApiCollectors:
 
     def test_collectors_with_mobile(self, client, app, sample_config_yaml):
         """A mobile collector appears with lat/lon from DB."""
-        config_path, db_path = sample_config_yaml
+        config_path = sample_config_yaml
         import yaml
         with open(config_path, encoding="utf-8") as f:
             data = yaml.safe_load(f)

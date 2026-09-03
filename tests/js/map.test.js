@@ -143,4 +143,84 @@ describe('MapController', () => {
       expect(Units.haversineDistance).toHaveBeenCalledWith(37, -122, 38, -123);
     });
   });
+
+  describe('_collectorNamesForPositions', () => {
+    beforeEach(() => {
+      MapController.collectorConfigs = [
+        { name: 'Node1', color: '#ff0000' },
+        { name: 'Node2', color: '#00ff00' },
+      ];
+    });
+
+    test('returns distinct configured collector names in order', () => {
+      const positions = [
+        { source: 'Node1' },
+        { source: 'Node2' },
+        { source: 'Node1' },
+        { source: 'Node2' },
+      ];
+      expect(MapController._collectorNamesForPositions(positions)).toEqual([
+        'Node1',
+        'Node2',
+      ]);
+    });
+
+    test('ignores sources that are not configured collectors', () => {
+      const positions = [{ source: 'Node1' }, { source: 'api-laptop' }];
+      expect(MapController._collectorNamesForPositions(positions)).toEqual([
+        'Node1',
+      ]);
+    });
+
+    test('returns empty array when no positions have source', () => {
+      expect(MapController._collectorNamesForPositions([{ source: null }, {}])).toEqual([]);
+    });
+  });
+
+  describe('_createSessionPointPopup', () => {
+    const pos = {
+      latitude: 37.7749,
+      longitude: -122.4194,
+      altitude: 100,
+      timestamp: '2024-01-01T12:00:00Z',
+    };
+
+    test('shows Seen By row when collector names provided', () => {
+      const html = MapController._createSessionPointPopup(
+        'drone-001',
+        'session_abc',
+        pos,
+        'End',
+        '#ff0000',
+        ['Node1', 'Node2']
+      );
+      expect(html).toContain('Seen By:');
+      expect(html).toContain('Node1, Node2');
+    });
+
+    test('omits Seen By row when no collector names', () => {
+      const html = MapController._createSessionPointPopup(
+        'drone-001',
+        'session_abc',
+        pos,
+        'Start',
+        '#ff0000',
+        []
+      );
+      expect(html).not.toContain('Seen By:');
+    });
+
+    test('escapes collector names in Seen By row', () => {
+      const html = MapController._createSessionPointPopup(
+        'drone-001',
+        'session_abc',
+        pos,
+        'End',
+        '#ff0000',
+        ['Node<1>']
+      );
+      expect(html).toContain('Node&lt;1&gt;');
+      expect(html).not.toContain('Node<1>');
+    });
+  });
 });

@@ -1,6 +1,5 @@
 """Tests for alert_engine.py - geozone alerting logic"""
 
-import math
 import os
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -11,6 +10,8 @@ import yaml
 from config import WebConfig, AlertsConfig
 from database import WebDatabase
 from alert_engine import point_in_circle, point_in_rectangle, AlertEngine
+
+TEST_DB_URL = "postgresql://postgres:postgres@localhost:5432/remoteid_test"
 
 
 # --- Geometry tests ---
@@ -93,13 +94,10 @@ def test_alerts_config_proximity_distance_default():
 # --- AlertEngine tests ---
 
 @pytest.fixture
-def engine_db():
-    """Create a temp DB for alert engine tests"""
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    db = WebDatabase(path)
+def engine_db(_truncate_db):
+    """Create a DB connection for alert engine tests"""
+    db = WebDatabase(TEST_DB_URL)
     yield db
-    os.unlink(path)
 
 
 @pytest.fixture
@@ -107,7 +105,7 @@ def engine_config_yaml():
     """Create a config with alert-enabled geozones"""
     config_data = {
         "web_interface": {
-            "database_path": "/tmp/test.db",
+            "database_url": TEST_DB_URL,
             "waypoints": [
                 {
                     "name": "TestCircle",
@@ -474,11 +472,11 @@ def test_new_session_fired_after_gap(engine):
 
 
 @pytest.fixture
-def proximity_engine():
+def proximity_engine(_truncate_db):
     """Create an AlertEngine configured for proximity testing (no geozones)."""
     config_data = {
         "web_interface": {
-            "database_path": "/tmp/test.db",
+            "database_url": TEST_DB_URL,
             "alerts": {
                 "stale_timeout": 300,
                 "proximity_distance": 100,
@@ -491,14 +489,11 @@ def proximity_engine():
     fd, path = tempfile.mkstemp(suffix=".yaml")
     with os.fdopen(fd, "w") as f:
         yaml.dump(config_data, f)
-    fd2, db_path = tempfile.mkstemp(suffix=".db")
-    os.close(fd2)
     config = WebConfig(path)
-    db = WebDatabase(db_path)
+    db = WebDatabase(TEST_DB_URL)
     eng = AlertEngine(db, config)
     yield eng, db, config
     os.unlink(path)
-    os.unlink(db_path)
 
 
 def _insert_position(db, uas_id, lat, lon, ts):
@@ -670,7 +665,7 @@ def test_proximity_imperial_config():
     """Imperial config (feet) is converted to meters internally."""
     config_data = {
         "web_interface": {
-            "database_path": "/tmp/test.db",
+            "database_url": TEST_DB_URL,
             "use_metric": False,
             "alerts": {
                 "stale_timeout": 300,
@@ -682,10 +677,8 @@ def test_proximity_imperial_config():
     fd, path = tempfile.mkstemp(suffix=".yaml")
     with os.fdopen(fd, "w") as f:
         yaml.dump(config_data, f)
-    fd2, db_path = tempfile.mkstemp(suffix=".db")
-    os.close(fd2)
     config = WebConfig(path)
-    db = WebDatabase(db_path)
+    db = WebDatabase(TEST_DB_URL)
     eng = AlertEngine(db, config)
 
     # 328 ft ≈ 100 m — drone-A and drone-B are ~55m apart, should trigger
@@ -701,7 +694,6 @@ def test_proximity_imperial_config():
     assert calls[0][2] < 110  # distance reported in meters
 
     os.unlink(path)
-    os.unlink(db_path)
 
 
 # --- Cross-process (multi-worker) dedup tests ---

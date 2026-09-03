@@ -8,7 +8,6 @@ import io
 import logging
 import os
 import secrets
-import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -16,6 +15,9 @@ from functools import wraps
 from pathlib import Path
 from typing import Dict, List, Optional
 import xml.etree.ElementTree as ET
+
+import psycopg2
+import psycopg2.extras
 
 import click
 from flask import Flask, g, jsonify, make_response, request, render_template, Response, url_for
@@ -233,7 +235,7 @@ def load_current_user():
                 g.current_user = user
                 g.permissions = _get_role_permissions(user['role_name'])
                 return
-        except sqlite3.Error:
+        except psycopg2.Error:
             logger.exception("Error validating auth token")
     # Token absent or invalid — allow through, route/permissions will decide
     g.current_user = None
@@ -352,7 +354,7 @@ def api_auth_anon():
             "token": session_token,
             "user": {"id": user['id'], "name": user['name'], "role": user['role_name']},
         })
-    except sqlite3.Error:
+    except psycopg2.Error:
         logger.exception("Error creating ephemeral user")
         return jsonify({"error": "Internal server error"}), 500
 
@@ -522,7 +524,7 @@ def get_drones():
         start, end = _parse_time_range(request.args)
         drones = DATABASE.get_drones(start, end)
         return jsonify({"drones": drones})
-    except (ValueError, TypeError, sqlite3.Error):
+    except (ValueError, TypeError, psycopg2.Error):
         logger.exception("Error getting drones")
         return jsonify({"error": "Internal server error"}), 500
 
@@ -536,7 +538,7 @@ def get_drones_incremental():
         known_timestamps = data.get("known_timestamps", {})
         drones = DATABASE.get_drones_incremental(start, end, known_timestamps)
         return jsonify({"drones": drones})
-    except (ValueError, TypeError, sqlite3.Error):
+    except (ValueError, TypeError, psycopg2.Error):
         logger.exception("Error getting incremental drones")
         return jsonify({"error": "Internal server error"}), 500
 
@@ -568,7 +570,7 @@ def get_refresh():
 
         try:
             active = DATABASE.get_active_geozone_events()
-        except sqlite3.Error:
+        except psycopg2.Error:
             logger.exception("Error getting alerts in refresh")
             active = []
         uas_ids = list(set(e["uas_id"] for e in active))
@@ -584,7 +586,7 @@ def get_refresh():
                 }
             else:
                 stats = DATABASE.get_stats(start, end)
-        except (sqlite3.Error, ValueError, TypeError):
+        except (psycopg2.Error, ValueError, TypeError):
             logger.exception("Error getting stats in refresh")
             stats = {}
 
@@ -598,7 +600,7 @@ def get_refresh():
                     "last_data": _format_utc_ts(source_info["last_data"]),
                     "type": "collector" if source_info["source"] in collector_names else "api",
                 })
-        except sqlite3.Error:
+        except psycopg2.Error:
             logger.exception("Error getting sources in refresh")
             sources = []
 
@@ -608,7 +610,7 @@ def get_refresh():
             "stats": stats,
             "sources": sources,
         })
-    except (ValueError, TypeError, sqlite3.Error):
+    except (ValueError, TypeError, psycopg2.Error):
         logger.exception("Error in refresh endpoint")
         return jsonify({"error": "Internal server error"}), 500
 
@@ -626,7 +628,7 @@ def get_positions():
 
         positions = DATABASE.get_positions(start, end, uas_id, limit)
         return jsonify({"positions": positions})
-    except (ValueError, TypeError, sqlite3.Error):
+    except (ValueError, TypeError, psycopg2.Error):
         logger.exception("Error getting positions")
         return jsonify({"error": "Internal server error"}), 500
 
@@ -658,7 +660,7 @@ def get_track(uas_id):
             return jsonify({"uas_id": uas_id, "sessions": sessions})
         track = DATABASE.get_track(uas_id, start, end)
         return jsonify({"uas_id": uas_id, "track": track})
-    except (ValueError, TypeError, sqlite3.Error):
+    except (ValueError, TypeError, psycopg2.Error):
         logger.exception("Error getting track")
         return jsonify({"error": "Internal server error"}), 500
 
@@ -678,7 +680,7 @@ def get_uas_sessions(uas_id):
             "limit": limit,
             "offset": offset,
         })
-    except (ValueError, TypeError, sqlite3.Error):
+    except (ValueError, TypeError, psycopg2.Error):
         logger.exception("Error getting UAS sessions")
         return jsonify({"error": "Internal server error"}), 500
 
@@ -712,7 +714,7 @@ def get_tracks_batch():
             }
 
         return jsonify({"tracks": results})
-    except sqlite3.Error:
+    except psycopg2.Error:
         logger.exception("Error in batch track fetch")
         return jsonify({"error": "Internal server error"}), 500
 
@@ -724,7 +726,7 @@ def get_operators():
         start, end = _parse_time_range(request.args)
         operators = DATABASE.get_operators(start, end)
         return jsonify({"operators": operators})
-    except (ValueError, TypeError, sqlite3.Error):
+    except (ValueError, TypeError, psycopg2.Error):
         logger.exception("Error getting operators")
         return jsonify({"error": "Internal server error"}), 500
 
@@ -748,7 +750,7 @@ def get_bounds():
                 }
             )
         return jsonify({"bounds": None})
-    except (ValueError, TypeError, sqlite3.Error):
+    except (ValueError, TypeError, psycopg2.Error):
         logger.exception("Error getting bounds")
         return jsonify({"error": "Internal server error"}), 500
 
@@ -917,7 +919,7 @@ def export_data(fmt, uas_id):
         if fmt == "kml":
             return _export_kml(positions, filename)
         return jsonify({"error": f"Unsupported format: {fmt}"}), 400
-    except (ValueError, TypeError, sqlite3.Error):
+    except (ValueError, TypeError, psycopg2.Error):
         logger.exception("Error exporting data for %s", uas_id)
         return jsonify({"error": "Internal server error"}), 500
 
@@ -1033,7 +1035,7 @@ def submit_data():
                 "last_timestamp": last_ts_str,
             }
         )
-    except (sqlite3.Error, ValueError, TypeError):
+    except (psycopg2.Error, ValueError, TypeError):
         logger.exception("Error submitting data from %s", source)
         return jsonify({"success": False, "error": "Internal server error"}), 500
 
@@ -1069,7 +1071,7 @@ def submit_ping():
                 pass
         logger.info("Heartbeat from %s (IP=%s)", source, request.remote_addr)
         return jsonify({"success": True, "source": source})
-    except sqlite3.Error:
+    except psycopg2.Error:
         logger.exception("Error logging heartbeat from %s", source)
         return jsonify({"success": False, "error": "Internal server error"}), 500
 
@@ -1136,15 +1138,19 @@ def redetect():
         return jsonify({"success": False, "error": "Unauthorized"}), 401
 
     try:
-        redetect_sessions(
-            _get_config().database_path,
-            _get_config().session_detection.gap_threshold,
-            dry_run=False,
-            force=True,
-        )
+        conn = DATABASE._get_conn()  # pylint: disable=protected-access
+        try:
+            redetect_sessions(
+                conn,
+                _get_config().session_detection.gap_threshold,
+                dry_run=False,
+                force=True,
+            )
+        finally:
+            DATABASE._put_conn(conn)  # pylint: disable=protected-access
         logger.info("Full session re-detection triggered by %s", source)
         return jsonify({"success": True})
-    except sqlite3.Error:
+    except psycopg2.Error:
         logger.exception("Session re-detection failed")
         return jsonify({"success": False, "error": "Re-detection failed"}), 500
 
@@ -1201,7 +1207,7 @@ def get_alert_history():
             "limit": limit,
             "offset": offset,
         })
-    except (ValueError, TypeError, sqlite3.Error):
+    except (ValueError, TypeError, psycopg2.Error):
         logger.exception("Error getting alert history")
         return jsonify({"error": "Internal server error"}), 500
 
@@ -1274,7 +1280,7 @@ def export_alert_csv():
         )
 
         return _export_alert_csv(events)
-    except (ValueError, TypeError, sqlite3.Error):
+    except (ValueError, TypeError, psycopg2.Error):
         logger.exception("Error exporting alert CSV")
         return jsonify({"error": "Internal server error"}), 500
 
@@ -1286,7 +1292,7 @@ def get_stats():
         start, end = _parse_time_range(request.args)
         stats = DATABASE.get_stats(start, end)
         return jsonify(stats)
-    except (ValueError, TypeError, sqlite3.Error):
+    except (ValueError, TypeError, psycopg2.Error):
         logger.exception("Error getting stats")
         return jsonify({"error": "Internal server error"}), 500
 
@@ -1308,7 +1314,7 @@ def get_last_timestamp():
         last_ts_str = last_timestamp.isoformat() if hasattr(last_timestamp, 'isoformat') else last_timestamp
 
         return jsonify({"last_timestamp": last_ts_str})
-    except (sqlite3.Error, AttributeError, TypeError):
+    except (psycopg2.Error, AttributeError, TypeError):
         logger.exception("Error getting last timestamp")
         return jsonify({"success": False, "error": "Internal server error"}), 500
 
@@ -1410,8 +1416,13 @@ def _init_app(config_path: str):
     logger.info("Loading configuration from %s", config_path)
     CONFIG = WebConfig(config_path)
 
-    logger.info("Initializing database at %s", CONFIG.database_path)
-    DATABASE = WebDatabase(CONFIG.database_path)
+    db_url = os.environ.get("DATABASE_URL", "") or CONFIG.database_url
+    if not db_url:
+        raise RuntimeError(
+            "DATABASE_URL environment variable or database_url in config is required"
+        )
+    logger.info("Initializing database")
+    DATABASE = WebDatabase(db_url)
 
     ALERT_ENGINE = AlertEngine(DATABASE, CONFIG)
 
@@ -1427,7 +1438,7 @@ def _init_app(config_path: str):
         ALERT_ENGINE.on_unrecognized_drone = _on_unrecognized_drone
         ALERT_ENGINE.on_drone_proximity = _on_drone_proximity
 
-    SESSION_SCHEDULER = SessionScheduler(CONFIG, CONFIG.database_path, alert_engine=ALERT_ENGINE, database=DATABASE)
+    SESSION_SCHEDULER = SessionScheduler(CONFIG, db_url, alert_engine=ALERT_ENGINE, database=DATABASE)
     MAINTENANCE_SCHEDULER = MaintenanceScheduler(CONFIG, DATABASE)
 
     global _config_snapshot  # noqa: PLW0603  # pylint: disable=global-statement
@@ -1475,11 +1486,15 @@ def list_users(config):
     """List all users in the database."""
     _init_app(config)
     conn = DATABASE._get_conn()  # pylint: disable=protected-access
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT id, name, email, role_name, is_ephemeral, is_active, auth_method, created_at "
-        "FROM users ORDER BY created_at DESC"
-    ).fetchall()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cur.execute(
+            "SELECT id, name, email, role_name, is_ephemeral, is_active, auth_method, created_at "
+            "FROM users ORDER BY created_at DESC"
+        )
+        rows = cur.fetchall()
+    finally:
+        DATABASE._put_conn(conn)  # pylint: disable=protected-access
     if not rows:
         print("No users found.")
         return

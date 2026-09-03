@@ -1,18 +1,19 @@
 """Background session detection scheduler that periodically runs the detection logic"""
 
 import logging
-import sqlite3
 import threading
 import time
 from datetime import datetime, timezone
 from typing import Optional
+
+import psycopg2
 
 from session_detect import process_database
 
 logger = logging.getLogger(__name__)
 
 
-def _oldest_undetected_timestamp(db_path: str) -> Optional[datetime]:
+def _oldest_undetected_timestamp(database_url: str) -> Optional[datetime]:
     """Find the oldest record timestamp that still needs session detection.
 
     Returns None when the database has no NULL computed_session_id
@@ -20,12 +21,16 @@ def _oldest_undetected_timestamp(db_path: str) -> Optional[datetime]:
     exist yet.
     """
     try:
-        with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES, timeout=5) as conn:
-            cursor = conn.execute(
+        conn = psycopg2.connect(database_url)
+        try:
+            cur = conn.cursor()
+            cur.execute(
                 "SELECT MIN(timestamp) FROM remoteid WHERE computed_session_id IS NULL"
             )
-            return cursor.fetchone()[0]
-    except (sqlite3.Error, FileNotFoundError):
+            return cur.fetchone()[0]
+        finally:
+            conn.close()
+    except psycopg2.Error:
         return None
 
 
@@ -36,10 +41,10 @@ class SessionScheduler:
     so toggling ``enabled`` in the YAML file takes effect within one interval.
     """
 
-    def __init__(self, config, db_path: str, alert_engine=None, database=None):
+    def __init__(self, config, database_url: str, alert_engine=None, database=None):
         """create"""
         self._config = config
-        self._db_path = db_path
+        self._database_url = database_url
         self._alert_engine = alert_engine
         self._database = database
         self._thread: Optional[threading.Thread] = None
@@ -48,7 +53,7 @@ class SessionScheduler:
         # so the first cycle only processes UAS that still need detection.
         # Falls back to "right now" when all records already have sessions.
         self.last_run: Optional[datetime] = (
-            _oldest_undetected_timestamp(db_path) or datetime.now(timezone.utc)
+            _oldest_undetected_timestamp(database_url) or datetime.now(timezone.utc)
         )
         self._running = False
 
@@ -86,9 +91,11 @@ class SessionScheduler:
             detect_logger.setLevel(getattr(logging, sd.log_level, logging.INFO))
 
             if sd.enabled:
+                conn = None
                 try:
+                    conn = psycopg2.connect(self._database_url)
                     summary, affected_uas = process_database(
-                        self._db_path,
+                        conn,
                         sd.gap_threshold,
                         dry_run=False,
                         since=self.last_run,
@@ -104,8 +111,11 @@ class SessionScheduler:
                     # on_new_session for sessions we just updated.
                     if self._alert_engine:
                         self._alert_engine.sync_sessions()
-                except sqlite3.Error:
+                except psycopg2.Error:
                     logger.exception("Session detection run failed")
+                finally:
+                    if conn:
+                        conn.close()
             else:
                 logger.debug("Session detection disabled, skipping")
 
@@ -114,7 +124,7 @@ class SessionScheduler:
                 try:
                     self._alert_engine.evaluate_all(since=self.last_run)
                     self._alert_engine.check_stale()
-                except sqlite3.Error:
+                except psycopg2.Error:
                     logger.exception("Alert engine check failed")
 
             self.last_run = datetime.now(timezone.utc)

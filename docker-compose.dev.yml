@@ -10,11 +10,32 @@
 #   - Volume mounts for live development
 
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: remoteid-db-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: remoteid
+      POSTGRES_USER: remoteid
+      POSTGRES_PASSWORD: devpassword
+    volumes:
+      - pgdata_dev:/var/lib/postgresql/data
+    networks:
+      - remoteid-dev-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U remoteid -d remoteid"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   web:
     build: .
     image: remoteid-web:dev
     container_name: remoteid-web-dev
     restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       - "5000:5000"
     volumes:
@@ -22,15 +43,16 @@ services:
       - ./app.py:/app/app.py:ro
       - ./config.py:/app/config.py:ro
       - ./database.py:/app/database.py:ro
-      - ./push_service.py:/app/push_service.py:ro
+      - ./session_detect.py:/app/session_detect.py:ro
       - ./session_scheduler.py:/app/session_scheduler.py:ro
+      - ./maintenance_scheduler.py:/app/maintenance_scheduler.py:ro
       - ./alert_engine.py:/app/alert_engine.py:ro
+      - ./import_db.py:/app/import_db.py:ro
+      - ./notifier.py:/app/notifier.py:ro
       - ./templates:/app/templates:ro
       - ./static:/app/static:ro
       # Config file (mount your own config/web_config.yaml here to customize)
       - ./default.web_config.yaml:/app/config/web_config.yaml:ro
-      # Database persistence (bind mount to host directory)
-      - ./data:/app/data
     env_file:
       - .env
     environment:
@@ -38,8 +60,12 @@ services:
       - PYTHONDONTWRITEBYTECODE=1
       - FLASK_ENV=development
       - FLASK_DEBUG=1
+      - DATABASE_URL=postgresql://remoteid:devpassword@db:5432/remoteid
     networks:
       - remoteid-dev-network
+
+volumes:
+  pgdata_dev:
 
 networks:
   remoteid-dev-network:

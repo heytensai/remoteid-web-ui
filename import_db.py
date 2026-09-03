@@ -1,7 +1,7 @@
 """One-time import from a collector SQLite database into the web database
 
 Usage:
-    python import_db.py --web-db ./data/web.db --source ./data/collector.db --name "Field-Node"
+    python import_db.py --source ./data/collector.db --name "Field-Node"
 
 This replaces the old background sync mechanism. Run on-demand whenever
 you want to pull data from a collector's SQLite database into the web UI.
@@ -9,6 +9,7 @@ you want to pull data from a collector's SQLite database into the web UI.
 
 import argparse
 import logging
+import os
 import sys
 
 from database import WebDatabase
@@ -22,7 +23,7 @@ def main():
         description="Import data from a collector SQLite database"
     )
     parser.add_argument(
-        "--web-db", required=True, help="Path to web interface database"
+        "--web-db", default="", help="PostgreSQL connection URL (or use DATABASE_URL env var)"
     )
     parser.add_argument(
         "--source", required=True, help="Path to source collector database"
@@ -60,12 +61,16 @@ def main():
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
-    db = WebDatabase(args.web_db)
+    db_url = args.web_db or os.environ.get("DATABASE_URL", "")
+    if not db_url:
+        parser.error("--web-db or DATABASE_URL environment variable required")
+
+    db = WebDatabase(db_url)
     count = db.import_from_collector(
         args.source, args.name, args.gap_threshold, args.timezone,
         args.collector_lat, args.collector_lon,
     )
-    logger.info("Imported %d records from %s into %s", count, args.name, args.web_db)
+    logger.info("Imported %d records from %s", count, args.name)
     return 0 if count >= 0 else 1
 
 

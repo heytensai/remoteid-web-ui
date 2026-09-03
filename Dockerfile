@@ -19,12 +19,13 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY app.py config.py database.py session_detect.py session_scheduler.py maintenance_scheduler.py wsgi.py gunicorn.conf.py alert_engine.py import_db.py notifier.py ./
+COPY app.py config.py database.py session_detect.py session_scheduler.py maintenance_scheduler.py wsgi.py gunicorn.conf.py alert_engine.py import_db.py notifier.py migrate_sqlite_to_pg.py ./
+COPY migrate_sqlite_to_pg.py ./
 COPY templates/ templates/
 COPY static/ static/
 
-# Create directories for data and config
-RUN mkdir -p /app/data /app/config && \
+# Create directories for config
+RUN mkdir -p /app/config && \
     chown -R appuser:appuser /app
 
 # Switch to non-root user

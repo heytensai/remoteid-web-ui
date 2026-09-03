@@ -37,7 +37,7 @@ This file is the user's personal, gitignored configuration. Even if it contains 
 
 - `host` - Web server host (default: "0.0.0.0")
 - `port` - Web server port (default: 5000)
-- `database_path` - Path to SQLite database
+- `database_url` - PostgreSQL connection URL (e.g. `postgresql://remoteid:pass@db:5432/remoteid`)
 - `map` - Map configuration (center_lat, center_lon, default_zoom, tile_provider)
 - `default_hours` - Default time window for queries
 - `max_positions_per_query` - Limit to prevent browser lag
@@ -56,24 +56,34 @@ This file is the user's personal, gitignored configuration. Even if it contains 
 
 ## Database Schema Versioning
 
-The database uses a lightweight integer-based versioning system tracked in the `_schema_version` table. Current schema version: **8**.
+The PostgreSQL database uses a lightweight integer-based versioning system tracked in the `_schema_version` table. Current schema version: **8**.
 
 ### How It Works
 
-1. `WebDatabase.__init__()` calls `_init_db()` which creates all tables via `CREATE TABLE IF NOT EXISTS`
+1. `WebDatabase.__init__()` connects via `psycopg2.pool.ThreadedConnectionPool` and calls `_init_db()` which creates all tables via `CREATE TABLE IF NOT EXISTS`
 2. `_ensure_schema_version()` then checks or creates the `_schema_version` table:
-   - **Fresh database** — `_schema_version` is created at version 5
-   - **Pre-versioning database** (no `_schema_version` table) — created at version 5 (all columns already exist)
+   - **Fresh database** — `_schema_version` is created at version 8
    - **Up-to-date database** (version == `SCHEMA_VERSION`) — no action
    - **Stale database** (version < `SCHEMA_VERSION`) — `_migrate()` runs each missing step, then version is bumped
 3. The `SCHEMA_VERSION` constant at the top of `database.py` defines the current version
 
+### Fork-Safe Connection Pooling
+
+`WebDatabase.__init__()` creates `ThreadedConnectionPool(0, 10, ...)` (importance: `minconn=0` — no connections opened at import time). Gunicorn runs with `preload_app = True`, so the master imports the app and then `fork()`s workers. Before this fix, the eager pool (`minconn=2`) opened sockets in the master that were inherited by every worker, causing intermittent `PGRES_TUPLES_OK and no message` / `no results to fetch` corruption when multiple processes shared the same connection.
+
+The rule: **`reset_pool()` must be called in `post_fork`** (see `gunicorn.conf.py`) so each worker gets a brand-new lazy pool and never reuses the master's inherited one. `reset_pool()` **replaces the pool reference with a fresh `ThreadedConnectionPool(0, 10)`** and must never call `closeall()`/`getconn()` on the inherited pool:
+
+- `closeall()` permanently marks a psycopg2 pool `closed`, so reusing it raises `PoolError("connection pool is closed")` and every DB request hangs.
+- Worse, gunicorn forks the master *while background threads may be touching the pool*, so the inherited `threading.Lock` can be in a **held** state — calling `closeall()`/`getconn()` on it deadlocks the worker forever (worker accepts connections but never serves them → container `unhealthy`).
+
+Because the fresh pool is `minconn=0`, it opens no sockets at reset; the worker's first query connects cleanly. Resolve `app.DATABASE` at *call time* (guard `if app.DATABASE is not None`) — gunicorn imports this config module before `_init_app` runs, so it is `None` at import. Keep any DB pool lazy (`minconn=0`) and reset it (by replacement) after any `fork()`.
+
 ### Adding a Future Migration
 
-1. Bump `SCHEMA_VERSION` in `database.py` (e.g., to `2`)
+1. Bump `SCHEMA_VERSION` in `database.py` (e.g., to `9`)
 2. Add an `if from_version == N:` block in `_migrate()` (static method on `WebDatabase`) with the required `ALTER TABLE` or other DDL
 3. Update this file to document the new version and what changed
-4. Add tests in `tests/test_database.py` (e.g., simulate old version and verify upgrade)
+4. Add tests in `tests/test_database.py`
 
 **Do NOT** add ad-hoc ALTER TABLE or PRAGMA-based column checks anywhere else — all schema changes go through `_migrate()`.
 
@@ -83,12 +93,14 @@ The database uses a lightweight integer-based versioning system tracked in the `
 @staticmethod
 def _migrate(conn, from_version, to_version):
     if from_version == 1:
-        conn.execute("ALTER TABLE remoteid ADD COLUMN new_column TEXT")
+        cur = conn.cursor()
+        cur.execute("ALTER TABLE remoteid ADD COLUMN new_column TEXT")
         from_version = 2
     if from_version == 2:
         ...
     if from_version == 4:
-        conn.execute("DROP TABLE IF EXISTS push_subscriptions")
+        cur = conn.cursor()
+        cur.execute("DROP TABLE IF EXISTS push_subscriptions")
         from_version = 5
 ```
 
@@ -103,7 +115,7 @@ The `_schema_version` table records each migration step so any gap between the c
   private copy of `AlertEngine` into each worker, so in-memory cooldowns/known-session
   maps are per-process and the same `(uas_id, session_id)` event could fire twice.
   - `sent_alerts` makes session/new-drone alerts idempotent via an atomic
-    `INSERT OR IGNORE` claim on a unique `(alert_type, dedup_key)` constraint
+    `INSERT ... ON CONFLICT DO NOTHING` claim on a unique `(alert_type, dedup_key)` constraint
     (`WebDatabase.claim_alert`). Rows are intentionally kept forever — they are
     tiny and the dedup must survive restarts.
   - The partial unique index guarantees at most one active geozone event per

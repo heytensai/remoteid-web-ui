@@ -890,11 +890,27 @@ const MapController = {
     },
 
     /**
+     * Distinct friendly names of configured collectors that saw a session
+     */
+    _collectorNamesForPositions(positions) {
+        const known = new Set((this.collectorConfigs || []).map(c => c.name));
+        const names = [];
+        const seen = new Set();
+        for (const pos of positions || []) {
+            if (!pos.source || !known.has(pos.source) || seen.has(pos.source)) continue;
+            seen.add(pos.source);
+            names.push(pos.source);
+        }
+        return names;
+    },
+
+    /**
      * Add start and end markers for a session
      */
     _addSessionMarkers(uasId, sessionId, positions, color, sessionKey) {
         if (!positions || positions.length === 0) return;
 
+        const collectorNames = this._collectorNamesForPositions(positions);
         const trackKey = sessionKey || `${uasId}:${sessionId}`;
         if (!this.tracks[trackKey]) {
             this.tracks[trackKey] = [];
@@ -911,7 +927,7 @@ const MapController = {
                 icon: this.createDroneIcon(color, hasAlert),
                 opacity: 0.9
             }).addTo(this.layers.tracks);
-            marker.bindPopup(this._createSessionPointPopup(uasId, sessionId, pos, 'Position', color));
+            marker.bindPopup(this._createSessionPointPopup(uasId, sessionId, pos, 'Position', color, collectorNames));
             this.tracks[trackKey].markers.push(marker);
             return;
         }
@@ -925,7 +941,7 @@ const MapController = {
             opacity: 0.9
         }).addTo(this.layers.tracks);
 
-        startMarker.bindPopup(this._createSessionPointPopup(uasId, sessionId, startPos, 'Start', color));
+        startMarker.bindPopup(this._createSessionPointPopup(uasId, sessionId, startPos, 'Start', color, collectorNames));
         this.tracks[trackKey].markers.push(startMarker);
 
         // Add end marker — use a drone icon if the position is recent
@@ -939,14 +955,14 @@ const MapController = {
             opacity: 0.9
         }).addTo(this.layers.tracks);
 
-        endMarker.bindPopup(this._createSessionPointPopup(uasId, sessionId, endPos, 'End', color));
+        endMarker.bindPopup(this._createSessionPointPopup(uasId, sessionId, endPos, 'End', color, collectorNames));
         this.tracks[trackKey].markers.push(endMarker);
     },
 
     /**
      * Create popup content for session start/end point
      */
-    _createSessionPointPopup(uasId, sessionId, pos, pointType, color) {
+    _createSessionPointPopup(uasId, sessionId, pos, pointType, color, collectorNames) {
         const shortSession = sessionId ? sessionId.replace('session_', '') : 'Unknown';
         const altitude = pos.altitude !== null && pos.altitude !== undefined
             ? Units.formatAltitude(pos.altitude, true, 1)
@@ -959,6 +975,9 @@ const MapController = {
         const timeStr = time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
         const esc = (v) => this.escapeHtml(v);
+        const seenBy = (collectorNames && collectorNames.length > 0)
+            ? collectorNames.map(n => esc(n)).join(', ')
+            : null;
         return `
             <div class="popup-title" style="color: ${color};">
                 <i class="fas fa-${pointType === 'Start' ? 'play' : 'stop'}"></i> ${pointType}
@@ -987,6 +1006,10 @@ const MapController = {
                 <span class="popup-label">Position:</span>
                 <span class="popup-value">${pos.latitude.toFixed(6)}, ${pos.longitude.toFixed(6)}</span>
             </div>
+            ${seenBy ? `<div class="popup-row">
+                <span class="popup-label">Seen By:</span>
+                <span class="popup-value">${seenBy}</span>
+            </div>` : ''}
         `;
     },
 

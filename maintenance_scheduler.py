@@ -2,11 +2,12 @@
 # pylint: disable=duplicate-code
 
 import logging
-import sqlite3
 import threading
 import time
 from datetime import datetime, timezone
 from typing import Optional
+
+import psycopg2
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ class MaintenanceScheduler:
                         count = self._database.cleanup_old_sync_log(maint.sync_log_retention_days)
                         if count:
                             logger.info("Cleaned up %d old sync_log record(s)", count)
-                except sqlite3.Error:
+                except psycopg2.Error:
                     logger.exception("Maintenance cycle failed")
             else:
                 logger.debug("Maintenance disabled, skipping")

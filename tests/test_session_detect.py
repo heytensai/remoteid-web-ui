@@ -1,9 +1,8 @@
 """Tests for session_detect.py - standalone session detection"""
 
-import os
-import tempfile
 from datetime import datetime, timedelta, timezone
 
+import psycopg2
 import pytest
 
 from session_detect import (
@@ -14,36 +13,41 @@ from session_detect import (
     analyze_sessions,
     process_database,
 )
+from tests.conftest import TEST_DATABASE_URL
 
 
 @pytest.fixture
-def populated_db():
-    """Create a temp DB with known records for session detection tests."""
-    import sqlite3
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-
-    conn = sqlite3.connect(path, detect_types=sqlite3.PARSE_DECLTYPES)
-    conn.execute("""
-        CREATE TABLE remoteid(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+def populated_db(pg_conn):
+    """Create a PG connection with known records for session detection tests."""
+    cur = pg_conn.cursor()
+    # Ensure tables exist (conftest setup_test_db creates the DB but tables
+    # are created by WebDatabase._init_db; create remoteid here for standalone use)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS remoteid(
+            id SERIAL PRIMARY KEY,
             source TEXT,
-            timestamp DATETIME,
+            timestamp TIMESTAMPTZ,
             mac_address TEXT,
             uas_id TEXT,
             session_id TEXT,
-            latitude REAL,
-            longitude REAL,
-            altitude REAL,
+            latitude DOUBLE PRECISION,
+            longitude DOUBLE PRECISION,
+            altitude DOUBLE PRECISION,
+            height DOUBLE PRECISION,
+            height_type TEXT,
             operator_id TEXT,
-            operator_latitude REAL,
-            operator_longitude REAL,
+            operator_latitude DOUBLE PRECISION,
+            operator_longitude DOUBLE PRECISION,
             computed_session_id TEXT,
-            session_detected_at DATETIME,
-            collector_latitude REAL,
-            collector_longitude REAL
+            session_detected_at TIMESTAMPTZ,
+            collector_latitude DOUBLE PRECISION,
+            collector_longitude DOUBLE PRECISION
         )
     """)
+    pg_conn.commit()
+    cur.execute("TRUNCATE TABLE remoteid RESTART IDENTITY CASCADE")
+    pg_conn.commit()
+
     now = datetime.now(timezone.utc)
     records = [
         (now - timedelta(hours=2), "drone-001", 37.0, -122.0),
@@ -52,49 +56,51 @@ def populated_db():
         (now - timedelta(minutes=25), "drone-001", 37.3, -122.3),
         (now - timedelta(hours=1), "drone-002", 38.0, -123.0),
     ]
-    for i, (ts, uas, lat, lon) in enumerate(records):
-        conn.execute(
-            "INSERT INTO remoteid (source, timestamp, uas_id, latitude, longitude) VALUES (?, ?, ?, ?, ?)",
+    for ts, uas, lat, lon in records:
+        cur.execute(
+            "INSERT INTO remoteid (source, timestamp, uas_id, latitude, longitude) "
+            "VALUES (%s, %s, %s, %s, %s)",
             ("test", ts, uas, lat, lon),
         )
-    conn.commit()
-    conn.close()
-    yield path
-    os.unlink(path)
+    pg_conn.commit()
+    yield pg_conn
+    # Cleanup
+    cur.execute("TRUNCATE TABLE remoteid RESTART IDENTITY CASCADE")
+    pg_conn.commit()
 
 
 @pytest.fixture
-def empty_db():
-    """Create an empty temp DB with no records."""
-    import sqlite3
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-
-    conn = sqlite3.connect(path, detect_types=sqlite3.PARSE_DECLTYPES)
-    conn.execute("""
-        CREATE TABLE remoteid(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+def empty_db(pg_conn):
+    """Create a PG connection with no records."""
+    cur = pg_conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS remoteid(
+            id SERIAL PRIMARY KEY,
             source TEXT,
-            timestamp DATETIME,
+            timestamp TIMESTAMPTZ,
             mac_address TEXT,
             uas_id TEXT,
             session_id TEXT,
-            latitude REAL,
-            longitude REAL,
-            altitude REAL,
+            latitude DOUBLE PRECISION,
+            longitude DOUBLE PRECISION,
+            altitude DOUBLE PRECISION,
+            height DOUBLE PRECISION,
+            height_type TEXT,
             operator_id TEXT,
-            operator_latitude REAL,
-            operator_longitude REAL,
+            operator_latitude DOUBLE PRECISION,
+            operator_longitude DOUBLE PRECISION,
             computed_session_id TEXT,
-            session_detected_at DATETIME,
-            collector_latitude REAL,
-            collector_longitude REAL
+            session_detected_at TIMESTAMPTZ,
+            collector_latitude DOUBLE PRECISION,
+            collector_longitude DOUBLE PRECISION
         )
     """)
-    conn.commit()
-    conn.close()
-    yield path
-    os.unlink(path)
+    pg_conn.commit()
+    cur.execute("TRUNCATE TABLE remoteid RESTART IDENTITY CASCADE")
+    pg_conn.commit()
+    yield pg_conn
+    cur.execute("TRUNCATE TABLE remoteid RESTART IDENTITY CASCADE")
+    pg_conn.commit()
 
 
 class TestGetUasList:
@@ -173,11 +179,9 @@ class TestDetectSessions:
 class TestUpdateSessionIds:
     def test_update(self, populated_db):
         update_session_ids(populated_db, [("session_test_123", datetime.now(), 1)])
-        import sqlite3
-        conn = sqlite3.connect(populated_db, detect_types=sqlite3.PARSE_DECLTYPES)
-        cursor = conn.execute("SELECT computed_session_id FROM remoteid WHERE id = 1")
-        val = cursor.fetchone()[0]
-        conn.close()
+        cur = populated_db.cursor()
+        cur.execute("SELECT computed_session_id FROM remoteid WHERE id = 1")
+        val = cur.fetchone()[0]
         assert val == "session_test_123"
 
 
@@ -214,11 +218,9 @@ class TestProcessDatabase:
         result, uas_list = process_database(populated_db, 600, dry_run=True)
         assert "dry" not in result or "dry" not in result.lower()
         assert isinstance(uas_list, list)
-        import sqlite3
-        conn = sqlite3.connect(populated_db, detect_types=sqlite3.PARSE_DECLTYPES)
-        cursor = conn.execute("SELECT computed_session_id FROM remoteid LIMIT 1")
-        val = cursor.fetchone()[0]
-        conn.close()
+        cur = populated_db.cursor()
+        cur.execute("SELECT computed_session_id FROM remoteid LIMIT 1")
+        val = cur.fetchone()[0]
         assert val is None
 
     def test_process_database_force(self, populated_db):
@@ -233,9 +235,10 @@ class TestProcessDatabase:
         assert isinstance(uas_list, list)
 
     def test_process_database_not_found(self):
-        result, uas_list = process_database("/nonexistent/db.sqlite", 600)
-        assert result == "database not found"
-        assert uas_list == []
+        """Connection to nonexistent PG database raises an error."""
+        with pytest.raises(psycopg2.OperationalError):
+            conn = psycopg2.connect("postgresql://invalid:invalid@nonexistent:5432/fake")
+            conn.close()
 
     def test_process_database_empty(self, empty_db):
         result, uas_list = process_database(empty_db, 600)
