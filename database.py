@@ -16,7 +16,7 @@ from psycopg2 import pool
 logger = logging.getLogger(__name__)
 
 # Current schema version — bump this and add a migration in _migrate()
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 class WebDatabase:
@@ -216,7 +216,7 @@ class WebDatabase:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_source ON remoteid(source)")
             cur.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_uas_time_unique "
-            "ON remoteid(uas_id, timestamp)"
+            "ON remoteid(uas_id, source, timestamp)"
             )
             cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_timestamp ON remoteid(timestamp)"
@@ -462,6 +462,21 @@ class WebDatabase:
                 "ON geozone_events(uas_id, geozone_name) WHERE exited_at IS NULL"
             )
             from_version = 8
+
+        if from_version == 8:
+            # v8 unique index deduplicated by (uas_id, timestamp), which
+            # wrongly dropped a packet when two collectors (e.g. a 2.4 GHz and
+            # a 5.8 GHz interface) observed the same drone packet at the same
+            # timestamp. The dedup key now includes the collector source so
+            # each collector keeps its own copy (used for per-collector
+            # attribution). Drop the old unique index, then create the new one.
+            # The defunct (already redundant) composite index is left in place.
+            cur.execute("DROP INDEX IF EXISTS idx_uas_time_unique")
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_uas_time_unique "
+                "ON remoteid(uas_id, source, timestamp)"
+            )
+            from_version = 9
 
     @staticmethod
     def _ensure_latest_positions_table(cur):
@@ -762,7 +777,7 @@ class WebDatabase:
                     )
 
                 # Import into web database using named parameters.
-                # Duplicate (uas_id, timestamp) rows are skipped via the
+                # Duplicate (uas_id, source, timestamp) rows are skipped via the
                 # unique index instead of a SELECT-then-INSERT race.
                 dest_conn = self._get_conn()
                 # Track session state per UAS for this import batch
@@ -825,7 +840,7 @@ class WebDatabase:
                                 %(operator_latitude)s, %(operator_longitude)s,
                                 %(computed_session_id)s, %(session_detected_at)s,
                                 %(collector_latitude)s, %(collector_longitude)s)
-                        ON CONFLICT (uas_id, timestamp) DO NOTHING
+                        ON CONFLICT (uas_id, source, timestamp) DO NOTHING
                     """,
                         {
                             "source": source_name,
@@ -1482,7 +1497,8 @@ class WebDatabase:
                 """
                 SELECT latitude, longitude, altitude, height, height_type, timestamp,
                        operator_id, operator_latitude, operator_longitude,
-                       computed_session_id
+                       computed_session_id, collector_latitude, collector_longitude,
+                       source
                 FROM remoteid
                 WHERE uas_id = %s AND timestamp BETWEEN %s AND %s
                 ORDER BY timestamp ASC
@@ -1490,7 +1506,7 @@ class WebDatabase:
                 (uas_id, start_time, end_time),
             )
 
-            positions = [dict(row) for row in cur.fetchall()]
+            positions = [self._sanitize_record(dict(row)) for row in cur.fetchall()]
 
             # Group by session
             sessions = {}
@@ -1572,7 +1588,10 @@ class WebDatabase:
         """Insert multiple records into remoteid table with session detection.
 
         Uses INSERT ... ON CONFLICT DO NOTHING with a UNIQUE index on
-        (uas_id, timestamp) to skip duplicates without per-record SELECT checks.
+        (uas_id, source, timestamp) to skip duplicates without per-record
+        SELECT checks. Including source means two different collectors that
+        observe the same drone packet at the same timestamp each keep their
+        own row (enabling per-collector attribution).
         """
         errors = []
         batch_params = []
@@ -1699,7 +1718,7 @@ class WebDatabase:
                  computed_session_id, session_detected_at,
                  collector_latitude, collector_longitude)
                 VALUES %s
-                ON CONFLICT (uas_id, timestamp) DO NOTHING
+                ON CONFLICT (uas_id, source, timestamp) DO NOTHING
                 RETURNING id
                 """,
                 rows,

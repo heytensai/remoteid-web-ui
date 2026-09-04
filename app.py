@@ -1027,6 +1027,15 @@ def submit_data():
         # Format timestamp as ISO string
         last_ts_str = last_timestamp.isoformat() if hasattr(last_timestamp, 'isoformat') else last_timestamp
 
+        # Log the returned resume timestamp for debugging: IP, API key, collector, timestamp
+        auth_header = request.headers.get("Authorization", "")
+        api_key = auth_header[7:] if auth_header.startswith("Bearer ") else None
+        logger.info(
+            "Collector submit returned latest timestamp (IP=%s, api_key=%s, collector=%s, "
+            "last_timestamp=%s, inserted=%s)",
+            request.remote_addr, api_key, source, last_ts_str, inserted,
+        )
+
         return jsonify(
             {
                 "success": True,
@@ -1312,6 +1321,15 @@ def get_last_timestamp():
 
         # Format as ISO string
         last_ts_str = last_timestamp.isoformat() if hasattr(last_timestamp, 'isoformat') else last_timestamp
+
+        # Log timestamp request for debugging: IP, API key, collector, returned timestamp
+        auth_header = request.headers.get("Authorization", "")
+        api_key = auth_header[7:] if auth_header.startswith("Bearer ") else None
+        logger.info(
+            "Collector requested latest timestamp (IP=%s, api_key=%s, collector=%s, "
+            "last_timestamp=%s)",
+            request.remote_addr, api_key, source, last_ts_str,
+        )
 
         return jsonify({"last_timestamp": last_ts_str})
     except (psycopg2.Error, AttributeError, TypeError):

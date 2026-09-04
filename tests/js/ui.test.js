@@ -135,6 +135,31 @@ describe('UIController', () => {
     });
   });
 
+  describe('_collectorNamesForPositions', () => {
+    test('returns configured collector names that detected the flight, deduped', () => {
+      UIController.collectorNames = new Set(['sar', 'detector04', 'grid']);
+      const names = UIController._collectorNamesForPositions([
+        { source: 'sar' },
+        { source: 'sar' },
+        { source: 'detector04' },
+        { source: 'unknown-collector' },
+        {},
+      ]);
+      expect(names).toEqual(['sar', 'detector04']);
+    });
+
+    test('returns empty when no positions match configured collectors', () => {
+      UIController.collectorNames = new Set(['sar']);
+      expect(UIController._collectorNamesForPositions([])).toEqual([]);
+      expect(UIController._collectorNamesForPositions([{ source: 'foo' }, {}])).toEqual([]);
+    });
+
+    test('returns empty when collectorNames not loaded yet', () => {
+      UIController.collectorNames = undefined;
+      expect(UIController._collectorNamesForPositions([{ source: 'sar' }])).toEqual([]);
+    });
+  });
+
   describe('_haversineDistance', () => {
     test('same point returns 0', () => {
       Units.haversineDistance(37, -122, 37, -122);

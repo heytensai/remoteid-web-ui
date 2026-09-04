@@ -56,7 +56,7 @@ This file is the user's personal, gitignored configuration. Even if it contains 
 
 ## Database Schema Versioning
 
-The PostgreSQL database uses a lightweight integer-based versioning system tracked in the `_schema_version` table. Current schema version: **8**.
+The PostgreSQL database uses a lightweight integer-based versioning system tracked in the `_schema_version` table. Current schema version: **9**.
 
 ### How It Works
 
@@ -126,6 +126,15 @@ The `_schema_version` table records each migration step so any gap between the c
   - Migration v8 also closes any duplicate active geozone events left behind by
     the pre-fix per-process race before creating the unique index (same cleanup
     runs idempotently in `_init_db()`).
+- **v9**: changes the dedup key on the `remoteid` table from `(uas_id, timestamp)`
+  to `(uas_id, source, timestamp)`. The old unique index `idx_uas_time_unique`
+  wrongly dropped a packet when two collectors (e.g. a 2.4 GHz and a 5.8 GHz
+  interface) observed the same drone packet at the same timestamp. Including
+  `source` lets each collector keep its own row, which is required for
+  per-collector "which collector saw this packet" attribution. Migration v9
+  drops the old unique index and recreates it with the expanded key; the live
+  `INSERT ... ON CONFLICT (uas_id, source, timestamp)` clauses were updated to
+  match.
 
 
 ## Code Style Guidelines

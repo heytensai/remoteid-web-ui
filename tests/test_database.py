@@ -190,6 +190,29 @@ def test_insert_duplicate_records(db, sample_records):
     assert len(errors) == 0
 
 
+def test_insert_same_packet_two_collectors_both_kept(db, sample_records):
+    """Two collectors that observe the same packet at the same timestamp must
+    each keep their own row (dedup key is (uas_id, source, timestamp))."""
+    first = sample_records[0]
+
+    ins1, _, _ = db.insert_remoteid_records("collector-2.4ghz", [first])
+    assert ins1 == 1
+
+    ins2, _, _ = db.insert_remoteid_records("collector-5.8ghz", [first])
+    assert ins2 == 1
+
+    ins3, _, _ = db.insert_remoteid_records("collector-2.4ghz", [first])
+    assert ins3 == 0
+
+    rows = db.get_positions(
+        datetime.now(timezone.utc) - timedelta(days=1),
+        datetime.now(timezone.utc) + timedelta(days=1),
+        uas_id=first["uas_id"],
+    )
+    sources = {r["source"] for r in rows if r["timestamp"] == first["timestamp"]}
+    assert sources == {"collector-2.4ghz", "collector-5.8ghz"}
+
+
 def test_insert_missing_uas_id(db):
     records = [{"timestamp": datetime.now(timezone.utc).isoformat(), "latitude": 37.0, "longitude": -122.0}]
     inserted, errors, _ = db.insert_remoteid_records("test-source", records)

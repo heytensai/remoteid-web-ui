@@ -324,6 +324,8 @@ const UIController = {
             detailDistance: document.getElementById('detailDistance'),
             detailMaxSpeed: document.getElementById('detailMaxSpeed'),
             detailTimeSpan: document.getElementById('detailTimeSpan'),
+            detailSeenByRow: document.getElementById('detailSeenByRow'),
+            detailSeenBy: document.getElementById('detailSeenBy'),
             detailChart: document.getElementById('detailChart'),
             chartModal: document.getElementById('chartModal'),
             closeChartModalBtn: document.getElementById('closeChartModal'),
@@ -798,6 +800,7 @@ const UIController = {
             this.droneAliases = config.drone_aliases || {};
             this.manufacturerPrefixes = config.manufacturer_prefixes || {};
             this.positionStaleMinutes = config.position_stale_minutes || 30;
+            this.collectorNames = new Set((config.collectors || []).map(c => c.name));
 
             // Merge server-side permissions if available (auth from middleware)
             if (config.auth && config.auth.authenticated) {
@@ -2400,7 +2403,6 @@ const UIController = {
     _updateDetailStats(track, maxHeight = null) {
         const numPositions = track.length;
         this.elements.detailPositions.textContent = numPositions;
-
         // Max altitude
         const maxAlt = Math.max(...track.map(p => p.altitude || 0));
         this.elements.detailMaxAlt.textContent = maxAlt > 0 ? Units.formatAltitude(maxAlt, true, 0) : 'N/A';
@@ -2468,6 +2470,31 @@ const UIController = {
         } else {
             this.elements.detailOperator.style.display = 'none';
         }
+
+        // Seen by collectors (comma-separated friendly names)
+        const seenBy = this._collectorNamesForPositions(track);
+        if (seenBy.length > 0) {
+            this.elements.detailSeenByRow.style.display = '';
+            this.elements.detailSeenBy.textContent = seenBy.join(', ');
+        } else {
+            this.elements.detailSeenByRow.style.display = 'none';
+        }
+    },
+
+    /**
+     * Return names of configured collectors that detected the given positions.
+     * Deduplicates by source; only names matching configured collectors are shown.
+     */
+    _collectorNamesForPositions(positions) {
+        const known = this.collectorNames || new Set();
+        const names = [];
+        const seen = new Set();
+        for (const pos of positions || []) {
+            if (!pos.source || !known.has(pos.source) || seen.has(pos.source)) continue;
+            seen.add(pos.source);
+            names.push(pos.source);
+        }
+        return names;
     },
 
     /**
@@ -2481,6 +2508,8 @@ const UIController = {
         this.elements.detailMaxSpeed.textContent = '-';
         this.elements.detailTimeSpan.textContent = '-';
         this.elements.detailOperator.style.display = 'none';
+        this.elements.detailSeenByRow.style.display = 'none';
+        this.elements.detailSeenBy.textContent = '-';
     },
 
     /**
