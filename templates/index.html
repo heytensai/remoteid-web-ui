@@ -155,7 +155,17 @@
                 </div>
 
                 <!-- Map Container -->
-                <div id="map" class="map-container"></div>
+                <div id="map" class="map-container">
+                    <!-- Height-band color legend (visible only in By Height mode) -->
+                    <div id="heightLegend" class="height-legend" style="display: none;">
+                        <div class="height-legend-title">Height Bands (ft)</div>
+                        <div class="height-legend-row"><span class="height-legend-swatch" style="background: #16a34a;"></span>0-100</div>
+                        <div class="height-legend-row"><span class="height-legend-swatch" style="background: #eab308;"></span>100-200</div>
+                        <div class="height-legend-row"><span class="height-legend-swatch" style="background: #ec4899;"></span>200-300</div>
+                        <div class="height-legend-row"><span class="height-legend-swatch" style="background: #3b82f6;"></span>300-400</div>
+                        <div class="height-legend-row"><span class="height-legend-swatch" style="background: #dc2626;"></span>400+</div>
+                    </div>
+                </div>
             </div>
 
             <!-- Settings Panel -->
@@ -217,6 +227,17 @@
                             <span>Track Opacity</span>
                             <span id="opacityValue">60%</span>
                             <input type="range" id="trackOpacity" min="0" max="100" value="60">
+                        </div>
+                        <div class="settings-item color-mode-toggle">
+                            <span class="color-mode-label">Drone Color</span>
+                            <div class="color-mode-pill" id="colorModePill" role="radiogroup" aria-label="Drone color mode">
+                                <button type="button" class="color-mode-btn active" data-mode="drone" role="radio" aria-checked="true">
+                                    Per-Drone
+                                </button>
+                                <button type="button" class="color-mode-btn" data-mode="height" role="radio" aria-checked="false">
+                                    By Height
+                                </button>
+                            </div>
                         </div>
                     </div>
                     <div class="settings-section">

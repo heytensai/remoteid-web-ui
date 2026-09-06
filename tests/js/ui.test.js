@@ -46,6 +46,7 @@ global.MapController = {
   markers: {},
   tracks: {},
   operatorMarkers: {},
+  colorMode: 'drone',
   layers: {
     drones: { clearLayers: jest.fn(), addTo: jest.fn() },
     tracks: { clearLayers: jest.fn(), addTo: jest.fn() },
@@ -54,6 +55,11 @@ global.MapController = {
   clearAllTracks: jest.fn(),
   clearAllOperators: jest.fn(),
   getDroneColor: jest.fn().mockReturnValue('hsl(120, 70%, 50%)'),
+  setColorMode: jest.fn(mode => {
+    MapController.colorMode = mode === 'height' ? 'height' : 'drone';
+  }),
+  getHeightColor: jest.fn().mockReturnValue('#22c55e'),
+  getHeightBandLabel: jest.fn().mockReturnValue('0-100 ft'),
   updateDrones: jest.fn(),
   toggleOperators: jest.fn(),
   toggleTracks: jest.fn(),
@@ -384,6 +390,104 @@ describe('UIController', () => {
       UIController._trackRefreshFailure(true);
       expect(banner.style.display).toBe('none');
       expect(UIController._connectionLostShown).toBe(false);
+    });
+  });
+
+  describe('color mode settings', () => {
+    beforeEach(() => {
+      MapController.colorMode = 'drone';
+      MapController.setColorMode.mockClear();
+      MapController.getHeightColor.mockClear();
+      UIController._saveSettings = jest.fn();
+      UIController.elements = {
+        colorModePill: document.createElement('div'),
+        droneList: document.createElement('div'),
+      };
+    });
+
+    test('setColorMode delegates to MapController and persists', () => {
+      UIController.setColorMode('height');
+      expect(MapController.setColorMode).toHaveBeenCalledWith('height');
+      expect(UIController._saveSettings).toHaveBeenCalled();
+    });
+
+    test('setColorMode normalizes unknown modes to drone', () => {
+      UIController.setColorMode('bogus');
+      expect(MapController.setColorMode).toHaveBeenCalledWith('drone');
+    });
+
+    test('setColorMode toggles the active pill button', () => {
+      const pill = UIController.elements.colorModePill;
+      const droneBtn = document.createElement('button');
+      droneBtn.className = 'color-mode-btn';
+      droneBtn.dataset.mode = 'drone';
+      const heightBtn = document.createElement('button');
+      heightBtn.className = 'color-mode-btn';
+      heightBtn.dataset.mode = 'height';
+      heightBtn.classList.add('active');
+      pill.append(droneBtn, heightBtn);
+
+      UIController.setColorMode('height');
+
+      expect(heightBtn.classList.contains('active')).toBe(true);
+      expect(heightBtn.getAttribute('aria-checked')).toBe('true');
+      expect(droneBtn.classList.contains('active')).toBe(false);
+      expect(droneBtn.getAttribute('aria-checked')).toBe('false');
+    });
+
+    test('_renderDroneItem keeps drone color swatch in drone mode', () => {
+      UIController.droneAliases = {};
+      UIController._getManufacturerBadgeHtml = jest.fn().mockReturnValue('');
+      const drone = {
+        uas_id: 'uas-1',
+        altitude: 100,
+        height: 200,
+        max_height: 250,
+        timestamp: '2024-01-01T12:00:00Z',
+        computed_session_id: 'session_1',
+        session_start: '2024-01-01T11:59:00Z',
+      };
+      const html = UIController._renderDroneItem(drone, new Set());
+      expect(html).toContain('hsl(120, 70%, 50%)');
+    });
+
+    test('_renderDroneItem keeps drone color swatch in height mode', () => {
+      MapController.colorMode = 'height';
+      UIController.droneAliases = {};
+      UIController._getManufacturerBadgeHtml = jest.fn().mockReturnValue('');
+      const drone = {
+        uas_id: 'uas-1',
+        altitude: 100,
+        height: 200,
+        max_height: 250,
+        timestamp: '2024-01-01T12:00:00Z',
+        computed_session_id: 'session_1',
+        session_start: '2024-01-01T11:59:00Z',
+      };
+      const html = UIController._renderDroneItem(drone, new Set());
+      expect(html).toContain('hsl(120, 70%, 50%)');
+      expect(html).not.toContain('#16a34a');
+      expect(html).not.toContain('Height band');
+    });
+
+    test('_updateHeightLegend shows legend in height mode', () => {
+      const legend = document.createElement('div');
+      legend.id = 'heightLegend';
+      document.body.appendChild(legend);
+      MapController.colorMode = 'height';
+      UIController._updateHeightLegend();
+      expect(legend.style.display).toBe('');
+      document.body.removeChild(legend);
+    });
+
+    test('_updateHeightLegend hides legend in drone mode', () => {
+      const legend = document.createElement('div');
+      legend.id = 'heightLegend';
+      document.body.appendChild(legend);
+      MapController.colorMode = 'drone';
+      UIController._updateHeightLegend();
+      expect(legend.style.display).toBe('none');
+      document.body.removeChild(legend);
     });
   });
 

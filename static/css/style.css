@@ -886,10 +886,55 @@ body.dark-mode .analytics-alert-log-btn:hover {
 
 /* Map Container */
 .map-container {
+    position: relative;
     flex: 1;
     min-height: 200px; /* Ensure minimum height */
     width: 100%;
     overflow: hidden;
+}
+
+/* Height-band color legend (bottom-left, By Height mode only) */
+.height-legend {
+    position: absolute;
+    bottom: 20px;
+    left: 10px;
+    z-index: 1000;
+    background: rgba(255, 255, 255, 0.95);
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    padding: 8px 10px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    font-size: 0.75rem;
+    color: #495057;
+}
+
+.height-legend-title {
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.height-legend-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 3px;
+}
+
+.height-legend-row:last-child {
+    margin-bottom: 0;
+}
+
+.height-legend-swatch {
+    width: 14px;
+    height: 10px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+
+body.dark-mode .height-legend {
+    background: rgba(26, 26, 46, 0.95);
+    border-color: #2a2a3d;
+    color: #adb5bd;
 }
 
 /* Time Controls */
@@ -1638,6 +1683,70 @@ body.dark-mode .replay-time-display {
     cursor: pointer;
 }
 
+/* Drone color mode pill toggle (per-drone vs by-height) */
+.color-mode-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.color-mode-label {
+    font-size: 0.9rem;
+    color: #495057;
+}
+
+.color-mode-pill {
+    display: inline-flex;
+    background: #e9ecef;
+    border-radius: 20px;
+    padding: 3px;
+    gap: 2px;
+}
+
+.color-mode-btn {
+    border: none;
+    background: transparent;
+    padding: 5px 12px;
+    border-radius: 18px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #6c757d;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.color-mode-btn:hover {
+    color: #495057;
+}
+
+.color-mode-btn.active {
+    background: #007bff;
+    color: #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+body.dark-mode .color-mode-label {
+    color: #adb5bd;
+}
+
+body.dark-mode .color-mode-pill {
+    background: #2a2a3d;
+}
+
+body.dark-mode .color-mode-btn {
+    color: #9aa0a6;
+}
+
+body.dark-mode .color-mode-btn:hover {
+    color: #ced4da;
+}
+
+body.dark-mode .color-mode-btn.active {
+    background: #2f6fed;
+    color: #fff;
+}
+
 @media (min-width: 768px) {
     .settings-panel {
         width: 300px;
@@ -2162,6 +2271,7 @@ body.dark-mode .drone-item.has-geozone-alert {
 
 /* Live drone position icon on map */
 .drone-position-icon {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2176,6 +2286,18 @@ body.dark-mode .drone-item.has-geozone-alert {
 
 .drone-position-icon .fa-plane {
     font-size: 14px;
+}
+
+/* Small identity dot inside height-colored markers (drone color preserved) */
+.drone-id-dot {
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    width: 8px;
+    height: 8px;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    box-shadow: 0 0 2px rgba(0, 0, 0, 0.4);
 }
 
 /* Geozone alert badge on drone marker */

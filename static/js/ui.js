@@ -186,6 +186,9 @@ const UIController = {
             if (this._pendingSettings.darkMode !== undefined) {
                 document.body.classList.toggle('dark-mode', this._pendingSettings.darkMode);
             }
+            if (this._pendingSettings.colorMode !== undefined) {
+                this.setColorMode(this._pendingSettings.colorMode);
+            }
             this._pendingSettings = null;
         }
 
@@ -342,6 +345,7 @@ const UIController = {
             showFixedCollectorsCheckbox: document.getElementById('showFixedCollectors'),
             showMobileCollectorsCheckbox: document.getElementById('showMobileCollectors'),
             trackOpacitySlider: document.getElementById('trackOpacity'),
+            colorModePill: document.getElementById('colorModePill'),
             timePresets: document.querySelectorAll('.header-time-presets button'),
             settingsPanel: document.getElementById('settingsPanel'),
 
@@ -571,6 +575,15 @@ const UIController = {
                 this.elements.opacityValue.textContent = e.target.value + '%';
             }
         });
+
+        // Drone color mode pill (per-drone vs by-height)
+        if (this.elements.colorModePill) {
+            this.elements.colorModePill.querySelectorAll('.color-mode-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    this.setColorMode(btn.dataset.mode);
+                });
+            });
+        }
 
         // Show known/unknown drones
         this.elements.showKnownDrones.addEventListener('change', (e) => {
@@ -888,6 +901,40 @@ const UIController = {
         document.body.classList.toggle('dark-mode', enabled);
     },
 
+    /**
+     * Switch drone coloring between per-drone ID color and height-band color.
+     * @param {'drone'|'height'} mode
+     */
+    setColorMode(mode) {
+        if (mode !== 'height') mode = 'drone';
+        MapController.setColorMode(mode);
+
+        if (this.elements.colorModePill) {
+            this.elements.colorModePill.querySelectorAll('.color-mode-btn').forEach(btn => {
+                const active = btn.dataset.mode === mode;
+                btn.classList.toggle('active', active);
+                btn.setAttribute('aria-checked', String(active));
+            });
+        }
+
+        this._updateHeightLegend();
+        this._saveSettings();
+    },
+
+    /**
+     * Show or hide the height-band legend overlay based on the current color mode.
+     */
+    _updateHeightLegend() {
+        const legend = document.getElementById('heightLegend');
+        if (MapController.colorMode === 'height') {
+            if (!legend) return;
+            legend.style.display = '';
+        } else {
+            if (!legend) return;
+            legend.style.display = 'none';
+        }
+    },
+
     _toggleKeepScreenOn(enabled) {
         this.keepScreenOn = enabled;
         if (enabled) {
@@ -977,6 +1024,7 @@ const UIController = {
                 showKnownDrones: this.elements.showKnownDrones.checked,
                 showUnknownDrones: this.elements.showUnknownDrones.checked,
                 darkMode: this.elements.darkModeCheckbox.checked,
+                colorMode: MapController.colorMode === 'height' ? 'height' : 'drone',
             };
             localStorage.setItem('remoteid_settings', JSON.stringify(settings));
         } catch {
@@ -1020,6 +1068,9 @@ const UIController = {
                 this.elements.darkModeCheckbox.checked = saved.darkMode;
                 // Defer tile switching to pending settings (needs MapController)
             }
+            if (saved.colorMode !== undefined) {
+                // Defer color mode to pending settings (needs MapController)
+            }
             // keepScreenOn is intentionally NOT restored - always starts off
 
             // Defer MapController-applied settings until after map is ready
@@ -1041,6 +1092,9 @@ const UIController = {
             }
             if (saved.darkMode !== undefined) {
                 this._pendingSettings.darkMode = saved.darkMode;
+            }
+            if (saved.colorMode !== undefined) {
+                this._pendingSettings.colorMode = saved.colorMode;
             }
         } catch {
             // ignore

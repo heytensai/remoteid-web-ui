@@ -44,6 +44,7 @@ const MapController = {
     ready: false,
     staleTimeout: 300,
     alertUasIds: new Set(),
+    colorMode: 'drone', // 'drone' = per-UAS-ID color, 'height' = height-band color
 
     escapeHtml(str) {
         if (str === null || str === undefined) return '';
@@ -169,6 +170,117 @@ const MapController = {
         }
         const hue = Math.abs(hash % 360);
         return `hsl(${hue}, 70%, 50%)`;
+    },
+
+/**
+     * Map a height (meters) to a height-band color matching the legend.
+     * Bands are in feet: 0-100, 100-200, 200-300, 300-400, 400+ and use
+     * green, yellow, pink, blue, red.
+     * Returns a neutral gray for missing/invalid heights.
+     */
+    getHeightColor(heightMeters) {
+        if (heightMeters === null || heightMeters === undefined || isNaN(heightMeters)) {
+            return '#6c757d';
+        }
+        const feet = Math.round(heightMeters * 3.28084 * 100) / 100;
+        if (feet <= 100) return '#16a34a';
+        if (feet <= 200) return '#eab308';
+        if (feet <= 300) return '#ec4899';
+        if (feet <= 400) return '#3b82f6';
+        return '#dc2626';
+    },
+
+    /**
+     * Human-readable height band label for a height in meters (bands in feet).
+     */
+    getHeightBandLabel(heightMeters) {
+        if (heightMeters === null || heightMeters === undefined || isNaN(heightMeters)) {
+            return 'unknown';
+        }
+        const feet = heightMeters * 3.28084;
+        if (feet <= 100) return '0-100 ft';
+        if (feet <= 200) return '100-200 ft';
+        if (feet <= 300) return '200-300 ft';
+        if (feet <= 400) return '300-400 ft';
+        return '400+ ft';
+    },
+
+    /**
+     * Switch between per-drone color mode and height-band color mode.
+     * @param {'drone'|'height'} mode
+     */
+    setColorMode(mode) {
+        this.colorMode = mode === 'height' ? 'height' : 'drone';
+        // Rebuild all track polylines so segment boundaries match the new mode's
+        // colors (banded runs in height mode, one segment per flight in drone mode).
+        this._redrawAllTracks();
+        // Recolor in-flight drone markers in place (start/stop keep the drone color).
+        for (const key of Object.keys(this.tracks)) {
+            const track = this.tracks[key];
+            if (!Array.isArray(track)) continue;
+            for (const m of (track.markers || [])) {
+                if (m._markerType === 'drone') {
+                    m.setIcon(this.createDroneIcon(this.getDroneColor(m._uasId), this.alertUasIds.has(m._uasId), m._height));
+                }
+            }
+        }
+        // Replay markers follow the current mode (small dots).
+        for (const key of Object.keys(this.replayState.replayMarkers)) {
+            const m = this.replayState.replayMarkers[key];
+            if (m._markerType === 'replay-drone') {
+                this.updateReplayMarkerColor(m);
+            }
+        }
+    },
+
+    /**
+     * Rebuild every session track's polyline segments from its stored positions,
+     * colored for the current color mode. Existing segments are removed first so
+     * the layer count/grouping always matches the current mode.
+     */
+    _redrawAllTracks() {
+        if (!this.ready || !this.layers.tracks) return;
+        for (const key of Object.keys(this.tracks)) {
+            const track = this.tracks[key];
+            if (!Array.isArray(track)) continue;
+            const positions = this.sessionPositions[key];
+            if (!positions || positions.length === 0) continue;
+
+            const droneColor = this.getDroneColor(key.split(':')[0]);
+            for (const seg of track) {
+                this.layers.tracks.removeLayer(seg);
+            }
+            const segments = this._buildTrackSegments(positions, droneColor);
+            track.length = 0;
+            for (const seg of segments) {
+                seg.addTo(this.layers.tracks);
+                track.push(seg);
+            }
+
+            // During replay the base track stays dimmed as a "future" preview;
+            // restore that dimming for replayed sessions.
+            if (this.replayState.active && this.replayState.progressPolylines[key]) {
+                for (const seg of track) {
+                    seg.setStyle({ opacity: 0.15, weight: 2 });
+                }
+            }
+        }
+    },
+
+    /**
+     * Recolor a single replay marker based on the current color mode.
+     */
+    updateReplayMarkerColor(marker) {
+        const color = this.getDroneColor(marker._uasId);
+        const markerColor = this.colorMode === 'height'
+            ? this.getHeightColor(marker._height)
+            : color;
+        marker.setIcon(L.divIcon({
+            className: 'replay-marker',
+            html: `<div style="width:14px;height:14px;background:${markerColor};border:2px solid #fff;border-radius:50%;box-shadow:0 0 6px ${markerColor};"></div>`,
+            iconSize: [14, 14],
+            iconAnchor: [7, 7],
+        }));
     },
 
     /**
@@ -830,22 +942,18 @@ const MapController = {
     _drawTrackSegment(uasId, sessionId, positions, color) {
         if (!this.ready || !this.layers.tracks) return;
 
-        const points = positions.map(t => [t.latitude, t.longitude]);
-
-        const polyline = L.polyline(points, {
-            color: color,
-            weight: 3,
-            opacity: 0.6,
-            lineCap: 'round',
-            lineJoin: 'round'
-        }).addTo(this.layers.tracks);
-
-        // Store by session key instead of just UAS ID
         const sessionKey = `${uasId}:${sessionId}`;
         if (!this.tracks[sessionKey]) {
             this.tracks[sessionKey] = [];
         }
-        this.tracks[sessionKey].push(polyline);
+
+        // Draw the track as one polyline per height-band run. In drone color
+        // mode every point shares the drone color, so this is a single segment.
+        const segments = this._buildTrackSegments(positions, color);
+        for (const seg of segments) {
+            seg.addTo(this.layers.tracks);
+            this.tracks[sessionKey].push(seg);
+        }
 
         // Store raw positions for replay use
         this.sessionPositions[sessionKey] = positions;
@@ -855,6 +963,71 @@ const MapController = {
 
         // Add session-specific operator markers
         this.updateSessionOperators(uasId, sessionId, positions, color);
+    },
+
+    /**
+     * Build the color-band polyline segments for a session track.
+     * Every connecting line between two adjacent positions is colored by the
+     * height band of its destination position, so each pair is always drawn
+     * (no invisible single-point segments) while consecutive same-colored
+     * links are grouped into a single polyline. In drone color mode all links
+     * share the drone color, producing one whole-flight segment. Each segment
+     * remembers both its height color and drone color.
+     */
+    _buildTrackSegments(positions, droneColor) {
+        const segments = [];
+        const points = positions.map((p) => [p.latitude, p.longitude]);
+
+        let runPoints = null;
+        let runColor = null;
+        for (let i = 1; i < positions.length; i++) {
+            const color = this.colorMode === 'height'
+                ? this._positionTrackColor(positions[i])
+                : droneColor;
+            if (runPoints === null) {
+                // First link seeds the run with both endpoints; later links
+                // only append their destination point (the shared vertex).
+                runPoints = [points[i - 1], points[i]];
+                runColor = color;
+            } else if (color === runColor) {
+                runPoints.push(points[i]);
+            } else {
+                segments.push(this._makeTrackPolyline(runPoints, runColor, droneColor));
+                runPoints = [points[i - 1], points[i]];
+                runColor = color;
+            }
+        }
+        if (runPoints !== null) {
+            segments.push(this._makeTrackPolyline(runPoints, runColor, droneColor));
+        }
+        return segments;
+    },
+
+    /**
+     * Color for a single track position: its height band, or white when the
+     * position has no usable height data (neither height nor altitude).
+     */
+    _positionTrackColor(pos) {
+        const height = pos.height != null ? pos.height : pos.altitude;
+        if (height == null || Number.isNaN(height)) return '#ffffff';
+        return this.getHeightColor(height);
+    },
+
+    /**
+     * Create a single track polyline segment tagged with the colors needed to
+     * switch between color modes later.
+     */
+    _makeTrackPolyline(points, heightColor, droneColor) {
+        const seg = L.polyline(points, {
+            color: heightColor,
+            weight: 3,
+            opacity: 0.6,
+            lineCap: 'round',
+            lineJoin: 'round'
+        });
+        seg._droneColor = droneColor;
+        seg._heightColor = heightColor;
+        return seg;
     },
 
     /**
@@ -888,16 +1061,27 @@ const MapController = {
     },
 
     /**
-     * Create a drone icon showing live position, with optional geozone alert badge
+     * Create a drone icon showing live position, with optional geozone alert badge.
+     * In height color mode the marker border is the height-band color while the
+     * small inner dot keeps the per-drone identity color.
+     * @param {string} color - Per-drone color.
+     * @param {boolean} hasAlert
+     * @param {number|null} heightMeters - Height (meters) used for the band color in height mode.
      */
-    createDroneIcon(color, hasAlert) {
+    createDroneIcon(color, hasAlert, heightMeters = null) {
         const badge = hasAlert
             ? '<i class="fas fa-exclamation-triangle geozone-badge" style="color: #e74c3c;"></i>'
             : '';
+        const outer = this.colorMode === 'height'
+            ? this.getHeightColor(heightMeters)
+            : color;
+        const innerDot = this.colorMode === 'height'
+            ? `<span class="drone-id-dot" style="background: ${color};"></span>`
+            : '';
         return L.divIcon({
             className: 'custom-div-icon',
-            html: `<div class="drone-position-icon" style="border-color: ${color}; color: ${color};">
-                     <i class="fas fa-plane"></i>${badge}
+            html: `<div class="drone-position-icon" style="border-color: ${outer}; color: ${outer};">
+                     <i class="fas fa-plane"></i>${innerDot}${badge}
                    </div>`,
             iconSize: [28, 28],
             iconAnchor: [14, 14],
@@ -935,14 +1119,17 @@ const MapController = {
             this.tracks[trackKey].markers = [];
         }
 
-        // Single-position session: draw a drone icon directly
+        // Single-position session: draw a height-colored drone icon directly
         if (positions.length === 1) {
             const pos = positions[0];
             const hasAlert = this.alertUasIds.has(uasId);
             const marker = L.marker([pos.latitude, pos.longitude], {
-                icon: this.createDroneIcon(color, hasAlert),
+                icon: this.createDroneIcon(color, hasAlert, pos.height != null ? pos.height : pos.altitude),
                 opacity: 0.9
             }).addTo(this.layers.tracks);
+            marker._markerType = 'drone';
+            marker._uasId = uasId;
+            marker._height = pos.height != null ? pos.height : pos.altitude;
             marker.bindPopup(this._createSessionPointPopup(uasId, sessionId, pos, 'Position', color, collectorNames));
             this.tracks[trackKey].markers.push(marker);
             return;
@@ -960,17 +1147,20 @@ const MapController = {
         startMarker.bindPopup(this._createSessionPointPopup(uasId, sessionId, startPos, 'Start', color, collectorNames));
         this.tracks[trackKey].markers.push(startMarker);
 
-        // Add end marker — use a drone icon if the position is recent
+        // Add end marker — use a height/in-flight drone icon if the position is recent.
+        // The in-flight marker follows the height band; the stop (end) icon always keeps the drone color.
         const isActive = this._isPositionActive(endPos.timestamp);
         const hasAlert = isActive && this.alertUasIds.has(uasId);
         const endIcon = isActive
-            ? this.createDroneIcon(color, hasAlert)
+            ? this.createDroneIcon(color, hasAlert, endPos.height != null ? endPos.height : endPos.altitude)
             : this.createSessionEndIcon(color);
         const endMarker = L.marker([endPos.latitude, endPos.longitude], {
             icon: endIcon,
             opacity: 0.9
         }).addTo(this.layers.tracks);
-
+        endMarker._markerType = isActive ? 'drone' : 'stop';
+        endMarker._uasId = uasId;
+        endMarker._height = endPos.height != null ? endPos.height : endPos.altitude;
         endMarker.bindPopup(this._createSessionPointPopup(uasId, sessionId, endPos, 'End', color, collectorNames));
         this.tracks[trackKey].markers.push(endMarker);
     },
@@ -1238,17 +1428,24 @@ const MapController = {
             // Create progress (past) polyline
             this.replayState.progressPolylines[key] = null;
 
-            // Create moving marker
+            // Create moving marker — follows height band when height mode is active
             const [uasId] = key.split(':');
             const color = this.getDroneColor(uasId);
+            const pos0 = this.sessionPositions[key][0];
+            const markerColor = this.colorMode === 'height'
+                ? this.getHeightColor(pos0.height != null ? pos0.height : pos0.altitude)
+                : color;
             const icon = L.divIcon({
                 className: 'replay-marker',
-                html: `<div style="width:14px;height:14px;background:${color};border:2px solid #fff;border-radius:50%;box-shadow:0 0 6px ${color};"></div>`,
+                html: `<div style="width:14px;height:14px;background:${markerColor};border:2px solid #fff;border-radius:50%;box-shadow:0 0 6px ${markerColor};"></div>`,
                 iconSize: [14, 14],
                 iconAnchor: [7, 7],
             });
             const pos = this.sessionPositions[key];
             const marker = L.marker([pos[0].latitude, pos[0].longitude], { icon });
+            marker._markerType = 'replay-drone';
+            marker._uasId = uasId;
+            marker._height = pos0.height != null ? pos0.height : pos0.altitude;
             marker.addTo(this.layers.tracks);
             this.replayState.replayMarkers[key] = marker;
         }
@@ -1443,6 +1640,9 @@ const MapController = {
                     latitude: positions[i].latitude + (positions[i + 1].latitude - positions[i].latitude) * frac,
                     longitude: positions[i].longitude + (positions[i + 1].longitude - positions[i].longitude) * frac,
                     altitude: positions[i].altitude + (positions[i + 1].altitude - positions[i].altitude) * frac,
+                    height: (positions[i].height != null && positions[i + 1].height != null)
+                        ? positions[i].height + (positions[i + 1].height - positions[i].height) * frac
+                        : null,
                     timestamp: new Date(target).toISOString(),
                 };
             }
@@ -1479,15 +1679,27 @@ const MapController = {
         }
 
         let pp = this.replayState.progressPolylines[key];
+        const [uasId] = key.split(':');
         if (pp) {
             pp.setLatLngs(pastPoints);
         } else {
-            const [uasId] = key.split(':');
             const color = this.getDroneColor(uasId);
             pp = L.polyline(pastPoints, {
                 color, weight: 4, opacity: 0.95,
             }).addTo(this.layers.tracks);
             this.replayState.progressPolylines[key] = pp;
+        }
+
+        // The progress line follows the current height band in height mode.
+        const cur = this._interpolatePosition(positions, target);
+        let color;
+        if (this.colorMode === 'height') {
+            color = cur != null ? this._positionTrackColor(cur) : '#ffffff';
+        } else {
+            color = this.getDroneColor(uasId);
+        }
+        if (color !== pp.options.color) {
+            pp.setStyle({ color });
         }
     },
 };
