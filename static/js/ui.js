@@ -1538,6 +1538,22 @@ const UIController = {
             // Update drone timestamps for all merged drones so next poll is accurate
             this._updateDroneTimestamps(newDrones);
 
+            // In live mode the server returns the authoritative set of active
+            // drones (within position_stale_minutes). Prune merged entries it
+            // no longer reports so expired drones leave the list and the map
+            // without needing a page reload or a mode switch.
+            if (this._dataMode === 'live') {
+                const liveKeys = new Set(
+                    newDrones.map(d => `${d.uas_id}:${d.computed_session_id || 'unknown'}`)
+                );
+                for (const key of Object.keys(this.droneMap)) {
+                    if (!liveKeys.has(key)) {
+                        delete this.droneMap[key];
+                        delete this.droneTimestamps[key];
+                    }
+                }
+            }
+
             // Get all current drones from the merged map
             let drones = Object.values(this.droneMap);
 

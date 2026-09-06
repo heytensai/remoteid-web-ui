@@ -536,6 +536,7 @@ describe('UIController', () => {
       UIController._updateReplayButtonState = jest.fn();
       MapController._updateCollectors = jest.fn().mockResolvedValue();
       MapController.config = { center_lat: 1 };
+      MapController.loadTracksBatch = jest.fn().mockResolvedValue([]);
     });
 
     afterEach(() => {
@@ -586,6 +587,77 @@ describe('UIController', () => {
       expect(MapController.removeTrack).not.toHaveBeenCalledWith('uas-123', 'uas-123:session_past');
       expect(UIController.loadedTracks.has('uas-123:session_past')).toBe(true);
       expect(UIController.visibleSessions.has('uas-123:session_past')).toBe(true);
+    });
+
+    test('removes expired live sessions during a live refresh', async () => {
+      UIController.droneMap = {
+        'uas-456:session_expired': {
+          uas_id: 'uas-456',
+          computed_session_id: 'session_expired',
+          timestamp: '2024-01-01T00:00:00Z',
+          latitude: 3,
+          longitude: 4,
+          altitude: 10,
+        },
+      };
+      UIController.droneTimestamps = {
+        'uas-456:session_expired': '2024-01-01T00:00:00Z',
+      };
+      UIController.loadedTracks = new Map([
+        ['uas-456:session_expired', '2024-01-01T00:00:00Z'],
+      ]);
+      UIController.visibleSessions = new Set(['uas-456:session_expired']);
+
+      // Server no longer reports the dormant drone as live
+      API.getRefresh.mockResolvedValue({
+        drones: [],
+        sources: [],
+        alerts: { active: [] },
+        stats: {},
+      });
+
+      await UIController.refreshData();
+
+      expect(UIController.droneMap).toEqual({});
+      expect(UIController.droneTimestamps).toEqual({});
+      expect(MapController.removeTrack).toHaveBeenCalledWith(
+        'uas-456',
+        'uas-456:session_expired'
+      );
+      expect(UIController.loadedTracks.has('uas-456:session_expired')).toBe(false);
+      expect(UIController.visibleSessions.has('uas-456:session_expired')).toBe(false);
+    });
+
+    test('prunes orphaned unknown-session entries when the server assigns a real session id', async () => {
+      UIController.droneMap = {
+        'uas-789:unknown': {
+          uas_id: 'uas-789',
+          computed_session_id: null,
+          timestamp: '2024-01-01T00:00:00Z',
+          latitude: 5,
+          longitude: 6,
+          altitude: 20,
+        },
+      };
+      const resumableDrone = {
+        uas_id: 'uas-789',
+        computed_session_id: 'session_9',
+        timestamp: '2024-01-01T01:30:00Z',
+        latitude: 5,
+        longitude: 6,
+        altitude: 20,
+      };
+      API.getRefresh.mockResolvedValue({
+        drones: [resumableDrone],
+        sources: [],
+        alerts: { active: [] },
+        stats: {},
+      });
+
+      await UIController.refreshData();
+
+      expect(UIController.droneMap['uas-789:session_9']).toBeDefined();
+      expect(UIController.droneMap['uas-789:unknown']).toBeUndefined();
     });
   });
 });
