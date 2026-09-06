@@ -67,6 +67,11 @@ const MapController = {
             this.mPerDegLat = response.m_per_deg_lat || 111320;
         } catch (e) {
             console.error('Failed to load config:', e);
+            if (typeof UIController !== 'undefined' && UIController.showToast) {
+                UIController.showToast('Could not load map configuration', 'warning', {
+                    dedupeKey: 'map-config',
+                });
+            }
             this.config = {};
             this.droneAliases = {};
             this.waypoints = [];
@@ -767,6 +772,11 @@ const MapController = {
             return false;
         } catch (e) {
             console.error(`Failed to get track for ${uasId}:${sessionId}:`, e);
+            if (typeof UIController !== 'undefined' && UIController.showToast) {
+                UIController.showToast('Could not load flight track', 'warning', {
+                    dedupeKey: 'track-single',
+                });
+            }
             return false;
         }
     },
@@ -805,6 +815,11 @@ const MapController = {
             return loaded;
         } catch (e) {
             console.error('Failed to load track batch:', e);
+            if (typeof UIController !== 'undefined' && UIController.showToast) {
+                UIController.showToast('Could not load flight tracks', 'warning', {
+                    dedupeKey: 'track-batch',
+                });
+            }
             return [];
         }
     },

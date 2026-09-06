@@ -824,6 +824,9 @@ const UIController = {
 
         } catch (e) {
             console.error('Failed to load config:', e);
+            this.showToast('Could not load configuration', 'warning', {
+                dedupeKey: 'config-load',
+            });
         }
     },
 
@@ -1926,6 +1929,9 @@ const UIController = {
             this.uasExtraTotal[uasId] = data.total;
         } catch (e) {
             console.error('Failed to load more sessions for', uasId, e);
+            this.showToast('Could not load more sessions', 'warning', {
+                dedupeKey: 'load-more',
+            });
         } finally {
             this.uasExtraLoading[uasId] = false;
             this._updateReplayButtonState();
@@ -1967,6 +1973,13 @@ const UIController = {
         const allPending = [...pending, ...refreshPending];
         if (allPending.length > 0) {
             MapController.loadTracksBatch(allPending).then(loaded => {
+                if (loaded.length > 0) {
+                    this.showToast(`Loaded ${loaded.length} track${loaded.length > 1 ? 's' : ''}`, 'success', {
+                        duration: 2500,
+                        icon: 'fa-route',
+                        dedupeKey: 'tracks-loaded',
+                    });
+                }
                 const loadedSet = new Set(loaded);
                 allPending.forEach(s => {
                     const key = `${s.uas_id}:${s.session_id}`;
@@ -2115,6 +2128,10 @@ const UIController = {
                     this.selectedDrones.add(sessionKey);
                     list.querySelectorAll('.drone-item').forEach(i => i.classList.remove('active'));
                     item.classList.add('active');
+                    this.showToast(`Drone ${this.getDroneName(uasId)} selected`, 'info', {
+                        duration: 2500,
+                        icon: 'fa-satellite-dish',
+                    });
                 }
 
                 MapController.highlightDrone(uasId);
@@ -2151,7 +2168,17 @@ const UIController = {
                     const droneData = this.droneMap[sessionKey];
                     this.loadedTracks.set(sessionKey, droneData ? droneData.timestamp : Infinity);
                     MapController.loadTrackSession(uasId, sessionId, this.currentStartTime, this.currentEndTime)
-                        .then(success => { if (!success) this.loadedTracks.delete(sessionKey); this._updateReplayButtonState(); });
+                        .then(success => {
+                            if (success) {
+                                this.showToast(`Track loaded for ${this.getDroneName(uasId)}`, 'success', {
+                                    duration: 2500,
+                                    icon: 'fa-route',
+                                });
+                            } else {
+                                this.loadedTracks.delete(sessionKey);
+                            }
+                            this._updateReplayButtonState();
+                        });
                 }
 
                 if (window.innerWidth < 768) {
@@ -2359,6 +2386,9 @@ const UIController = {
             }
         } catch (e) {
             console.error('Failed to load drone detail:', e);
+            this.showToast('Could not load drone details', 'warning', {
+                dedupeKey: 'drone-detail',
+            });
             this._clearDetailStats();
         }
     },
@@ -2763,6 +2793,16 @@ const UIController = {
             dedupeKey = null,
             icon = null,
         } = opts;
+
+        // Mirror every toast to the browser console so it can be reviewed historically.
+        const logMsg = `[Toast ${type}] ${message}`;
+        switch (type) {
+            case 'error': console.error(logMsg); break;
+            case 'warning': console.warn(logMsg); break;
+            case 'info': console.info(logMsg); break;
+            case 'success': console.log(logMsg); break;
+            default: console.log(logMsg); break;
+        }
 
         // Deduplicate: if a toast with the same key is already visible, skip
         if (dedupeKey && container.querySelector(`[data-dedupe="${dedupeKey}"]`)) {
