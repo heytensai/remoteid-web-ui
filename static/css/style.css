@@ -1335,6 +1335,11 @@ body.dark-mode .replay-time-display {
     font-size: 12px;
 }
 
+/* Geozone markers render as squares (distinguish from drone circles, collector triangles, operator octagons) */
+.waypoint-icon.geozone {
+    border-radius: 0;
+}
+
 /* Session Start Icon */
 .session-start-icon {
     display: flex;
@@ -1367,37 +1372,64 @@ body.dark-mode .replay-time-display {
     font-size: 10px;
 }
 
-/* Session Operator Icon (smaller, per-session) */
+/* Session Operator Icon (octagon to distinguish from other icon shapes) */
 .session-operator-icon {
     display: flex;
     align-items: center;
     justify-content: center;
+    position: relative;
     width: 20px;
     height: 20px;
-    background: white;
-    border: 2px solid;
-    border-radius: 50%;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.25);
+    background: currentColor;
+    clip-path: polygon(30% 0, 70% 0, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0 70%, 0 30%);
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.25));
     font-size: 9px;
 }
 
-.session-operator-icon.same-location {
-    background: rgba(40, 167, 69, 0.1);
-    border-style: dashed;
+/* White inner face forms the octagon outline (rim) */
+.session-operator-icon::before {
+    content: '';
+    position: absolute;
+    inset: 2px;
+    background: white;
+    clip-path: polygon(30% 0, 70% 0, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0 70%, 0 30%);
 }
 
-/* Collector Position Icon (FA icon in colored circle) */
+.session-operator-icon i {
+    position: relative;
+    z-index: 2;
+}
+
+.session-operator-icon.same-location::before {
+    background: rgba(40, 167, 69, 0.15);
+}
+
+/* Collector Position Icon (upward triangle to distinguish from drones/geozones/operators) */
 .collector-position-icon {
     display: flex;
     align-items: center;
     justify-content: center;
+    position: relative;
     width: 28px;
     height: 28px;
+    background: currentColor;
+    clip-path: polygon(50% 0, 0 100%, 100% 100%);
+    filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.3));
+    font-size: 12px;
+}
+
+/* White inner face forms the triangle outline (rim) */
+.collector-position-icon::before {
+    content: '';
+    position: absolute;
+    inset: 2px;
     background: white;
-    border: 2px solid;
-    border-radius: 50%;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
-    font-size: 13px;
+    clip-path: polygon(50% 0, 0 100%, 100% 100%);
+}
+
+.collector-position-icon i {
+    position: relative;
+    z-index: 2;
 }
 
 .collector-position-icon.stale {

@@ -179,9 +179,10 @@ const MapController = {
     createWaypointIcon(wp) {
         const color = wp.color || '#007bff';
         const icon = wp.icon || 'fa-map-pin';
+        const isGeozone = wp.type === 'circle' || wp.type === 'rectangle';
         return L.divIcon({
             className: 'custom-div-icon',
-            html: `<div class="waypoint-icon" style="border: 2px solid ${color}; color: ${color};">
+            html: `<div class="waypoint-icon${isGeozone ? ' geozone' : ''}" style="border: 2px solid ${color}; color: ${color};">
                      <i class="fas ${icon}"></i>
                    </div>`,
             iconSize: [28, 28],
