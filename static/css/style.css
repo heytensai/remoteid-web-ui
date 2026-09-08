@@ -1258,15 +1258,6 @@ body.dark-mode .height-legend {
     color: #2c3e50;
 }
 
-.remote-type-badge {
-    font-size: 0.65rem;
-    color: #6c757d;
-    background: #e9ecef;
-    padding: 1px 6px;
-    border-radius: 8px;
-    white-space: nowrap;
-}
-
 body.dark-mode .remote-bar {
     color: #a0a0c0;
 }
@@ -1293,11 +1284,6 @@ body.dark-mode .remote-row {
 
 body.dark-mode .remote-name {
     color: #e0e0e0;
-}
-
-body.dark-mode .remote-type-badge {
-    background: #3a3a4e;
-    color: #999;
 }
 
 /* Leaflet Popup Customization */

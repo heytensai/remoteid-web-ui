@@ -1492,14 +1492,10 @@ const UIController = {
             const iconHtml = isActive
                 ? '<i class="fas fa-check-circle remote-icon active" title="Active"></i>'
                 : '<i class="fas fa-clock remote-icon stale" title="No recent activity"></i>';
-            const badgeIcon = r.type === 'collector'
-                ? '<i class="fas fa-satellite-dish"></i> Collector'
-                : '<i class="fas fa-cloud-upload-alt"></i> API';
             html += `<div class="remote-row">
                 <div class="remote-row-left">
                     ${iconHtml}
                     <span class="remote-name">${esc(r.name)}</span>
-                    <span class="remote-type-badge">${badgeIcon}</span>
                 </div>
                 <div class="remote-row-right">
                     <div class="remote-time"><span class="remote-time-label">Data:</span> ${esc(fmt(r.last_data))}</div>
