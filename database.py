@@ -21,6 +21,7 @@ SCHEMA_VERSION = 9
 
 class WebDatabase:
     """Manages PostgreSQL database for web interface"""
+    # pylint: disable=too-many-public-methods
 
     def __init__(self, database_url: str):
         """Initialize the web database, creating schema if needed."""
@@ -1295,6 +1296,98 @@ class WebDatabase:
             )
             sessions = [self._sanitize_record(dict(row)) for row in cur.fetchall()]
             return sessions, total
+        finally:
+            self._put_conn(conn)
+
+    def get_session_by_session_id(self, session_id: str) -> Tuple[List[Dict], int]:
+        """Find the session (any UAS) with the given computed_session_id.
+
+        Returns the list of matching latest-position rows (normally one) plus
+        the count. The comparison is case-insensitive.
+        """
+        conn = self._get_conn()
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            cur.execute(
+                """
+                SELECT
+                    uas_id,
+                    NULLIF(computed_session_id, '') as computed_session_id,
+                    max_ts as timestamp,
+                    min_ts as session_start,
+                    latitude, longitude, altitude, height, height_type, max_height,
+                    operator_id, operator_latitude, operator_longitude, source,
+                    collector_latitude, collector_longitude
+                FROM latest_positions
+                WHERE LOWER(COALESCE(computed_session_id, '')) = LOWER(%s)
+                ORDER BY max_ts DESC
+                """,
+                (session_id,),
+            )
+            rows = [self._sanitize_record(dict(row)) for row in cur.fetchall()]
+            return rows, len(rows)
+        finally:
+            self._put_conn(conn)
+
+    def search_uas_sessions(
+        self, uas_id: str, since: datetime
+    ) -> Tuple[List[Dict], int, Optional[Dict]]:
+        """Case-insensitive UAS search.
+
+        Returns ``(recent_sessions, total, most_recent)`` where
+        ``recent_sessions`` are the sessions with a position at or after
+        ``since`` (newest first), ``total`` is the all-time session count for
+        the UAS (for load-more pagination), and ``most_recent`` is the single
+        newest session overall even if it predates ``since`` (needed so the
+        client can always surface the latest flight).
+        """
+        conn = self._get_conn()
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            cur.execute(
+                "SELECT COUNT(*) FROM latest_positions WHERE LOWER(uas_id) = LOWER(%s)",
+                (uas_id,),
+            )
+            total = cur.fetchone()[0]
+
+            cur.execute(
+                """
+                SELECT
+                    uas_id,
+                    NULLIF(computed_session_id, '') as computed_session_id,
+                    max_ts as timestamp,
+                    min_ts as session_start,
+                    latitude, longitude, altitude, height, height_type, max_height,
+                    operator_id, operator_latitude, operator_longitude, source,
+                    collector_latitude, collector_longitude
+                FROM latest_positions
+                WHERE LOWER(uas_id) = LOWER(%s) AND max_ts >= %s
+                ORDER BY max_ts DESC
+                """,
+                (uas_id, since),
+            )
+            recent = [self._sanitize_record(dict(row)) for row in cur.fetchall()]
+
+            cur.execute(
+                """
+                SELECT
+                    uas_id,
+                    NULLIF(computed_session_id, '') as computed_session_id,
+                    max_ts as timestamp,
+                    min_ts as session_start,
+                    latitude, longitude, altitude, height, height_type, max_height,
+                    operator_id, operator_latitude, operator_longitude, source,
+                    collector_latitude, collector_longitude
+                FROM latest_positions
+                WHERE LOWER(uas_id) = LOWER(%s)
+                ORDER BY max_ts DESC
+                LIMIT 1
+                """,
+                (uas_id,),
+            )
+            row = cur.fetchone()
+            most_recent = self._sanitize_record(dict(row)) if row else None
+            return recent, total, most_recent
         finally:
             self._put_conn(conn)
 

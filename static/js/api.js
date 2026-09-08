@@ -163,6 +163,20 @@ const API = {
     },
 
     /**
+     * Search for flights by UAS ID or session ID (the server auto-detects
+     * which kind of ID was provided).
+     * @param {string} q - UAS ID or session ID.
+     * @param {number} [days] - Recency window in days for UAS searches (default 14).
+     * @returns {Promise<Object>} {type: 'uas'|'session', q, sessions, total, most_recent?}
+     */
+    async search(q, days = 14) {
+        const params = new URLSearchParams();
+        params.append('q', q);
+        params.append('days', String(days));
+        return this._get(`/api/search?${params}`);
+    },
+
+    /**
      * Batch fetch tracks for multiple sessions
      * @param {Array<{uas_id: string, session_id: string}>} sessions
      * @returns {Promise<Object>} Map of "uas_id:session_id" -> {uas_id, session_id, positions}

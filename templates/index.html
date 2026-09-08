@@ -45,6 +45,23 @@
                     <button id="refreshBtn" class="refresh-btn" title="Refresh">
                         <i class="fas fa-sync-alt"></i>
                     </button>
+                    <div class="search-dropdown">
+                        <button id="searchBtn" class="search-btn" title="Search flights by UAS ID or session ID" aria-label="Search flights">
+                            <i class="fas fa-magnifying-glass"></i>
+                        </button>
+                        <div id="searchPanel" class="dropdown-menu search-panel" role="search">
+                            <div class="dropdown-header">Search Flights</div>
+                            <div class="search-input-row">
+                                <input type="text" id="searchInput" class="search-input" placeholder="UAS ID or session ID" autocomplete="off" spellcheck="false">
+                                <button id="searchSubmitBtn" class="search-submit-btn" title="Search">
+                                    <i class="fas fa-magnifying-glass"></i>
+                                </button>
+                            </div>
+                            <div class="search-hint">
+                                Enter a UAS ID, or a session ID like <code>session_1a2b3c4d5e6f</code>.
+                            </div>
+                        </div>
+                    </div>
                     <button id="liveBtn" class="live-btn active" title="Live view — show active flights" aria-pressed="true">
                         <i class="fas fa-satellite-dish"></i> Live
                     </button>
@@ -137,6 +154,13 @@
                         </button>
                         <button id="closeSidebar" class="close-btn">
                             <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div id="searchFocusBar" class="search-focus-bar" style="display: none;">
+                        <span class="search-focus-label"><i class="fas fa-magnifying-glass"></i> Showing:</span>
+                        <span id="searchFocusName" class="search-focus-name"></span>
+                        <button id="searchFocusClear" class="search-focus-clear" title="Show all flights">
+                            <i class="fas fa-times"></i> Clear
                         </button>
                     </div>
                     <div id="droneList" class="drone-list">

@@ -228,6 +228,28 @@ describe('API', () => {
     });
   });
 
+  describe('search', () => {
+    test('fetches /api/search with q and days params', async () => {
+      const searchData = { type: 'uas', q: 'drone-001', uas_id: 'drone-001', sessions: [], total: 0 };
+      global.fetch = mockFetch(searchData);
+
+      const result = await API.search('drone-001', 14);
+      expect(result).toEqual(searchData);
+      const url = fetch.mock.calls[0][0];
+      expect(url).toContain('/api/search?');
+      expect(url).toContain('q=drone-001');
+      expect(url).toContain('days=14');
+    });
+
+    test('defaults days to 14', async () => {
+      global.fetch = mockFetch({ type: 'session', sessions: [], total: 0 });
+
+      await API.search('session_1a2b3c4d5e6f');
+      const url = fetch.mock.calls[0][0];
+      expect(url).toContain('days=14');
+    });
+  });
+
   describe('_post', () => {
     test('includes CSRF token header', async () => {
       API.csrfToken = 'csrf-abc';

@@ -7,6 +7,7 @@ import hashlib
 import io
 import logging
 import os
+import re
 import secrets
 import threading
 import time
@@ -682,6 +683,63 @@ def get_uas_sessions(uas_id):
         })
     except (ValueError, TypeError, psycopg2.Error):
         logger.exception("Error getting UAS sessions")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+# Session IDs are auto-generated as ``session_`` + 12 hex chars. They are
+# distinct enough from UAS IDs (Remote ID serials/mac addresses) that the
+# search endpoint can tell the two apart from the query itself.
+_SEARCH_SESSION_RE = re.compile(r"^session_[0-9a-f]{12}$", re.IGNORECASE)
+
+
+@app.route("/api/search")
+@limiter.limit("30/minute")
+def search():
+    """Search flights by UAS ID or session ID (auto-detected).
+
+    Query params:
+        q: the UAS ID or session ID to look up
+        days: recency window in days for UAS searches (default 14)
+
+    A value matching ``session_[0-9a-f]{12}`` is treated as a session ID;
+    anything else is treated as a UAS ID. UAS responses include
+    ``sessions`` within the window, the all-time ``total`` (for load-more),
+    and ``most_recent`` so the client can always show the latest flight even
+    when it predates the window.
+    """
+    try:
+        q = (request.args.get("q") or "").strip()
+        if not q:
+            return jsonify({"error": "Missing q parameter"}), 400
+
+        days = min(int(request.args.get("days", 14)), 365)
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+
+        if _SEARCH_SESSION_RE.match(q):
+            sessions, total = DATABASE.get_session_by_session_id(q)
+            return jsonify({
+                "type": "session",
+                "q": q,
+                "sessions": sessions,
+                "total": total,
+            })
+
+        recent, total, most_recent = DATABASE.search_uas_sessions(q, since)
+        found_uas = (
+            recent[0]["uas_id"] if recent
+            else most_recent["uas_id"] if most_recent
+            else q
+        )
+        return jsonify({
+            "type": "uas",
+            "q": q,
+            "uas_id": found_uas,
+            "sessions": recent,
+            "total": total,
+            "most_recent": most_recent,
+        })
+    except (ValueError, TypeError, psycopg2.Error):
+        logger.exception("Error in search endpoint")
         return jsonify({"error": "Internal server error"}), 500
 
 

@@ -731,6 +731,93 @@ class TestAlertExport:
         assert "drone-002" not in body
 
 
+class TestApiSearch:
+    def test_search_missing_q(self, client):
+        resp = client.get("/api/search")
+        assert resp.status_code == 400
+        assert "error" in resp.get_json()
+
+    def test_search_unknown_uas(self, client, db):
+        resp = client.get("/api/search?q=does-not-exist")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["type"] == "uas"
+        assert data["sessions"] == []
+        assert data["total"] == 0
+        assert data["most_recent"] is None
+
+    def test_search_by_uas(self, client, db):
+        resp = client.get("/api/search?q=drone-001")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["type"] == "uas"
+        assert data["q"] == "drone-001"
+        assert data["uas_id"] == "drone-001"
+        assert len(data["sessions"]) >= 1
+        assert data["total"] >= 1
+        assert data["sessions"][0]["uas_id"] == "drone-001"
+        assert data["most_recent"]["uas_id"] == "drone-001"
+
+    def test_search_by_uas_windows_out_older_sessions(self, client, db):
+        import app as _app_module
+        db = _app_module.DATABASE
+        old = datetime.now(timezone.utc) - timedelta(days=30)
+        inserted, errors, _ = db.insert_remoteid_records("test-source", [{
+            "timestamp": old.isoformat(),
+            "uas_id": "drone-004",
+            "latitude": 37.7,
+            "longitude": -122.4,
+            "altitude": 100.0,
+            "mac_address": "aa:bb:cc:dd:ee:04",
+        }])
+        assert inserted == 1
+        assert not errors
+
+        resp = client.get("/api/search?q=drone-004")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["type"] == "uas"
+        # The only flight is older than the 14-day window, so the window list
+        # is empty but the most recent flight is still surfaced.
+        assert data["sessions"] == []
+        assert data["most_recent"]["uas_id"] == "drone-004"
+
+    def test_search_by_uas_is_case_insensitive(self, client, db):
+        resp = client.get("/api/search?q=DRONE-001")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["type"] == "uas"
+        assert data["uas_id"] == "drone-001"
+
+    def test_search_by_session(self, client, db):
+        resp = client.get("/api/drones")
+        drones = resp.get_json()["drones"]
+        assert len(drones) >= 1
+        session_id = drones[0]["computed_session_id"]
+        uas_id = drones[0]["uas_id"]
+
+        resp = client.get(f"/api/search?q={session_id}")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["type"] == "session"
+        assert len(data["sessions"]) == 1
+        assert data["sessions"][0]["computed_session_id"] == session_id
+        assert data["sessions"][0]["uas_id"] == uas_id
+
+    def test_search_by_session_is_case_insensitive(self, client, db):
+        resp = client.get("/api/drones")
+        drones = resp.get_json()["drones"]
+        assert len(drones) >= 1
+        session_id = drones[0]["computed_session_id"]
+
+        resp = client.get(f"/api/search?q={session_id.upper()}")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["type"] == "session"
+        assert len(data["sessions"]) == 1
+        assert data["sessions"][0]["computed_session_id"] == session_id
+
+
 class TestApiDronesIncremental:
     def test_incremental_drones_all(self, client, db):
         """Without known_timestamps, returns all drones."""

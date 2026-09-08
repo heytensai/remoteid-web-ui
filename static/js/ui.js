@@ -31,6 +31,7 @@ const UIController = {
     expandedGroups: new Set(),
     viewMode: 'date', // 'date' or 'uas'
     _dataMode: 'live', // 'live' or 'archive'
+    _searchTarget: null, // { type: 'uas'|'session', q, days, uasId, sessionId? } — active search focus
     remotes: [],
     remoteDetailOpen: false,
     _suppressTimeChange: false,
@@ -211,6 +212,9 @@ const UIController = {
 
         await this.refreshData(false);
         this._initialized = true;
+        // Deep-link permalinks (?uas= / ?session=): focus the search result
+        // after the initial load so the search focus is established cleanly.
+        await this._applyPermalinkSearch();
         this._applyPermissionGating();
         this._startPolling();
         // Register service worker (fire-and-forget)
@@ -337,6 +341,13 @@ const UIController = {
             detailOperatorId: document.getElementById('detailOperatorId'),
             detailOperatorPos: document.getElementById('detailOperatorPos'),
             refreshBtn: document.getElementById('refreshBtn'),
+            searchBtn: document.getElementById('searchBtn'),
+            searchPanel: document.getElementById('searchPanel'),
+            searchInput: document.getElementById('searchInput'),
+            searchSubmitBtn: document.getElementById('searchSubmitBtn'),
+            searchFocusBar: document.getElementById('searchFocusBar'),
+            searchFocusName: document.getElementById('searchFocusName'),
+            searchFocusClear: document.getElementById('searchFocusClear'),
             startTimeInput: document.getElementById('startTime'),
             endTimeInput: document.getElementById('endTime'),
             lastUpdateSpan: document.getElementById('lastUpdate'),
@@ -430,6 +441,45 @@ const UIController = {
         // Refresh button
         this.elements.refreshBtn.addEventListener('click', () => {
             this.refreshData();
+        });
+
+        // Search panel toggle
+        this.elements.searchBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (this.elements.searchPanel.classList.contains('open')) {
+                this._closeSearchPanel();
+            } else {
+                this._openSearchPanel();
+            }
+        });
+
+        this.elements.searchSubmitBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._runSearch();
+        });
+
+        this.elements.searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                this._runSearch();
+            } else if (e.key === 'Escape') {
+                this._closeSearchPanel();
+            }
+        });
+
+        // Close search panel on outside click
+        document.addEventListener('click', (e) => {
+            if (!this.elements.searchPanel) return;
+            if (!this.elements.searchPanel.contains(e.target) &&
+                e.target !== this.elements.searchBtn &&
+                !this.elements.searchBtn.contains(e.target)) {
+                this._closeSearchPanel();
+            }
+        });
+
+        // Clear search focus (sidebar chip)
+        this.elements.searchFocusClear.addEventListener('click', () => {
+            this._switchToLive();
         });
 
         // Live button (header + mobile settings)
@@ -1565,6 +1615,9 @@ const UIController = {
                 return true;
             });
 
+            // Filter to the active search focus (UAS or single session)
+            drones = this._applySearchFilter(drones);
+
             // In live mode, auto-make new sessions visible so tracks load on the map
             if (this._dataMode === 'live') {
                 for (const drone of drones) {
@@ -1691,9 +1744,14 @@ const UIController = {
         this._droneListCacheKey = cacheKey;
 
         if (drones.length === 0) {
-            const msg = this._dataMode === 'live'
-                ? 'No active flights'
-                : 'No flights detected in time window';
+            let msg;
+            if (this._searchTarget) {
+                msg = `No flights found for ${this._searchTarget.q}`;
+            } else {
+                msg = this._dataMode === 'live'
+                    ? 'No active flights'
+                    : 'No flights detected in time window';
+            }
             list.innerHTML = `
                 <div class="empty-state">
                     <i class="fas fa-satellite-dish"></i>
@@ -2009,12 +2067,13 @@ const UIController = {
 
         // Re-render the UAS view
         const allDrones = Object.values(this.droneMap);
-        const filtered = allDrones.filter(d => {
+        let filtered = allDrones.filter(d => {
             const isKnown = !!this.droneAliases[d.uas_id];
             if (isKnown && !this.showKnownDrones) return false;
             if (!isKnown && !this.showUnknownDrones) return false;
             return true;
         });
+        filtered = this._applySearchFilter(filtered);
         this._droneListCacheKey = null;
         this._renderUASView(filtered);
     },
@@ -2270,6 +2329,7 @@ const UIController = {
      * Switch to Live mode — show only active flights based on position staleness.
      */
     _switchToLive() {
+        this._clearSearchFocus();
         if (this._dataMode === 'live') {
             this._switchToArchive();
             return;
@@ -2318,8 +2378,10 @@ const UIController = {
     /**
      * Switch to Archive mode — show flights within a time window.
      * @param {number} [presetHours] - If provided, set the time window to this range.
+     * @param {boolean} [skipPersist] - If true, don't persist the range as the default preset
+     *   (used by transient search focus, which manages its own window).
      */
-    _switchToArchive(presetHours) {
+    _switchToArchive(presetHours, skipPersist) {
         if (this._dataMode === 'archive' && !presetHours) return;
         this._dataMode = 'archive';
         this.droneTimestamps = {};
@@ -2343,7 +2405,9 @@ const UIController = {
         }
 
         if (presetHours) {
-            this._setStoredPreset(presetHours);
+            if (!skipPersist) {
+                this._setStoredPreset(presetHours);
+            }
             this._setTimeRange(presetHours);
         }
 
@@ -2367,13 +2431,281 @@ const UIController = {
 
         // Re-render with current drone data
         const drones = Object.values(this.droneMap);
-        const filtered = drones.filter(d => {
+        let filtered = drones.filter(d => {
             const isKnown = !!this.droneAliases[d.uas_id];
             if (isKnown && !this.showKnownDrones) return false;
             if (!isKnown && !this.showUnknownDrones) return false;
             return true;
         });
+        filtered = this._applySearchFilter(filtered);
         this._updateDroneList(filtered);
+    },
+
+    /**
+     * Open the search panel and focus the input.
+     */
+    _openSearchPanel() {
+        this.elements.searchPanel.classList.add('open');
+        setTimeout(() => this.elements.searchInput.focus(), 0);
+    },
+
+    /**
+     * Close the search panel.
+     */
+    _closeSearchPanel() {
+        this.elements.searchPanel.classList.remove('open');
+    },
+
+    /**
+     * Run a search from the header search panel.
+     */
+    async _runSearch() {
+        const q = this.elements.searchInput.value.trim();
+        if (!q) return;
+        this._closeSearchPanel();
+        await this._doSearch(q, 14);
+    },
+
+    /**
+     * Search for flights by UAS ID or session ID (the server auto-detects the
+     * kind of ID) and focus the sidebar list on the result. Also syncs a
+     * shareable permalink into the URL.
+     * @param {string} q - UAS ID or session ID.
+     * @param {number} [days] - Recency window in days for UAS searches.
+     * @returns {Promise<Object|null>} The search response, or null on failure.
+     */
+    async _doSearch(q, days = 14) {
+        this.elements.searchInput.value = q;
+        let result;
+        try {
+            result = await API.search(q, days);
+        } catch (e) {
+            console.error('Search failed:', e);
+            this.showToast('Search failed', 'error', { dedupeKey: 'search-failed' });
+            return null;
+        }
+
+        const session = result.sessions && result.sessions[0];
+        this._searchTarget = {
+            type: result.type,
+            q: result.q,
+            days,
+            uasId: result.type === 'uas'
+                ? result.uas_id
+                : (session ? session.uas_id : null),
+            sessionId: result.type === 'session'
+                ? (session ? session.computed_session_id : result.q)
+                : null,
+        };
+        this._writeSearchPermalink(result);
+        this._updateSearchFocusBar();
+
+        if (result.type === 'uas') {
+            await this._renderUASSearchResult(result);
+        } else {
+            await this._renderSessionSearchResult(result);
+        }
+        return result;
+    },
+
+    /**
+     * Replace the current URL query with a shareable permalink for the search.
+     */
+    _writeSearchPermalink(result) {
+        const url = new URL(window.location);
+        url.searchParams.delete('uas');
+        url.searchParams.delete('session');
+        if (result.type === 'session') {
+            const session = result.sessions && result.sessions[0];
+            url.searchParams.set('session', session ? session.computed_session_id : result.q);
+        } else {
+            url.searchParams.set('uas', result.uas_id || result.q);
+        }
+        window.history.replaceState({}, '', url);
+    },
+
+    /**
+     * Clear any active search focus (and the permalink) so the normal
+     * un-filtered list returns.
+     */
+    _clearSearchFocus() {
+        if (!this._searchTarget) return;
+        this._searchTarget = null;
+        if (this.elements.searchInput) {
+            this.elements.searchInput.value = '';
+        }
+        this._updateSearchFocusBar();
+        const url = new URL(window.location);
+        url.searchParams.delete('uas');
+        url.searchParams.delete('session');
+        window.history.replaceState({}, '', url);
+    },
+
+    /**
+     * Restrict a drone list to the active search focus. UAS searches filter to
+     * all flights of that UAS; session searches filter to that single session.
+     */
+    _applySearchFilter(drones) {
+        const target = this._searchTarget;
+        if (!target) return drones;
+        if (target.type === 'session') {
+            return drones.filter(d =>
+                d.uas_id === target.uasId &&
+                (d.computed_session_id || '') === target.sessionId
+            );
+        }
+        return drones.filter(d => d.uas_id === target.uasId);
+    },
+
+    /**
+     * All drones in the map filtered by the known/unknown visibility settings.
+     */
+    _filterKnownUnknownDrones() {
+        return Object.values(this.droneMap).filter(d => {
+            const isKnown = !!this.droneAliases[d.uas_id];
+            if (isKnown && !this.showKnownDrones) return false;
+            if (!isKnown && !this.showUnknownDrones) return false;
+            return true;
+        });
+    },
+
+    /**
+     * Show/hide the "Showing: <id>" search focus bar under the sidebar header.
+     */
+    _updateSearchFocusBar() {
+        const bar = this.elements.searchFocusBar;
+        if (!bar) return;
+        const target = this._searchTarget;
+        if (!target) {
+            bar.style.display = 'none';
+            return;
+        }
+        const uasId = target.uasId || target.q;
+        let displayName = this.getDroneName(uasId);
+        if (target.type === 'session') {
+            const short = String(target.sessionId || target.q).replace('session_', '');
+            displayName = `${displayName} · ${short}`;
+        }
+        const nameEl = this.elements.searchFocusName;
+        if (nameEl) {
+            nameEl.textContent = displayName;
+            nameEl.title = uasId;
+        }
+        bar.style.display = '';
+    },
+
+    /**
+     * Merge search-provided sessions into the drone map so they render even
+     * when they fall outside the current time window. Returns the merged list.
+     */
+    _mergeSearchSessions(result) {
+        const merged = [...(result.sessions || [])];
+        if (result.most_recent &&
+            !merged.some(s => (s.computed_session_id || '') === (result.most_recent.computed_session_id || ''))) {
+            merged.push(result.most_recent);
+        }
+        for (const d of merged) {
+            const key = `${d.uas_id}:${d.computed_session_id || 'unknown'}`;
+            this.droneMap[key] = d;
+        }
+        return merged;
+    },
+
+    /**
+     * Force the sidebar list into the by-UAS (grouped) view mode.
+     */
+    _forceUASView() {
+        if (this.viewMode === 'uas') return;
+        this.viewMode = 'uas';
+        document.querySelectorAll('.view-tab').forEach(tab => {
+            tab.classList.toggle('active', tab.dataset.view === 'uas');
+        });
+    },
+
+    /**
+     * Render the result of a UAS search: switch to archive mode with a 14-day
+     * window, show all of that UAS's sessions (plus its most recent flight even
+     * if it predates the window), and auto-load the newest track.
+     */
+    async _renderUASSearchResult(result) {
+        this._forceUASView();
+        // Transient 14-day window matching the server's search default; not
+        // persisted as the user's default preset.
+        this._switchToArchive(this._searchTarget.days * 24, true);
+
+        const uasId = this._searchTarget.uasId;
+        if (uasId) {
+            this.uasExtraTotal[uasId] = result.total || 0;
+        }
+        const sessions = this._mergeSearchSessions(result);
+        if (sessions.length === 0) {
+            this._droneListCacheKey = null;
+            this._updateDroneList([]);
+            return;
+        }
+
+        const newest = sessions[0];
+        const newestKey = `${newest.uas_id}:${newest.computed_session_id || 'unknown'}`;
+        this.visibleSessions.add(newestKey);
+        this.expandedGroups.add(newest.uas_id);
+        this.dismissedSessionKeys.delete(newestKey);
+
+        // Focus the map on this UAS only
+        MapController.clearAllTracks();
+        this.loadedTracks = new Map();
+
+        this._droneListCacheKey = null;
+        this._updateDroneList(this._applySearchFilter(this._filterKnownUnknownDrones()));
+        this._batchLoadTracks([newest]);
+        this._updateReplayButtonState();
+    },
+
+    /**
+     * Render the result of a session search: merge the single matching session
+     * into the drone map and show just that flight.
+     */
+    async _renderSessionSearchResult(result) {
+        this._forceUASView();
+        // Session results are merged directly, so just ensure archive mode
+        // without disturbing the current time window.
+        if (this._dataMode !== 'archive') {
+            this._switchToArchive();
+        }
+
+        const sessions = this._mergeSearchSessions(result);
+        if (sessions.length === 0) {
+            this._droneListCacheKey = null;
+            this._updateDroneList([]);
+            return;
+        }
+
+        const session = sessions[0];
+        const sessionKey = `${session.uas_id}:${session.computed_session_id || 'unknown'}`;
+        this.visibleSessions.add(sessionKey);
+        this.expandedGroups.add(session.uas_id);
+        this.dismissedSessionKeys.delete(sessionKey);
+
+        MapController.clearAllTracks();
+        this.loadedTracks = new Map();
+
+        this._droneListCacheKey = null;
+        this._updateDroneList(this._applySearchFilter(this._filterKnownUnknownDrones()));
+        this._batchLoadTracks([session]);
+        this._updateReplayButtonState();
+    },
+
+    /**
+     * Handle deep-link permalinks (?uas= / ?session=) present on page load,
+     * applied after the first data load so search focus is established with
+     * full context. _doSearch rewrites the URL to the canonical permalink.
+     */
+    async _applyPermalinkSearch() {
+        const params = new URLSearchParams(window.location.search);
+        const sessionParam = params.get('session');
+        const uasParam = params.get('uas');
+        const q = sessionParam || uasParam;
+        if (!q) return;
+        await this._doSearch(q, 14);
     },
 
 

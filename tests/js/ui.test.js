@@ -97,6 +97,8 @@ uiCode = uiCode
 
 // Capture the real refreshData; later describe blocks may mock it out.
 const realRefreshData = UIController.refreshData;
+// The search tests mock the render helpers; keep the real one for direct tests.
+const realRenderUASSearchResult = UIController._renderUASSearchResult;
 
 describe('UIController', () => {
   beforeEach(() => {
@@ -658,6 +660,241 @@ describe('UIController', () => {
 
       expect(UIController.droneMap['uas-789:session_9']).toBeDefined();
       expect(UIController.droneMap['uas-789:unknown']).toBeUndefined();
+    });
+  });
+
+  describe('search focus', () => {
+    beforeEach(() => {
+      UIController._searchTarget = null;
+      UIController.droneMap = {};
+      UIController.droneAliases = {};
+      UIController.visibleSessions = new Set();
+      UIController.expandedGroups = new Set();
+      UIController.dismissedSessionKeys = new Set();
+      UIController.uasExtraSessions = {};
+      UIController.uasExtraTotal = {};
+      UIController.uasExtraLoading = {};
+      UIController.loadedTracks = new Map();
+      UIController.showKnownDrones = true;
+      UIController.showUnknownDrones = true;
+      UIController._dataMode = 'archive';
+      UIController.viewMode = 'date';
+
+      const searchInput = document.createElement('input');
+      const searchPanel = document.createElement('div');
+      const searchFocusBar = document.createElement('div');
+      const searchFocusName = document.createElement('span');
+      UIController.elements = {
+        searchInput,
+        searchPanel,
+        searchFocusBar,
+        searchFocusName,
+      };
+      UIController.showToast = jest.fn();
+      window.history.replaceState({}, '', '/');
+    });
+
+    afterEach(() => {
+      delete global.API;
+      UIController._searchTarget = null;
+    });
+
+    test('_applySearchFilter filters by uas id for uas searches', () => {
+      UIController._searchTarget = { type: 'uas', uasId: 'drone-001' };
+      const drones = [
+        { uas_id: 'drone-001', computed_session_id: 'session_a' },
+        { uas_id: 'drone-002', computed_session_id: 'session_b' },
+      ];
+      const filtered = UIController._applySearchFilter(drones);
+      expect(filtered).toHaveLength(1);
+      expect(filtered[0].uas_id).toBe('drone-001');
+    });
+
+    test('_applySearchFilter filters by session for session searches', () => {
+      UIController._searchTarget = {
+        type: 'session',
+        uasId: 'drone-001',
+        sessionId: 'session_a',
+      };
+      const drones = [
+        { uas_id: 'drone-001', computed_session_id: 'session_a' },
+        { uas_id: 'drone-001', computed_session_id: 'session_old' },
+        { uas_id: 'drone-002', computed_session_id: 'session_a' },
+      ];
+      const filtered = UIController._applySearchFilter(drones);
+      expect(filtered).toHaveLength(1);
+      expect(filtered[0].computed_session_id).toBe('session_a');
+    });
+
+    test('_applySearchFilter passes through when no search is active', () => {
+      const drones = [{ uas_id: 'drone-001', computed_session_id: 'session_a' }];
+      expect(UIController._applySearchFilter(drones)).toBe(drones);
+    });
+
+    test('_mergeSearchSessions dedupes most_recent that is already present', () => {
+      const result = {
+        sessions: [{ uas_id: 'd1', computed_session_id: 'session_a' }],
+        most_recent: { uas_id: 'd1', computed_session_id: 'session_a' },
+      };
+      const merged = UIController._mergeSearchSessions(result);
+      expect(merged).toHaveLength(1);
+      expect(UIController.droneMap['d1:session_a']).toBeDefined();
+    });
+
+    test('_mergeSearchSessions includes most_recent when outside the search window', () => {
+      const result = {
+        sessions: [],
+        most_recent: { uas_id: 'd1', computed_session_id: 'session_old' },
+      };
+      const merged = UIController._mergeSearchSessions(result);
+      expect(merged).toHaveLength(1);
+      expect(merged[0].computed_session_id).toBe('session_old');
+      expect(UIController.droneMap['d1:session_old']).toBeDefined();
+    });
+
+    test('_doSearch sets the search target for a UAS search', async () => {
+      global.API = {
+        search: jest.fn().mockResolvedValue({
+          type: 'uas',
+          q: 'drone-001',
+          uas_id: 'drone-001',
+          sessions: [{ uas_id: 'drone-001', computed_session_id: 'session_a', timestamp: '2024-01-01T01:00:00Z' }],
+          total: 3,
+          most_recent: null,
+        }),
+      };
+      UIController._renderUASSearchResult = jest.fn();
+      UIController._forceUASView = jest.fn();
+
+      await UIController._doSearch('drone-001', 14);
+
+      expect(UIController._searchTarget).toEqual({
+        type: 'uas',
+        q: 'drone-001',
+        days: 14,
+        uasId: 'drone-001',
+        sessionId: null,
+      });
+      expect(UIController.elements.searchInput.value).toBe('drone-001');
+      expect(UIController._renderUASSearchResult).toHaveBeenCalled();
+    });
+
+    test('_doSearch writes a shareable permalink and shows the focus bar for a session search', async () => {
+      global.API = {
+        search: jest.fn().mockResolvedValue({
+          type: 'session',
+          q: 'session_1a2b3c4d5e6f',
+          sessions: [{ uas_id: 'drone-001', computed_session_id: 'session_1a2b3c4d5e6f' }],
+          total: 1,
+        }),
+      };
+      UIController._renderSessionSearchResult = jest.fn();
+      UIController._forceUASView = jest.fn();
+
+      await UIController._doSearch('session_1a2b3c4d5e6f', 14);
+
+      expect(UIController._searchTarget.type).toBe('session');
+      expect(UIController._searchTarget.uasId).toBe('drone-001');
+      expect(UIController._searchTarget.sessionId).toBe('session_1a2b3c4d5e6f');
+      expect(window.location.search).toContain('session=session_1a2b3c4d5e6f');
+      expect(UIController.elements.searchFocusBar.style.display).toBe('');
+      expect(UIController.elements.searchFocusName.textContent).toContain('drone-001');
+      expect(UIController._renderSessionSearchResult).toHaveBeenCalled();
+    });
+
+    test('_renderUASSearchResult merges sessions, sets the window, and focuses the newest', async () => {
+      UIController._renderUASSearchResult = realRenderUASSearchResult;
+      UIController._forceUASView = jest.fn();
+      UIController._switchToArchive = jest.fn();
+      UIController._updateDroneList = jest.fn();
+      UIController._batchLoadTracks = jest.fn();
+      UIController._updateReplayButtonState = jest.fn();
+      MapController.clearAllTracks = jest.fn();
+      UIController._searchTarget = { type: 'uas', uasId: 'drone-001', days: 14 };
+
+      const result = {
+        type: 'uas',
+        q: 'drone-001',
+        uas_id: 'drone-001',
+        total: 5,
+        sessions: [
+          { uas_id: 'drone-001', computed_session_id: 'session_new', timestamp: '2024-01-01T02:00:00Z', latitude: 1, longitude: 2, altitude: 10 },
+          { uas_id: 'drone-001', computed_session_id: 'session_old', timestamp: '2024-01-01T01:00:00Z', latitude: 1, longitude: 2, altitude: 10 },
+        ],
+        most_recent: null,
+      };
+
+      await UIController._renderUASSearchResult(result);
+
+      expect(UIController._forceUASView).toHaveBeenCalled();
+      expect(UIController._switchToArchive).toHaveBeenCalledWith(336, true);
+      expect(UIController.uasExtraTotal['drone-001']).toBe(5);
+      expect(UIController.droneMap['drone-001:session_new']).toBeDefined();
+      expect(UIController.droneMap['drone-001:session_old']).toBeDefined();
+      expect(UIController.visibleSessions.has('drone-001:session_new')).toBe(true);
+      expect(UIController.expandedGroups.has('drone-001')).toBe(true);
+      expect(UIController.loadedTracks.size).toBe(0);
+      expect(MapController.clearAllTracks).toHaveBeenCalled();
+      expect(UIController._batchLoadTracks).toHaveBeenCalledWith([result.sessions[0]]);
+    });
+
+    test('_clearSearchFocus clears the target, input, permalink, and focus bar', () => {
+      window.history.replaceState({}, '', '/?uas=drone-001');
+      UIController._searchTarget = { type: 'uas', uasId: 'drone-001', q: 'drone-001' };
+      UIController.elements.searchInput.value = 'drone-001';
+      UIController._updateSearchFocusBar();
+
+      UIController._clearSearchFocus();
+
+      expect(UIController._searchTarget).toBeNull();
+      expect(UIController.elements.searchInput.value).toBe('');
+      expect(UIController.elements.searchFocusBar.style.display).toBe('none');
+      expect(window.location.search).not.toContain('uas=');
+    });
+
+    test('refreshData filters drones to the active search target', async () => {
+      UIController.refreshData = realRefreshData;
+      UIController._searchTarget = { type: 'uas', uasId: 'drone-001' };
+      UIController.droneMap = {};
+      UIController.droneTimestamps = {};
+      UIController.uasExtraSessions = {};
+      UIController.alertEvents = [];
+      UIController.remotes = [];
+      UIController.remoteDetailOpen = false;
+      UIController.isLoading = false;
+      UIController._initialized = false;
+      UIController.lastActivityTime = null;
+      UIController._dataMode = 'archive';
+      UIController.elements.refreshBtn = document.createElement('button');
+      UIController.elements.droneList = document.createElement('div');
+      UIController._updateRemoteSummary = jest.fn();
+      UIController._renderStats = jest.fn();
+      UIController._updateLastUpdateTime = jest.fn();
+      UIController._trackRefreshFailure = jest.fn();
+      UIController._adjustPollTimer = jest.fn();
+      UIController._updateReplayButtonState = jest.fn();
+      UIController._updateDroneList = jest.fn();
+      UIController._batchLoadTracks = jest.fn();
+      MapController.config = { center_lat: 1 };
+      MapController._updateCollectors = jest.fn().mockResolvedValue();
+      MapController.loadTracksBatch = jest.fn().mockResolvedValue([]);
+      global.API = {
+        getRefresh: jest.fn().mockResolvedValue({
+          drones: [
+            { uas_id: 'drone-001', computed_session_id: 'session_a', timestamp: '2024-01-01T01:00:00Z', latitude: 1, longitude: 2, altitude: 10 },
+            { uas_id: 'drone-002', computed_session_id: 'session_b', timestamp: '2024-01-01T01:00:00Z', latitude: 1, longitude: 2, altitude: 10 },
+          ],
+          sources: [],
+          alerts: { active: [] },
+          stats: {},
+        }),
+      };
+
+      await UIController.refreshData();
+
+      const rendered = UIController._updateDroneList.mock.calls[0][0];
+      expect(rendered).toHaveLength(1);
+      expect(rendered[0].uas_id).toBe('drone-001');
     });
   });
 });
