@@ -1,0 +1,13 @@
+{
+  "event": "drone_proximity",
+  "timestamp": "{{ timestamp }}",
+  "uas_id_a": "{{ uas_id_a|json_escape }}",
+  "name_a": "{{ name_a|json_escape }}",
+  "uas_id_b": "{{ uas_id_b|json_escape }}",
+  "name_b": "{{ name_b|json_escape }}",
+  "distance_m": {{ '%.2f' % distance_m }},
+  "distance": "{{ distance_str|json_escape }}"
+{% if server_url %},
+  "server_url": "{{ server_url|json_escape }}"
+{% endif %}
+}

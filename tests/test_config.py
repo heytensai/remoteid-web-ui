@@ -941,6 +941,7 @@ def test_valid_notifier_types_includes_ntfy():
     assert "ntfy" in VALID_NOTIFIER_TYPES
     assert "discord" in VALID_NOTIFIER_TYPES
     assert "teams" in VALID_NOTIFIER_TYPES
+    assert "mqtt" in VALID_NOTIFIER_TYPES
 
 
 def test_notification_target_config_defaults():
@@ -977,6 +978,45 @@ def test_notification_target_config_with_basic_auth():
     assert nt.username == "admin"
     assert nt.password == "secret"
     assert nt.token == ""
+
+
+def test_notification_target_config_mqtt_defaults():
+    nt = NotificationTargetConfig(name="mqtt", type="mqtt", events=["geozone_enter"])
+    assert nt.broker_url == ""
+    assert nt.topic_prefix == ""
+    assert nt.username == ""
+    assert nt.password == ""
+
+
+def test_parse_notifications_mqtt():
+    config_data = {
+        "database_url": "postgresql://test:test@localhost:5432/test",
+        "notifications": [
+            {
+                "name": "MQTT Feed",
+                "type": "mqtt",
+                "broker_url": "mqtts://mqtt.example.com:8883",
+                "topic_prefix": "remoteid/alerts",
+                "username": "remoteid",
+                "password": "secret",
+                "events": ["geozone_enter", "new_session"],
+            },
+        ],
+    }
+    path = _write_config(config_data)
+    try:
+        cfg = WebConfig(path)
+        assert len(cfg.notifications) == 1
+        nt = cfg.notifications[0]
+        assert nt.name == "MQTT Feed"
+        assert nt.type == "mqtt"
+        assert nt.broker_url == "mqtts://mqtt.example.com:8883"
+        assert nt.topic_prefix == "remoteid/alerts"
+        assert nt.username == "remoteid"
+        assert nt.password == "secret"
+        assert nt.events == ["geozone_enter", "new_session"]
+    finally:
+        os.unlink(path)
 
 
 def test_parse_notifications_ntfy():
@@ -1097,14 +1137,15 @@ def test_parse_notifications_multiple_types():
             {"name": "Discord2", "type": "discord", "webhook_url": "https://discord.com/api/webhooks/...", "events": ["new_session"]},
             {"name": "Teams", "type": "teams", "webhook_url": "https://example.webhook.office.com/webhookb2/...", "events": ["geozone_enter", "new_session"]},
             {"name": "ntfy", "type": "ntfy", "webhook_url": "https://ntfy.sh/t", "token": "tk_x", "events": ["geozone_enter", "new_session"]},
+            {"name": "MQTT Feed", "type": "mqtt", "broker_url": "mqtt://mqtt.example.com:1883", "topic_prefix": "remoteid/alerts", "events": ["geozone_enter", "new_session"]},
         ],
     }
     path = _write_config(config_data)
     try:
         cfg = WebConfig(path)
-        assert len(cfg.notifications) == 4
+        assert len(cfg.notifications) == 5
         types = {nt.type for nt in cfg.notifications}
-        assert types == {"discord", "ntfy", "teams"}
+        assert types == {"discord", "ntfy", "teams", "mqtt"}
     finally:
         os.unlink(path)
 
@@ -1140,3 +1181,35 @@ def test_notification_hot_reload_detects_token_change(sample_config_yaml):
     new_cfg = cfg.reload_hot_config()
     assert new_cfg is not None
     assert new_cfg.notifications[0].token == "tk_new"
+
+
+def test_notification_hot_reload_detects_mqtt_topic_prefix_change(sample_config_yaml):
+    config_path = sample_config_yaml
+    cfg = WebConfig(config_path)
+
+    with open(config_path, encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    data["web_interface"]["notifications"] = [
+        {
+            "name": "MQTT",
+            "type": "mqtt",
+            "broker_url": "mqtt://mqtt.example.com:1883",
+            "topic_prefix": "remoteid/alerts",
+            "events": ["geozone_enter"],
+        },
+    ]
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f)
+
+    cfg = cfg.reload_hot_config() or cfg
+    assert cfg.notifications[0].topic_prefix == "remoteid/alerts"
+
+    with open(config_path, encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    data["web_interface"]["notifications"][0]["topic_prefix"] = "remoteid/logs"
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f)
+
+    new_cfg = cfg.reload_hot_config()
+    assert new_cfg is not None
+    assert new_cfg.notifications[0].topic_prefix == "remoteid/logs"

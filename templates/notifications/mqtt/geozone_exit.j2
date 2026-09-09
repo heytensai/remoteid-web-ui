@@ -1,0 +1,10 @@
+{
+  "event": "geozone_exit",
+  "timestamp": "{{ timestamp }}",
+  "uas_id": "{{ uas_id|json_escape }}",
+  "name": "{{ name|json_escape }}",
+  "geozone": "{{ geozone_name|json_escape }}"
+{% if server_url %},
+  "server_url": "{{ server_url|json_escape }}"
+{% endif %}
+}

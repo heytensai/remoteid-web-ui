@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 import yaml
 
 VALID_EVENTS = {"geozone_enter", "geozone_exit", "new_session", "unrecognized_drone", "drone_proximity"}
-VALID_NOTIFIER_TYPES = {"discord", "ntfy", "teams"}
+VALID_NOTIFIER_TYPES = {"discord", "ntfy", "teams", "mqtt"}
 
 logger = logging.getLogger(__name__)
 
@@ -84,20 +84,23 @@ class RoleConfig:
 
 @dataclass
 class NotificationTargetConfig:
-    """A configured notification target (discord, ntfy, teams, etc.).
+    """A configured notification target (discord, ntfy, teams, mqtt, etc.).
 
     Each target specifies its type, which events trigger it, and any
-    type-specific configuration (e.g. webhook URL for discord/ntfy).
+    type-specific configuration (e.g. webhook URL for discord/ntfy,
+    broker URL + topic prefix for mqtt).
     """
 
     name: str
-    type: str  # "discord", "ntfy", or "teams"
+    type: str  # "discord", "ntfy", "teams", or "mqtt"
     events: List[str]  # subset of ["geozone_enter", "geozone_exit", "new_session", "unrecognized_drone"]
     enabled: bool = True
     webhook_url: str = ""
     token: str = ""  # ntfy Bearer auth token (mutually exclusive with username/password)
-    username: str = ""  # ntfy Basic auth username
-    password: str = ""  # ntfy Basic auth password
+    username: str = ""  # ntfy Basic auth / MQTT username
+    password: str = ""  # ntfy Basic auth / MQTT password
+    broker_url: str = ""  # mqtt://host:port or mqtts://host:port (TLS)
+    topic_prefix: str = ""  # mqtt topic prefix; actual topic = {prefix}/{event}
 
 
 VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
@@ -363,6 +366,8 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 token=nt.get("token", ""),
                 username=nt.get("username", ""),
                 password=nt.get("password", ""),
+                broker_url=nt.get("broker_url", ""),
+                topic_prefix=nt.get("topic_prefix", ""),
             ))
         return targets
 
@@ -507,6 +512,8 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                     "type": n.type,
                     "events": n.events,
                     "webhook_url": n.webhook_url,
+                    "broker_url": n.broker_url,
+                    "topic_prefix": n.topic_prefix,
                 }
                 for n in self.notifications
             ],
@@ -633,7 +640,8 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
 
         def _nt_key(n):
             return (n.type, n.events, n.enabled, n.webhook_url,
-                    n.token, n.username, n.password)
+                    n.token, n.username, n.password,
+                    n.broker_url, n.topic_prefix)
         old_nt = {n.name: _nt_key(n) for n in self.notifications}
         new_nt = {n.name: _nt_key(n) for n in new_config.notifications}
         if old_nt != new_nt:

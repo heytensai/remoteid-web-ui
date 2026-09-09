@@ -10,7 +10,7 @@ import pytest
 
 from config import NotificationTargetConfig
 from notifier import (
-    NotifierService, _send_ntfy, _send_discord, _send_teams,
+    NotifierService, _send_ntfy, _send_discord, _send_teams, _send_mqtt,
     _jinja_env,
 )
 
@@ -652,3 +652,257 @@ class TestTemplateEscaping:
         svc.dispatch("geozone_enter", name='Drone "One"', geozone_name="Zone A")
         payload = mock_send.call_args[0][1]
         assert 'Drone "One"' in payload
+
+
+# ---------------------------------------------------------------------------
+# _send_mqtt (minimal publish-only MQTT 3.1.1 client)
+# ---------------------------------------------------------------------------
+
+
+class _FakeSocket:
+    """Socket stand-in that records sent bytes and returns a canned CONNACK."""
+
+    def __init__(self, connack=b"\x20\x02\x00\x00"):
+        self.sent = b""
+        self.closed = False
+        self._connack = connack
+
+    def sendall(self, data):
+        self.sent += data
+
+    def recv(self, n):
+        return self._connack
+
+    def close(self):
+        self.closed = True
+
+
+class TestSendMqtt:
+    @patch("notifier.socket.create_connection")
+    def test_send_mqtt_success(self, mock_conn):
+        fake = _FakeSocket()
+        mock_conn.return_value = fake
+
+        _send_mqtt("mqtt://mqtt.local:1883", '{"event":"geozone_enter"}',
+                   "remoteid/alerts/geozone_enter")
+
+        mock_conn.assert_called_once_with(("mqtt.local", 1883), timeout=15)
+        assert fake.sent.startswith(b"\x10")  # CONNECT
+        assert b"\x30" in fake.sent  # PUBLISH (QoS 0)
+        assert b"remoteid/alerts/geozone_enter" in fake.sent
+        assert b'{"event":"geozone_enter"}' in fake.sent
+        assert fake.sent.endswith(b"\xe0\x00")  # DISCONNECT
+        assert fake.closed
+
+    @patch("notifier.ssl.create_default_context")
+    @patch("notifier.socket.create_connection")
+    def test_send_mqtt_default_ports(self, mock_conn, mock_ctx):
+        fake = _FakeSocket()
+        mock_conn.return_value = fake
+        ctx = MagicMock()
+        ctx.wrap_socket.return_value = fake
+        mock_ctx.return_value = ctx
+
+        _send_mqtt("mqtt://mqtt.local", "p", "t")
+        assert mock_conn.call_args[0][0] == ("mqtt.local", 1883)
+
+        _send_mqtt("mqtts://mqtt.local", "p", "t")
+        assert mock_conn.call_args[0][0] == ("mqtt.local", 8883)
+
+    @patch("notifier.socket.create_connection")
+    def test_send_mqtt_with_auth(self, mock_conn):
+        fake = _FakeSocket()
+        mock_conn.return_value = fake
+
+        _send_mqtt("mqtt://mqtt.local", "p", "t",
+                   username="admin", password="secret")
+
+        # CONNECT flags: clean session (0x02) + username (0x80) + password (0x40)
+        assert fake.sent[9] == 0xC2
+        assert b"admin" in fake.sent
+        assert b"secret" in fake.sent
+
+    @patch("notifier.socket.create_connection")
+    def test_send_mqtt_no_auth(self, mock_conn):
+        fake = _FakeSocket()
+        mock_conn.return_value = fake
+
+        _send_mqtt("mqtt://mqtt.local", "p", "t")
+
+        assert fake.sent[9] == 0x02  # clean session only
+        assert b"\x00\x04admin" not in fake.sent
+
+    @patch("notifier.socket.create_connection")
+    def test_send_mqtt_broker_rejects(self, mock_conn):
+        fake = _FakeSocket(connack=b"\x20\x02\x00\x05")  # not authorized
+        mock_conn.return_value = fake
+
+        _send_mqtt("mqtt://mqtt.local", "p", "t")
+
+        # CONNECT sent, but no PUBLISH for a rejected connection
+        assert fake.sent.startswith(b"\x10")
+        assert b"\x30\x04\x00\x01t p" not in fake.sent
+
+    @patch("notifier.socket.create_connection")
+    def test_send_mqtt_unexpected_connack(self, mock_conn):
+        fake = _FakeSocket(connack=b"\xff\x02\x00\x00")
+        mock_conn.return_value = fake
+
+        _send_mqtt("mqtt://mqtt.local", "p", "t")
+
+        assert b"\x30\x04\x00\x01t p" not in fake.sent
+
+    @patch("notifier.socket.create_connection")
+    def test_send_mqtt_connection_error(self, mock_conn):
+        mock_conn.side_effect = OSError("Connection refused")
+
+        # Should not raise
+        _send_mqtt("mqtt://mqtt.local", "p", "t")
+
+    @patch("notifier.socket.create_connection")
+    def test_send_mqtt_unsupported_scheme(self, mock_conn):
+        _send_mqtt("http://mqtt.local", "p", "t")
+        mock_conn.assert_not_called()
+
+    @patch("notifier.ssl.create_default_context")
+    @patch("notifier.socket.create_connection")
+    def test_send_mqtt_tls(self, mock_conn, mock_ctx):
+        fake = _FakeSocket()
+        mock_conn.return_value = fake
+        ctx = MagicMock()
+        ctx.wrap_socket.return_value = fake
+        mock_ctx.return_value = ctx
+
+        _send_mqtt("mqtts://mqtt.local:8883", "p", "t")
+
+        ctx.wrap_socket.assert_called_once_with(fake, server_hostname="mqtt.local")
+        assert b"\x30" in fake.sent
+
+
+# ---------------------------------------------------------------------------
+# NotifierService — MQTT dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestNotifierServiceMqtt:
+    def _make_target(self, **kwargs):
+        defaults = {
+            "name": "mqtt-test",
+            "type": "mqtt",
+            "broker_url": "mqtt://mqtt.local:1883",
+            "topic_prefix": "remoteid/alerts",
+            "events": ["geozone_enter"],
+            "username": "",
+            "password": "",
+        }
+        defaults.update(kwargs)
+        return NotificationTargetConfig(**defaults)
+
+    @patch("notifier._send_mqtt")
+    def test_dispatch_mqtt_publishes_json(self, mock_send):
+        target = self._make_target()
+        svc = NotifierService(notifications=[target], server_url="https://example.com")
+
+        svc.dispatch("geozone_enter", uas_id="drone-001", name='Drone "One"',
+                     geozone_name="Zone A", use_metric=True)
+
+        mock_send.assert_called_once()
+        broker_url, payload, topic = mock_send.call_args[0]
+        assert broker_url == "mqtt://mqtt.local:1883"
+        assert topic == "remoteid/alerts/geozone_enter"
+        data = json.loads(payload)
+        assert data["event"] == "geozone_enter"
+        assert data["uas_id"] == "drone-001"
+        assert data["name"] == 'Drone "One"'
+        assert data["geozone"] == "Zone A"
+
+    @patch("notifier._send_mqtt")
+    def test_dispatch_mqtt_topic_without_prefix(self, mock_send):
+        target = self._make_target(topic_prefix="")
+        svc = NotifierService(notifications=[target], server_url="https://example.com")
+
+        svc.dispatch("geozone_enter", uas_id="d", name="Drone", geozone_name="Zone")
+
+        topic = mock_send.call_args[0][2]
+        assert topic == "geozone_enter"
+
+    @patch("notifier._send_mqtt")
+    def test_dispatch_mqtt_with_auth(self, mock_send):
+        target = self._make_target(username="admin", password="secret")
+        svc = NotifierService(notifications=[target], server_url="https://example.com")
+
+        svc.dispatch("geozone_enter", uas_id="d", name="Drone", geozone_name="Zone")
+
+        assert mock_send.call_args[1]["username"] == "admin"
+        assert mock_send.call_args[1]["password"] == "secret"
+
+    @patch("notifier._send_mqtt")
+    def test_dispatch_mqtt_new_session_payload(self, mock_send):
+        target = self._make_target(name="mqtt-sessions", events=["new_session"])
+        svc = NotifierService(notifications=[target], server_url="https://example.com")
+
+        svc.dispatch("new_session", uas_id="drone-001", name="Drone-1",
+                     session_id="session_a1b2c3d4e5f6", altitude=100.0, height=50.0,
+                     height_type="agl", lat=37.7749, lon=-122.4194, use_metric=True)
+
+        payload = json.loads(mock_send.call_args[0][1])
+        assert payload["event"] == "new_session"
+        assert payload["uas_id"] == "drone-001"
+        assert payload["session_id"] == "session_a1b2c3d4e5f6"
+        assert payload["altitude"] == 100.0
+        assert payload["height"] == 50.0
+        assert payload["height_type"] == "agl"
+        assert payload["latitude"] == 37.7749
+        assert payload["longitude"] == -122.4194
+
+    @patch("notifier._send_mqtt")
+    def test_dispatch_mqtt_new_session_without_position(self, mock_send):
+        target = self._make_target(name="mqtt-sessions", events=["new_session"])
+        svc = NotifierService(notifications=[target], server_url="https://example.com")
+
+        svc.dispatch("new_session", uas_id="drone-001", name="Drone-1",
+                     session_id="session_a1b2c3d4e5f6", use_metric=True)
+
+        payload = json.loads(mock_send.call_args[0][1])
+        assert payload["uas_id"] == "drone-001"
+        assert "altitude" not in payload
+        assert "latitude" not in payload
+
+    @patch("notifier._send_mqtt")
+    def test_dispatch_mqtt_renders_valid_json_for_all_events(self, mock_send):
+        target = self._make_target(
+            events=["geozone_enter", "geozone_exit", "new_session",
+                    "unrecognized_drone", "drone_proximity"],
+        )
+        svc = NotifierService(notifications=[target], server_url="https://example.com")
+
+        svc.dispatch("geozone_enter", uas_id="d", name="Drone", geozone_name="Zone", use_metric=True)
+        svc.dispatch("geozone_exit", uas_id="d", name="Drone", geozone_name="Zone", use_metric=True)
+        svc.dispatch("new_session", uas_id="d", name="Drone", session_id="session_1", use_metric=True)
+        svc.dispatch("unrecognized_drone", uas_id="d", name="d", session_id="session_2", use_metric=True)
+        svc.dispatch("drone_proximity", uas_id_a="a", name_a="A", uas_id_b="b",
+                     name_b="B", distance_m=50.0, distance_str="50 m", use_metric=True)
+
+        assert mock_send.call_count == 5
+        for call in mock_send.call_args_list:
+            data = json.loads(call[0][1])
+            assert data["event"]
+
+    @patch("notifier._send_mqtt")
+    def test_dispatch_mqtt_skips_disabled(self, mock_send):
+        target = self._make_target(enabled=False)
+        svc = NotifierService(notifications=[target], server_url="https://example.com")
+
+        svc.dispatch("geozone_enter", uas_id="d", name="Drone", geozone_name="Zone")
+
+        mock_send.assert_not_called()
+
+    @patch("notifier._send_mqtt")
+    def test_dispatch_mqtt_skips_unrelated_events(self, mock_send):
+        target = self._make_target(events=["geozone_enter"])
+        svc = NotifierService(notifications=[target], server_url="https://example.com")
+
+        svc.dispatch("new_session", uas_id="d", name="Drone", session_id="s",
+                     use_metric=True)
+
+        mock_send.assert_not_called()

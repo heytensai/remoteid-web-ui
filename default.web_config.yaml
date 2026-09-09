@@ -320,3 +320,26 @@ web_interface:
     #   events:
     #     - geozone_enter
     #     - new_session
+    #
+    # MQTT broker (publish-only, QoS 0). The payload is a JSON object with
+    # the UAS details (uas_id, name, altitude, height, etc.) and is published
+    # to "{topic_prefix}/{event}", e.g. remoteid/alerts/geozone_enter.
+    # Plain TCP (mqtt://) or TLS (mqtts://):
+    # - name: "MQTT Feed"
+    #   type: "mqtt"
+    #   broker_url: "mqtt://mqtt.example.com:1883"
+    #   topic_prefix: "remoteid/alerts"
+    #   events:
+    #     - geozone_enter
+    #     - new_session
+    #
+    # MQTT with username/password authentication:
+    # - name: "MQTT Private"
+    #   type: "mqtt"
+    #   broker_url: "mqtts://mqtt.example.com:8883"
+    #   topic_prefix: "remoteid/alerts"
+    #   username: "remoteid"
+    #   password: "secret"
+    #   events:
+    #     - geozone_enter
+    #     - new_session

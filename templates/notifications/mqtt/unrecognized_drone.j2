@@ -1,0 +1,25 @@
+{
+  "event": "unrecognized_drone",
+  "timestamp": "{{ timestamp }}",
+  "uas_id": "{{ uas_id|json_escape }}",
+  "name": "{{ name|json_escape }}",
+  "session_id": "{{ session_id|json_escape }}"
+{% if altitude is defined and altitude is not none %},
+  "altitude": {{ '%.2f' % altitude }}
+{% endif %}
+{% if height is defined and height is not none %},
+  "height": {{ '%.2f' % height }}
+{% endif %}
+{% if height_type is defined and height_type is not none %},
+  "height_type": "{{ height_type|json_escape }}"
+{% endif %}
+{% if lat is defined and lat is not none %},
+  "latitude": {{ '%.6f' % lat }}
+{% endif %}
+{% if lon is defined and lon is not none %},
+  "longitude": {{ '%.6f' % lon }}
+{% endif %}
+{% if server_url %},
+  "server_url": "{{ server_url|json_escape }}"
+{% endif %}
+}

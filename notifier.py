@@ -10,14 +10,20 @@ The rendered output is dispatched differently per type:
   (title, priority, tags, click URL) is sent as ntfy HTTP headers.
 - **teams**: the template renders an Adaptive Card JSON payload that is
   POSTed to the configured Incoming Webhook URL.
+- **mqtt**: the template renders a JSON payload that is published to
+  ``{topic_prefix}/{event}`` on the configured ``broker_url`` using a
+  minimal publish-only MQTT 3.1.1 client (QoS 0). Optional username and
+  password authenticate the connection.
 """
 
 import base64
 import http.client
 import logging
 import os
+import secrets
 import socket
 import ssl
+import struct
 import sys
 import urllib.error
 import urllib.request
@@ -286,6 +292,119 @@ def _log_connection_debug(parsed):
             logger.debug("ntfy diagnostics: %s DNS failed", family_name)
 
 
+def _mqtt_encode_string(s: str) -> bytes:
+    """UTF-8 string with 2-byte big-endian length prefix (MQTT spec)."""
+    b = s.encode("utf-8")
+    return struct.pack(">H", len(b)) + b
+
+
+def _mqtt_varint(n: int) -> bytes:
+    """Encode a remaining-length value as an MQTT variable byte integer."""
+    out = bytearray()
+    while True:
+        b, n = n % 128, n // 128
+        if n:
+            b |= 0x80
+        out.append(b)
+        if not n:
+            return bytes(out)
+
+
+def _mqtt_recv_exact(sock, n: int) -> bytes:
+    """Read exactly ``n`` bytes from ``sock`` (handles short reads)."""
+    data = b""
+    while len(data) < n:
+        chunk = sock.recv(n - len(data))
+        if not chunk:
+            raise OSError("MQTT broker closed the connection")
+        data += chunk
+    return data
+
+
+def _mqtt_topic(prefix: str, event: str) -> str:
+    """Build the publish topic from a configurable prefix and the event name."""
+    prefix = (prefix or "").strip().strip("/")
+    return f"{prefix}/{event}" if prefix else event
+
+
+def _send_mqtt(broker_url: str, payload: str, topic: str,
+               username: str = "", password: str = ""):
+    """Publish a message to an MQTT broker (publish-only, QoS 0).
+
+    The minimal MQTT 3.1.1 client only implements the CONNECT/CONNACK,
+    PUBLISH, and DISCONNECT packets — enough for fire-and-forget
+    notifications. Supports unauthenticated brokers plus username/password
+    auth, over plain TCP (``mqtt://``) or TLS (``mqtts://``).
+
+    Errors are logged, never raised (notifications are best-effort). """
+    parsed = urlparse(broker_url)
+    scheme = parsed.scheme.lower()
+    if scheme not in ("mqtt", "mqtts"):
+        logger.warning("Unsupported MQTT broker scheme %r for %r",
+                       scheme, broker_url)
+        return
+    use_tls = scheme == "mqtts"
+    host = parsed.hostname or "localhost"
+    port = parsed.port or (8883 if use_tls else 1883)
+
+    connect_flags = 0x02  # clean session
+    if username:
+        connect_flags |= 0x80
+    if password:
+        connect_flags |= 0x40
+    client_id = f"remoteid-{secrets.token_hex(4)}"
+    # Variable header: protocol name, protocol level, flags, keepalive (30s)
+    variable_header = (
+        _mqtt_encode_string("MQTT")
+        + bytes([0x04, connect_flags])
+        + struct.pack(">H", 30)
+    )
+    var_payload = _mqtt_encode_string(client_id)
+    if username:
+        var_payload += _mqtt_encode_string(username)
+    if password:
+        var_payload += _mqtt_encode_string(password)
+    connect_body = variable_header + var_payload
+    connect_packet = (
+        b"\x10" + _mqtt_varint(len(connect_body)) + connect_body
+    )
+
+    publish_body = _mqtt_encode_string(topic) + payload.encode("utf-8")
+    publish_packet = b"\x30" + _mqtt_varint(len(publish_body)) + publish_body
+
+    raw = None
+    sock = None
+    try:
+        raw = socket.create_connection((host, port), timeout=15)
+        sock = raw
+        if use_tls:
+            ctx = ssl.create_default_context()
+            sock = ctx.wrap_socket(raw, server_hostname=host)
+
+        sock.sendall(connect_packet)
+        connack = _mqtt_recv_exact(sock, 4)
+        if connack[0] != 0x20 or connack[1] != 0x02:
+            logger.warning("MQTT broker %s sent an unexpected CONNACK: %r",
+                           broker_url, connack)
+            return
+        if connack[3] != 0:
+            logger.warning("MQTT broker %s rejected connection (return code %d)",
+                           broker_url, connack[3])
+            return
+
+        sock.sendall(publish_packet)
+        sock.sendall(b"\xe0\x00")  # DISCONNECT
+        logger.debug("Published %d bytes to MQTT topic %r via %s",
+                     len(payload), topic, broker_url)
+    except (OSError, ValueError, struct.error, ssl.SSLError) as e:
+        logger.warning("MQTT publish to %s failed: %s", broker_url, e)
+    finally:
+        if sock is not None:
+            sock.close()
+        elif raw is not None:
+            raw.close()
+
+
 class NotifierService:
     """Loads notification templates and dispatches events to all configured targets."""
 
@@ -420,6 +539,13 @@ class NotifierService:
                     payload = template.render(**ctx)
                     logger.debug("Teams payload for %s: %s", nt.name, payload)
                     _send_teams(nt.webhook_url, payload, token=nt.token)
+                    logger.info("Sent %s notification via %s (%s)", event, nt.type, nt.name)
+                elif nt.type == "mqtt":
+                    payload = template.render(**ctx)
+                    topic = _mqtt_topic(nt.topic_prefix, event)
+                    logger.debug("MQTT payload for %s: %s", nt.name, payload)
+                    _send_mqtt(nt.broker_url, payload, topic,
+                               username=nt.username, password=nt.password)
                     logger.info("Sent %s notification via %s (%s)", event, nt.type, nt.name)
                 else:
                     logger.warning("Unknown notification type %r for target %r", nt.type, nt.name)
