@@ -243,6 +243,20 @@ def load_current_user():
     g.permissions = []
 
 
+_JS_FILES = ('units.js', 'api.js', 'map.js', 'ui.js')
+
+
+def _min_js_available() -> bool:
+    """True when minified copies of all app JS files exist under static/min/.
+
+    The template falls back to the raw sources in static/js/ when false, so a
+    deploy that skipped ``npm run build`` degrades gracefully.
+    """
+    return all(
+        (Path(app.static_folder) / 'min' / name).is_file() for name in _JS_FILES
+    )
+
+
 @app.context_processor
 def _static_url_with_hash():
     """Inject a ``static_url`` function that appends a content-hash for cache busting."""
@@ -255,7 +269,7 @@ def _static_url_with_hash():
             h = '0'
         return url_for('static', filename=filename, v=h)
 
-    return {"static_url": static_url}
+    return {"static_url": static_url, "js_dir": 'min' if _min_js_available() else 'js'}
 
 
 @app.route("/")

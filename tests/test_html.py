@@ -2,6 +2,17 @@
 
 from bs4 import BeautifulSoup
 
+import app as app_module
+
+
+def _app_js_srcs(soup):
+    """Return src attributes of the four application (non-CDN) script tags."""
+    return [
+        s.get("src", "")
+        for s in soup.find_all("script")
+        if s.get("src", "").find("/js/") != -1 or s.get("src", "").find("/min/") != -1
+    ]
+
 
 class TestIndexTemplate:
     def test_renders_successfully(self, client):
@@ -83,6 +94,41 @@ class TestIndexTemplate:
         assert any("leaflet" in src for src in srcs)
         # Flatpickr JS
         assert any("flatpickr" in src for src in srcs)
+
+    def _assert_app_order(self, srcs):
+        """App scripts must load units, api, map, ui in that order."""
+        order = ["units.js", "api.js", "map.js", "ui.js"]
+        files = [s.split("/")[-1].split("?")[0] for s in srcs]
+        assert files == order
+
+    def test_app_scripts_default_to_raw_source(self, client, monkeypatch):
+        """Without minified assets present, the raw js/ files are served."""
+        monkeypatch.setattr(app_module, "_min_js_available", lambda: False)
+        resp = client.get("/")
+        soup = BeautifulSoup(resp.data, "html.parser")
+        srcs = _app_js_srcs(soup)
+        assert all("/js/" in s for s in srcs), srcs
+        self._assert_app_order(srcs)
+
+    def test_app_scripts_use_minified_assets_when_available(self, client, monkeypatch):
+        """When minified assets exist, the min/ files are served in order."""
+        monkeypatch.setattr(app_module, "_min_js_available", lambda: True)
+        resp = client.get("/")
+        soup = BeautifulSoup(resp.data, "html.parser")
+        srcs = _app_js_srcs(soup)
+        assert all("/min/" in s for s in srcs), srcs
+        self._assert_app_order(srcs)
+
+    def test_min_js_available_checks_all_files(self, tmp_path, monkeypatch):
+        """_min_js_available is True only when all four min files exist."""
+        min_dir = tmp_path / "min"
+        (min_dir).mkdir()
+        for name in ("units.js", "api.js", "map.js", "ui.js"):
+            (min_dir / name).write_text("x")
+        monkeypatch.setattr(app_module.app, "static_folder", str(tmp_path))
+        assert app_module._min_js_available() is True
+        (min_dir / "ui.js").unlink()
+        assert app_module._min_js_available() is False
 
     def test_time_presets(self, client):
         resp = client.get("/")

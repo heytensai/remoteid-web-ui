@@ -1,9 +1,12 @@
-.PHONY: test test-py test-js test-py-cov lint lint-py lint-js install
+.PHONY: test test-py test-js test-py-cov lint lint-py lint-js build install
 
 PYTHON = env/bin/python
 NPM = npm
 
 test: test-py test-js
+
+build:
+	$(NPM) run build
 
 test-py:
 	$(PYTHON) -m pytest tests/ -v
@@ -27,4 +30,4 @@ install:
 	$(PYTHON) -m pip install -r dev-requirements.txt
 	$(NPM) install
 
-.PHONY: test test-py test-js test-py-cov lint lint-py lint-js install
+.PHONY: test test-py test-js test-py-cov lint lint-py lint-js build install

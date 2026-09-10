@@ -4,10 +4,12 @@
   "scripts": {
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage"
+    "test:coverage": "jest --coverage",
+    "build": "esbuild static/js/units.js static/js/api.js static/js/map.js static/js/ui.js --minify --outdir=static/min"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "esbuild": "^0.28.2",
     "eslint": "^10.5.0",
     "jest": "^29.7.0",
     "jest-environment-jsdom": "^29.7.0"
