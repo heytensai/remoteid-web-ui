@@ -8,7 +8,7 @@ import yaml
 
 from config import (
     WebConfig, MapConfig, WaypointConfig, RoleConfig, MaintenanceConfig,
-    NotificationTargetConfig, VALID_NOTIFIER_TYPES,
+    NotificationTargetConfig, VALID_NOTIFIER_TYPES, _normalize_color,
 )
 
 
@@ -106,6 +106,66 @@ def test_web_config_full():
 def test_web_config_missing_file():
     with pytest.raises(FileNotFoundError):
         WebConfig("/nonexistent/config.yaml")
+
+
+def test_normalize_color_accepts_hex():
+    assert _normalize_color("#e67e22", "#000000") == "#e67e22"
+    assert _normalize_color("#abc", "#000000") == "#abc"
+    assert _normalize_color("#11223344", "#000000") == "#11223344"
+
+
+def test_normalize_color_accepts_named_colors():
+    assert _normalize_color("red", "#000000") == "red"
+    assert _normalize_color("rebeccapurple", "#000000") == "rebeccapurple"
+    assert _normalize_color("RebeccaPurple", "#000000") == "RebeccaPurple"
+
+
+def test_normalize_color_rejects_markup_injection():
+    assert _normalize_color('red" onmouseover="alert(1)', "#123456") == "#123456"
+    assert _normalize_color("<script>alert(1)</script>", "#123456") == "#123456"
+    assert _normalize_color("red; background:url(x)", "#123456") == "#123456"
+    assert _normalize_color("red`; alert(1)//", "#123456") == "#123456"
+
+
+def test_normalize_color_rejects_non_strings():
+    assert _normalize_color(None, "#123456") == "#123456"
+    assert _normalize_color(12345, "#123456") == "#123456"
+    assert _normalize_color("", "#123456") == "#123456"
+
+
+def test_waypoint_and_collector_invalid_colors_fall_back():
+    with tempfile.TemporaryDirectory() as td:
+        config_data = {
+            "web_interface": {
+                "database_url": "postgresql://test:test@localhost:5432/test",
+                "waypoints": [
+                    {
+                        "name": "BadWP",
+                        "lat": 40.0,
+                        "lon": -70.0,
+                        "color": 'red" onmouseover="alert(1)',
+                    },
+                ],
+                "collectors": [
+                    {
+                        "name": "BadCollector",
+                        "type": "fixed",
+                        "lat": 41.0,
+                        "lon": -71.0,
+                        "color": "<script>alert(1)</script>",
+                    },
+                ],
+            }
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.dump(config_data, f)
+            path = f.name
+        try:
+            cfg = WebConfig(path)
+            assert cfg.waypoints[0].color == "#007bff"
+            assert cfg.collectors[0].color == "#e67e22"
+        finally:
+            os.unlink(path)
 
 
 def test_waypoint_config_defaults():

@@ -81,6 +81,19 @@ const UIController = {
     },
 
     /**
+     * Constrain a color to a value safe for inline style injection (hex or
+     * simple ASCII named color), falling back otherwise. Mirrors
+     * MapController._sanitizeColor so each controller stays self-defensive.
+     */
+    _sanitizeColor(color, fallback) {
+        if (typeof color !== 'string') return fallback;
+        return /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(color)
+            || /^[a-zA-Z][a-zA-Z0-9-]*$/.test(color)
+            ? color
+            : fallback;
+    },
+
+    /**
      * Check if the current user has a given permission.
      * The ``*`` wildcard grants all permissions.
      */
@@ -925,7 +938,7 @@ const UIController = {
         let html = '';
         for (const wp of enabled) {
             const icon = wp.icon || 'fa-map-pin';
-            const color = wp.color || '#007bff';
+            const color = this._sanitizeColor(wp.color, '#007bff');
             html += `
                 <div class="dropdown-item" data-wp-name="${esc(wp.name)}">
                     <span class="dropdown-item-icon" style="color: ${color};">

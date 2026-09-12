@@ -54,6 +54,20 @@ const MapController = {
     },
 
     /**
+     * Constrain a map-marker color to a value safe for inline style injection.
+     * Returns the input only when it is a hex color (#rgb, #rrggbb, #rrggbbaa)
+     * or a simple ASCII named color; otherwise falls back to `fallback`.
+     * Defense-in-depth: config colors are also validated server-side at load.
+     */
+    _sanitizeColor(color, fallback) {
+        if (typeof color !== 'string') return fallback;
+        return /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(color)
+            || /^[a-zA-Z][a-zA-Z0-9-]*$/.test(color)
+            ? color
+            : fallback;
+    },
+
+    /**
      * Initialize the map
      */
     async init() {
@@ -294,7 +308,7 @@ const MapController = {
      * Create waypoint icon
      */
     createWaypointIcon(wp) {
-        const color = wp.color || '#007bff';
+        const color = this._sanitizeColor(wp.color, '#007bff');
         const icon = wp.icon || 'fa-map-pin';
         const isGeozone = wp.type === 'circle' || wp.type === 'rectangle';
         return L.divIcon({
@@ -312,7 +326,8 @@ const MapController = {
      * Create collector position icon (FA icon in a colored circle)
      */
     createCollectorIcon(color, stale, icon) {
-        const bg = stale ? '#999' : color;
+        const safeColor = this._sanitizeColor(color, '#e67e22');
+        const bg = stale ? '#999' : safeColor;
         return L.divIcon({
             className: 'custom-div-icon',
             html: `<div class="collector-position-icon${stale ? ' stale' : ''}" style="border-color: ${bg}; color: ${bg};">
@@ -329,7 +344,7 @@ const MapController = {
      */
     _createWaypointPopup(wp) {
         const esc = (v) => this.escapeHtml(v);
-        const color = wp.color || '#007bff';
+        const color = this._sanitizeColor(wp.color, '#007bff');
         const category = wp.category
             ? `<div class="popup-row">
                  <span class="popup-label">Category:</span>
@@ -379,7 +394,7 @@ const MapController = {
             if (wp.lat == null || wp.lon == null) continue;
 
             const center = [wp.lat, wp.lon];
-            const color = wp.color || '#007bff';
+            const color = this._sanitizeColor(wp.color, '#007bff');
             // Lazily generate popup content so Units.init(config) has already
             // been called when the user clicks — fixes metric-ignoring bug.
             const popupFn = () => this._createWaypointPopup(wp);
@@ -743,8 +758,9 @@ const MapController = {
             const layer = c.type === 'fixed' ? this.layers.fixedCollectors : this.layers.mobileCollectors;
             if (!layer) continue;
             const iconClass = c.type === 'fixed' ? 'fa-broadcast-tower' : 'fa-walkie-talkie';
+            const safeColor = c.stale ? '#999' : this._sanitizeColor(c.color, '#e67e22');
             const marker = L.marker(center, {
-                icon: this.createCollectorIcon(c.color, c.stale, iconClass),
+                icon: this.createCollectorIcon(safeColor, c.stale, iconClass),
             }).addTo(layer);
             const age = c.updated_at
                 ? Math.round((Date.now() - new Date(c.updated_at).getTime()) / 1000)
@@ -754,7 +770,7 @@ const MapController = {
                 : 'never';
             const typeLabel = c.type === 'fixed' ? 'fixed' : 'mobile';
             let popup = `
-                <div class="popup-title" style="color: ${c.stale ? '#999' : c.color};">
+                <div class="popup-title" style="color: ${safeColor};">
                     <i class="fas ${iconClass}"></i> ${esc(c.name)}
                     <span style="font-size:0.8em;opacity:0.6;margin-left:4px;">(${typeLabel})</span>
                 </div>

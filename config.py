@@ -1,6 +1,7 @@
 """Configuration loader for web interface"""
 
 import logging
+import re
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
@@ -9,7 +10,32 @@ import yaml
 VALID_EVENTS = {"geozone_enter", "geozone_exit", "new_session", "unrecognized_drone", "drone_proximity"}
 VALID_NOTIFIER_TYPES = {"discord", "ntfy", "teams", "mqtt"}
 
+# Map marker colors are interpolated into inline ``style="color: ...;"``
+# attributes, so only values that cannot break out of the attribute or inject
+# markup are allowed. Hex colors (#rgb, #rrggbb, #rrggbbaa) and simple ASCII
+# named colors (e.g. "red", "rebeccapurple") match; anything containing
+# quotes, angle brackets, semicolons, etc. is rejected.
+HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
+NAMED_COLOR_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9-]*$")
+
 logger = logging.getLogger(__name__)
+
+
+def _normalize_color(color, fallback):
+    """Return a safe map-marker color, falling back when the value is invalid.
+
+    Map marker colors are interpolated into inline ``style="color: ...;"``
+    attribute values, so only values that cannot break out of the attribute or
+    inject markup are accepted: hex colors (#rgb, #rrggbb, #rrggbbaa) and simple
+    ASCII named colors (e.g. "red", "rebeccapurple"). Anything containing
+    quotes, angle brackets, semicolons, etc. is replaced with ``fallback``.
+    """
+    if not isinstance(color, str):
+        return fallback
+    if HEX_COLOR_RE.match(color) or NAMED_COLOR_RE.match(color):
+        return color
+    logger.warning("Ignoring invalid map marker color %r; using %r", color, fallback)
+    return fallback
 
 
 @dataclass
@@ -316,7 +342,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                     lon=wp_data["lon"],
                     type=wp_type,
                     icon=wp_data.get("icon", "fa-map-pin"),
-                    color=wp_data.get("color", "#007bff"),
+                    color=_normalize_color(wp_data.get("color"), "#007bff"),
                     description=wp_data.get("description", ""),
                     enabled=wp_data.get("enabled", True),
                     category=wp_data.get("category", ""),
@@ -337,7 +363,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
             collectors.append(CollectorConfig(
                 name=c_data["name"],
                 api_key=c_data.get("api_key", ""),
-                color=c_data.get("color", "#e67e22"),
+                color=_normalize_color(c_data.get("color"), "#e67e22"),
                 type=c_type,
                 lat=c_data.get("lat"),
                 lon=c_data.get("lon"),

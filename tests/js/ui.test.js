@@ -128,6 +128,21 @@ describe('UIController', () => {
     });
   });
 
+  describe('_sanitizeColor', () => {
+    test('accepts hex and simple named colors', () => {
+      expect(UIController._sanitizeColor('#e74c3c', '#007bff')).toBe('#e74c3c');
+      expect(UIController._sanitizeColor('red', '#007bff')).toBe('red');
+      expect(UIController._sanitizeColor('#abc', '#007bff')).toBe('#abc');
+    });
+
+    test('rejects attribute breakout and non-strings', () => {
+      expect(UIController._sanitizeColor('red" onmouseover="alert(1)', '#007bff')).toBe('#007bff');
+      expect(UIController._sanitizeColor('<script>x</script>', '#007bff')).toBe('#007bff');
+      expect(UIController._sanitizeColor(null, '#007bff')).toBe('#007bff');
+      expect(UIController._sanitizeColor(42, '#007bff')).toBe('#007bff');
+    });
+  });
+
   describe('_niceStep', () => {
     test('computes nice step values', () => {
       expect(UIController._niceStep(100, 4)).toBe(20);

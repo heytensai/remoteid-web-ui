@@ -184,8 +184,9 @@ User-controlled data (UAS IDs, session IDs, operator IDs) must ALWAYS be HTML-es
 1. **Never** interpolate user-controlled data directly into HTML strings or `innerHTML` — always use `escapeHtml()` or DOM manipulation.
 2. **Data attributes are safe** when set via `esc()` — the browser auto-decodes them on read via `.dataset.*`.
 3. `color` values from `getDroneColor()` are safe (constrained HSL output).
-4. Formatted values from `Units.*` are safe (numbers with unit labels).
-5. If adding a new object/controller, add an `escapeHtml` method following the same pattern.
+4. Config-supplied `color` fields (waypoints, collectors) are safe because `config._normalize_color()` constrains them to hex/simple named colors at load, and `MapController._sanitizeColor()` / `UIController._sanitizeColor()` re-check at render (defense-in-depth).
+5. Formatted values from `Units.*` are safe (numbers with unit labels).
+6. If adding a new object/controller, add an `escapeHtml` method following the same pattern.
 
 ## CSRF Protection
 

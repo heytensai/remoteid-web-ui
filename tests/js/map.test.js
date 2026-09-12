@@ -125,6 +125,37 @@ describe('MapController', () => {
     });
   });
 
+  describe('_sanitizeColor', () => {
+    test('passes through hex colors', () => {
+      expect(MapController._sanitizeColor('#e67e22', '#007bff')).toBe('#e67e22');
+      expect(MapController._sanitizeColor('#abc', '#007bff')).toBe('#abc');
+      expect(MapController._sanitizeColor('#11223344', '#007bff')).toBe('#11223344');
+    });
+
+    test('passes through simple named colors', () => {
+      expect(MapController._sanitizeColor('red', '#007bff')).toBe('red');
+      expect(MapController._sanitizeColor('rebeccapurple', '#007bff')).toBe('rebeccapurple');
+    });
+
+    test('rejects injected HTML/attribute breakout', () => {
+      expect(MapController._sanitizeColor('red" onmouseover="alert(1)', '#007bff')).toBe('#007bff');
+      expect(MapController._sanitizeColor('<script>alert(1)</script>', '#007bff')).toBe('#007bff');
+      expect(MapController._sanitizeColor('red; background:url(x)', '#007bff')).toBe('#007bff');
+      expect(MapController._sanitizeColor('`backtick`', '#007bff')).toBe('#007bff');
+    });
+
+    test('rejects non-string and empty values with fallback', () => {
+      expect(MapController._sanitizeColor(null, '#007bff')).toBe('#007bff');
+      expect(MapController._sanitizeColor(12345, '#007bff')).toBe('#007bff');
+      expect(MapController._sanitizeColor('', '#007bff')).toBe('#007bff');
+      expect(MapController._sanitizeColor(undefined, '#007bff')).toBe('#007bff');
+    });
+
+    test('uses the provided fallback, not a hardcoded default', () => {
+      expect(MapController._sanitizeColor('bad value', '#e67e22')).toBe('#e67e22');
+    });
+  });
+
   describe('getDroneName', () => {
     test('returns alias if available', () => {
       MapController.droneAliases = { 'drone-001': 'Alpha' };
