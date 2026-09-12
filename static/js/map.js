@@ -708,69 +708,78 @@ const MapController = {
         if (!this.ready) return;
         try {
             const data = await API.getCollectors();
-            // Remove all previous collector markers
-            for (const [name, marker] of Object.entries(this.collectorMarkers)) {
-                if (this._fixedMarkerNames.has(name)) {
-                    this.layers.fixedCollectors?.removeLayer(marker);
-                }
-                if (this._mobileMarkerNames.has(name)) {
-                    this.layers.mobileCollectors?.removeLayer(marker);
-                }
-            }
-            this._fixedMarkerNames = new Set();
-            this._mobileMarkerNames = new Set();
-            const esc = (v) => this.escapeHtml(v);
-            for (const c of data) {
-                if (c.latitude == null || c.longitude == null) continue;
-                const center = [c.latitude, c.longitude];
-                const layer = c.type === 'fixed' ? this.layers.fixedCollectors : this.layers.mobileCollectors;
-                if (!layer) continue;
-                const iconClass = c.type === 'fixed' ? 'fa-broadcast-tower' : 'fa-walkie-talkie';
-                const marker = L.marker(center, {
-                    icon: this.createCollectorIcon(c.color, c.stale, iconClass),
-                }).addTo(layer);
-                const age = c.updated_at
-                    ? Math.round((Date.now() - new Date(c.updated_at).getTime()) / 1000)
-                    : null;
-                const ageText = age != null
-                    ? (age < 120 ? `${age}s ago` : `${Math.round(age / 60)}m ago`)
-                    : 'never';
-                const typeLabel = c.type === 'fixed' ? 'fixed' : 'mobile';
-                let popup = `
-                    <div class="popup-title" style="color: ${c.stale ? '#999' : c.color};">
-                        <i class="fas ${iconClass}"></i> ${esc(c.name)}
-                        <span style="font-size:0.8em;opacity:0.6;margin-left:4px;">(${typeLabel})</span>
-                    </div>
-                    <div class="popup-row">
-                        <span class="popup-label">Position:</span>
-                        <span class="popup-value">${c.latitude.toFixed(6)}, ${c.longitude.toFixed(6)}</span>
-                    </div>
-                    <div class="popup-row">
-                        <span class="popup-label">Last Seen:</span>
-                        <span class="popup-value">${ageText}</span>
-                    </div>`;
-                if (c.stale) {
-                    popup += `
-                    <div class="popup-row" style="color:#999;">
-                        <span class="popup-label">Status:</span>
-                        <span class="popup-value">Stale</span>
-                    </div>`;
-                }
-                popup += '</div>';
-                marker.bindPopup(popup);
-                this.collectorMarkers[c.name] = marker;
-                if (c.type === 'fixed') {
-                    this._fixedMarkerNames.add(c.name);
-                } else {
-                    this._mobileMarkerNames.add(c.name);
-                }
-            }
+            this._applyCollectors(data);
         } catch (e) {
             console.error('Failed to update collectors:', e);
             if (typeof UIController !== 'undefined' && UIController.showToast) {
                 UIController.showToast('Failed to update collector positions', 'warning', {
                     dedupeKey: 'collector-update',
                 });
+            }
+        }
+    },
+
+    /**
+     * Update all collector markers from a given collector payload (same shape as
+     * the /api/collectors response, also bundled into full /api/refresh responses).
+     */
+    _applyCollectors(data) {
+        if (!this.ready || !Array.isArray(data)) return;
+        // Remove all previous collector markers
+        for (const [name, marker] of Object.entries(this.collectorMarkers)) {
+            if (this._fixedMarkerNames.has(name)) {
+                this.layers.fixedCollectors?.removeLayer(marker);
+            }
+            if (this._mobileMarkerNames.has(name)) {
+                this.layers.mobileCollectors?.removeLayer(marker);
+            }
+        }
+        this._fixedMarkerNames = new Set();
+        this._mobileMarkerNames = new Set();
+        const esc = (v) => this.escapeHtml(v);
+        for (const c of data) {
+            if (c.latitude == null || c.longitude == null) continue;
+            const center = [c.latitude, c.longitude];
+            const layer = c.type === 'fixed' ? this.layers.fixedCollectors : this.layers.mobileCollectors;
+            if (!layer) continue;
+            const iconClass = c.type === 'fixed' ? 'fa-broadcast-tower' : 'fa-walkie-talkie';
+            const marker = L.marker(center, {
+                icon: this.createCollectorIcon(c.color, c.stale, iconClass),
+            }).addTo(layer);
+            const age = c.updated_at
+                ? Math.round((Date.now() - new Date(c.updated_at).getTime()) / 1000)
+                : null;
+            const ageText = age != null
+                ? (age < 120 ? `${age}s ago` : `${Math.round(age / 60)}m ago`)
+                : 'never';
+            const typeLabel = c.type === 'fixed' ? 'fixed' : 'mobile';
+            let popup = `
+                <div class="popup-title" style="color: ${c.stale ? '#999' : c.color};">
+                    <i class="fas ${iconClass}"></i> ${esc(c.name)}
+                    <span style="font-size:0.8em;opacity:0.6;margin-left:4px;">(${typeLabel})</span>
+                </div>
+                <div class="popup-row">
+                    <span class="popup-label">Position:</span>
+                    <span class="popup-value">${c.latitude.toFixed(6)}, ${c.longitude.toFixed(6)}</span>
+                </div>
+                <div class="popup-row">
+                    <span class="popup-label">Last Seen:</span>
+                    <span class="popup-value">${ageText}</span>
+                </div>`;
+            if (c.stale) {
+                popup += `
+                <div class="popup-row" style="color:#999;">
+                    <span class="popup-label">Status:</span>
+                    <span class="popup-value">Stale</span>
+                </div>`;
+            }
+            popup += '</div>';
+            marker.bindPopup(popup);
+            this.collectorMarkers[c.name] = marker;
+            if (c.type === 'fixed') {
+                this._fixedMarkerNames.add(c.name);
+            } else {
+                this._mobileMarkerNames.add(c.name);
             }
         }
     },

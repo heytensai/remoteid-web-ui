@@ -60,6 +60,11 @@ const UIController = {
     // Incremental update tracking
     droneTimestamps: {}, // Map of "uas_id:session_id" -> last known timestamp
 
+    // Heartbeat full sync for lazy live polling — periodic authoritative
+    // snapshots let the client prune drones that left the live set.
+    fullSyncIntervalMs: 30000,
+    _lastFullSyncTime: 0,
+
     // Toast / connection tracking
     _toastMaxVisible: 5,
     _consecutiveFailures: 0,
@@ -294,6 +299,17 @@ const UIController = {
         } else {
             this._switchToFastPoll();
         }
+    },
+
+    /**
+     * Decide whether the next live refresh must be a full authoritative snapshot.
+     * True after init, while we have no known timestamps, or when the heartbeat
+     * interval has elapsed since the last full sync.
+     */
+    _shouldForceFullSync() {
+        if (!this._initialized) return true;
+        if (Object.keys(this.droneTimestamps).length === 0) return true;
+        return (Date.now() - this._lastFullSyncTime) >= this.fullSyncIntervalMs;
     },
 
     /**
@@ -1547,16 +1563,22 @@ const UIController = {
 
         try {
             // Consolidated refresh: returns drones, alerts, stats, and sources
+            // In live mode we request a lazy diff by default and force a full
+            // authoritative snapshot on init, manual refresh, and a heartbeat.
+            const wantFull = this._dataMode === 'live' && (showSpinner || this._shouldForceFullSync());
             const data = await API.getRefresh(
                 this.currentStartTime, this.currentEndTime,
-                this.droneTimestamps, this._dataMode
+                this.droneTimestamps, this._dataMode, wantFull
             );
 
-            // Update remote status
-            this.remotes = data.sources || [];
-            this._updateRemoteSummary();
-            if (this.remoteDetailOpen) {
-                this._renderRemoteDetail();
+            // Update remote status (full responses only — diff responses omit sources)
+            const hasSources = Array.isArray(data.sources);
+            this.remotes = data.sources || this.remotes;
+            if (hasSources) {
+                this._updateRemoteSummary();
+                if (this.remoteDetailOpen) {
+                    this._renderRemoteDetail();
+                }
             }
             const newDrones = data.drones || [];
             if (newDrones.length > 0 && this._initialized) {
@@ -1567,7 +1589,9 @@ const UIController = {
                 }
             }
             this.alertEvents = data.alerts ? data.alerts.active || [] : [];
-            this._renderStats(data.stats || {});
+            if (data.stats) {
+                this._renderStats(data.stats);
+            }
 
             // Update map alert state
             MapController.updateAlertState(this.alertEvents);
@@ -1587,8 +1611,10 @@ const UIController = {
             // In live mode the server returns the authoritative set of active
             // drones (within position_stale_minutes). Prune merged entries it
             // no longer reports so expired drones leave the list and the map
-            // without needing a page reload or a mode switch.
-            if (this._dataMode === 'live') {
+            // without needing a page reload or a mode switch. This only makes
+            // sense on a full snapshot — diff responses would wrongly evict
+            // every drone that merely hasn't changed.
+            if (this._dataMode === 'live' && data.full) {
                 const liveKeys = new Set(
                     newDrones.map(d => `${d.uas_id}:${d.computed_session_id || 'unknown'}`)
                 );
@@ -1655,7 +1681,7 @@ const UIController = {
                 MapController.updateDrones(drones);
                 const allUasIds = new Set(drones.map(d => d.uas_id));
                 MapController.filterOperatorsByUasIds(allUasIds);
-            } else {
+            } else if (data.full) {
                 MapController.dronePositions = {};
                 MapController.clearAllTracks();
                 MapController.clearAllOperators();
@@ -1669,12 +1695,22 @@ const UIController = {
                 }
             }
 
-            // Update mobile collector positions
-            await MapController._updateCollectors();
+            // Update collector positions — bundled into full live responses;
+            // fetched directly in archive mode (always full).
+            if (data.collectors) {
+                await MapController._applyCollectors(data.collectors);
+            } else if (data.full) {
+                await MapController._updateCollectors();
+            }
 
             // Update last update time
             this._updateLastUpdateTime();
             this._trackRefreshFailure(true);
+
+            // Mark the full-sync heartbeat for lazy live polling
+            if (data.full) {
+                this._lastFullSyncTime = Date.now();
+            }
 
         } catch (e) {
             console.error('Failed to refresh data:', e);

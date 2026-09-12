@@ -105,10 +105,12 @@ const API = {
      * Consolidated refresh: returns drones, alerts, stats, and sources in one call
      * @param {Date} start - Start time (archive mode only)
      * @param {Date} end - End time (archive mode only)
-     * @param {Object} knownTimestamps - Map of "uas_id:session_id" -> last known timestamp ISO string (archive mode only)
+     * @param {Object} knownTimestamps - Map of "uas_id:session_id" -> last known timestamp ISO string
      * @param {string} mode - "live" or "archive" (default: "live")
+     * @param {boolean} full - live mode only: request a full authoritative snapshot
+     *                         (default false — server returns only changed drones)
      */
-    async getRefresh(start, end, knownTimestamps, mode = 'live') {
+    async getRefresh(start, end, knownTimestamps, mode = 'live', full = false) {
         const params = new URLSearchParams();
         if (mode === 'archive') {
             if (start) params.append('start', start.toISOString());
@@ -116,7 +118,8 @@ const API = {
         }
         return this._post(`/api/refresh?${params}`, {
             mode,
-            known_timestamps: mode === 'archive' ? (knownTimestamps || {}) : {}
+            known_timestamps: knownTimestamps || {},
+            full: mode === 'live' ? !!full : false,
         });
     },
 

@@ -550,12 +550,40 @@ def get_drones_incremental():
     try:
         start, end = _parse_time_range(request.args)
         data = request.get_json() or {}
-        known_timestamps = data.get("known_timestamps", {})
+        known_timestamps = _sanitize_known_timestamps(data)
         drones = DATABASE.get_drones_incremental(start, end, known_timestamps)
         return jsonify({"drones": drones})
     except (ValueError, TypeError, psycopg2.Error):
         logger.exception("Error getting incremental drones")
         return jsonify({"error": "Internal server error"}), 500
+
+
+MAX_KNOWN_TIMESTAMPS = 1000
+
+
+def _sanitize_known_timestamps(data: dict) -> dict:
+    """Validate the client-supplied ``known_timestamps`` map from a refresh POST.
+
+    Returns a clean ``str -> ISO timestamp`` map, dropping entries that are not
+    parseable, coerceable to strings, or exceed :data:`MAX_KNOWN_TIMESTAMPS`.
+    Non-dict input degrades to an empty map, which the live branch treats as a
+    full snapshot. Keeps the diff query bounded and prevents malformed JSON
+    (``.items()`` on non-dicts, ``in`` on non-string keys, invalid timestamp
+    casts in PostgreSQL) from 500-ing the endpoint.
+    """
+    raw = data.get("known_timestamps", {})
+    if not isinstance(raw, dict):
+        return {}
+    cleaned = {}
+    for key, ts in raw.items():
+        if not isinstance(ts, str) or len(cleaned) >= MAX_KNOWN_TIMESTAMPS:
+            continue
+        try:
+            datetime.fromisoformat(ts)
+        except ValueError:
+            continue
+        cleaned[str(key)] = ts
+    return cleaned
 
 
 @app.route("/api/refresh", methods=["POST"])
@@ -565,7 +593,11 @@ def get_refresh():
 
     POST body:
         mode: "live" (default) or "archive"
-        known_timestamps: dict of "uas_id:session_id" -> ISO timestamp (archive only)
+        known_timestamps: dict of "uas_id:session_id" -> ISO timestamp
+        full: bool — live mode only. When false, only drones newer than the
+              client's known timestamps are returned (diff), skipping stats,
+              sources, and collectors. A ``full`` snapshot is required for the
+              client to prune drones that left the live set.
     Query params:
         start, end: time window (archive only)
     """
@@ -574,14 +606,7 @@ def get_refresh():
         mode = data.get("mode", "live")
         if mode not in ("live", "archive"):
             return jsonify({"error": f"Invalid mode: {mode}"}), 400
-        known_timestamps = data.get("known_timestamps", {})
-
-        if mode == "live":
-            stale = _get_config().position_stale_minutes
-            drones = DATABASE.get_live_drones(stale)
-        else:
-            start, end = _parse_time_range(request.args)
-            drones = DATABASE.get_drones_incremental(start, end, known_timestamps)
+        known_timestamps = _sanitize_known_timestamps(data)
 
         try:
             active = DATABASE.get_active_geozone_events()
@@ -589,42 +614,85 @@ def get_refresh():
             logger.exception("Error getting alerts in refresh")
             active = []
         uas_ids = list(set(e["uas_id"] for e in active))
+        alerts = {"active": active, "uas_ids": uas_ids, "count": len(active)}
 
-        try:
-            if mode == "live":
-                stats = {
+        if mode == "live":
+            stale = _get_config().position_stale_minutes
+            is_full = data.get("full", False) or not known_timestamps
+            if is_full:
+                drones = DATABASE.get_live_drones(stale)
+            else:
+                drones = DATABASE.get_live_drones_incremental(stale, known_timestamps)
+
+            response = {
+                "changed": is_full or bool(drones),
+                "full": is_full,
+                "drones": drones,
+                "alerts": alerts,
+            }
+
+            if is_full:
+                raw_sources = []
+                sources = []
+                try:
+                    raw_sources = DATABASE.get_all_sources()
+                    collector_names = {c.name for c in _get_config().collectors}
+                    for source_info in raw_sources:
+                        sources.append({
+                            "name": source_info["source"],
+                            "last_sync": _format_utc_ts(source_info["last_sync"]),
+                            "last_data": _format_utc_ts(source_info["last_data"]),
+                            "type": (
+                                "collector"
+                                if source_info["source"] in collector_names
+                                else "api"
+                            ),
+                        })
+                except psycopg2.Error:
+                    logger.exception("Error getting sources in refresh")
+                response["stats"] = {
                     "total_drones": len(set(d["uas_id"] for d in drones)),
                     "total_sessions": len(drones),
                     "total_positions": 0,
                     "active_alerts": 0,
                     "total_alerts": 0,
                 }
-            else:
+                response["sources"] = sources
+                response["collectors"] = _build_collector_payload(sources=raw_sources)
+        else:
+            start, end = _parse_time_range(request.args)
+            drones = DATABASE.get_drones_incremental(start, end, known_timestamps)
+
+            try:
                 stats = DATABASE.get_stats(start, end)
-        except (psycopg2.Error, ValueError, TypeError):
-            logger.exception("Error getting stats in refresh")
-            stats = {}
+            except (psycopg2.Error, ValueError, TypeError):
+                logger.exception("Error getting stats in refresh")
+                stats = {}
 
-        try:
-            sources = []
-            collector_names = {c.name for c in _get_config().collectors}
-            for source_info in DATABASE.get_all_sources():
-                sources.append({
-                    "name": source_info["source"],
-                    "last_sync": _format_utc_ts(source_info["last_sync"]),
-                    "last_data": _format_utc_ts(source_info["last_data"]),
-                    "type": "collector" if source_info["source"] in collector_names else "api",
-                })
-        except psycopg2.Error:
-            logger.exception("Error getting sources in refresh")
-            sources = []
+            try:
+                sources = []
+                collector_names = {c.name for c in _get_config().collectors}
+                for source_info in DATABASE.get_all_sources():
+                    sources.append({
+                        "name": source_info["source"],
+                        "last_sync": _format_utc_ts(source_info["last_sync"]),
+                        "last_data": _format_utc_ts(source_info["last_data"]),
+                        "type": "collector" if source_info["source"] in collector_names else "api",
+                    })
+            except psycopg2.Error:
+                logger.exception("Error getting sources in refresh")
+                sources = []
 
-        return jsonify({
-            "drones": drones,
-            "alerts": {"active": active, "uas_ids": uas_ids, "count": len(active)},
-            "stats": stats,
-            "sources": sources,
-        })
+            response = {
+                "changed": True,
+                "full": True,
+                "drones": drones,
+                "alerts": alerts,
+                "stats": stats,
+                "sources": sources,
+            }
+
+        return jsonify(response)
     except (ValueError, TypeError, psycopg2.Error):
         logger.exception("Error in refresh endpoint")
         return jsonify({"error": "Internal server error"}), 500
@@ -1157,18 +1225,25 @@ def submit_ping():
         return jsonify({"success": False, "error": "Internal server error"}), 500
 
 
-@app.route("/api/collectors")
-@require_permission("view_sources")
-def get_collectors():
-    """Get current positions and status for all configured collectors"""
+def _build_collector_payload(sources: Optional[List[Dict]] = None) -> List[Dict]:
+    """Build the collector status array (same shape as ``GET /api/collectors``).
+
+    ``sources`` may be passed in when the caller has already fetched
+    :meth:`WebDatabase.get_all_sources` to avoid a duplicate query; otherwise it
+    is fetched here.
+    """
+    config = _get_config()
+    if not config.collectors:
+        return []
     positions = DATABASE.get_collector_positions()
     pos_by_name = {p["name"]: p for p in positions}
-    sources = DATABASE.get_all_sources()
+    if sources is None:
+        sources = DATABASE.get_all_sources()
     last_sync_by_name = {s["source"]: s["last_sync"] for s in sources}
-    stale_seconds = _get_config().position_stale_minutes * 60
+    stale_seconds = config.position_stale_minutes * 60
     now = datetime.now(timezone.utc)
     result = []
-    for c in _get_config().collectors:
+    for c in config.collectors:
         last_sync = last_sync_by_name.get(c.name)
         updated = None
         is_stale = True
@@ -1202,7 +1277,14 @@ def get_collectors():
                 "updated_at": updated,
                 "stale": is_stale,
             })
-    return jsonify(result)
+    return result
+
+
+@app.route("/api/collectors")
+@require_permission("view_sources")
+def get_collectors():
+    """Get current positions and status for all configured collectors"""
+    return jsonify(_build_collector_payload())
 
 
 @app.route("/api/sessions/redetect", methods=["POST"])

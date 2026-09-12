@@ -226,6 +226,36 @@ describe('API', () => {
       expect(url).not.toContain('start=');
       expect(url).not.toContain('end=');
     });
+
+    test('live mode sends known_timestamps and a full flag', async () => {
+      global.fetch = mockFetch({ changed: false, full: false, drones: [], alerts: {} });
+
+      await API.getRefresh(null, null, { 'd1:s1': '2024-01-01T12:00:00Z' }, 'live', true);
+      const options = fetch.mock.calls[0][1];
+      const body = JSON.parse(options.body);
+      expect(body.mode).toBe('live');
+      expect(body.known_timestamps).toEqual({ 'd1:s1': '2024-01-01T12:00:00Z' });
+      expect(body.full).toBe(true);
+    });
+
+    test('live mode defaults full to false', async () => {
+      global.fetch = mockFetch({ changed: false, full: false, drones: [], alerts: {} });
+
+      await API.getRefresh(null, null, {}, 'live');
+      const options = fetch.mock.calls[0][1];
+      const body = JSON.parse(options.body);
+      expect(body.full).toBe(false);
+    });
+
+    test('archive mode never sets full', async () => {
+      global.fetch = mockFetch({ drones: [], alerts: {}, stats: {}, sources: [] });
+
+      await API.getRefresh(null, null, {}, 'archive', true);
+      const options = fetch.mock.calls[0][1];
+      const body = JSON.parse(options.body);
+      expect(body.full).toBe(false);
+      expect(body.known_timestamps).toEqual({});
+    });
   });
 
   describe('search', () => {

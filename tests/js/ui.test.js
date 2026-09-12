@@ -72,6 +72,8 @@ global.MapController = {
   loadTrackSession: jest.fn(),
   loadTracksBatch: jest.fn().mockResolvedValue({}),
   updateAlertState: jest.fn(),
+  _updateCollectors: jest.fn(),
+  _applyCollectors: jest.fn(),
 };
 
 global.Units = {
@@ -610,9 +612,10 @@ describe('UIController', () => {
       ]);
       UIController.visibleSessions = new Set(['uas-456:session_expired']);
 
-      // Server no longer reports the dormant drone as live
+      // Server no longer reports the dormant drone as live (full authoritative snapshot)
       API.getRefresh.mockResolvedValue({
         drones: [],
+        full: true,
         sources: [],
         alerts: { active: [] },
         stats: {},
@@ -651,6 +654,7 @@ describe('UIController', () => {
       };
       API.getRefresh.mockResolvedValue({
         drones: [resumableDrone],
+        full: true,
         sources: [],
         alerts: { active: [] },
         stats: {},
@@ -660,6 +664,128 @@ describe('UIController', () => {
 
       expect(UIController.droneMap['uas-789:session_9']).toBeDefined();
       expect(UIController.droneMap['uas-789:unknown']).toBeUndefined();
+    });
+
+    test('keeps droneMap untouched on a diff (full:false) response', async () => {
+      UIController.droneMap = {
+        'uas-000:session_live': {
+          uas_id: 'uas-000',
+          computed_session_id: 'session_live',
+          timestamp: '2024-01-01T00:30:00Z',
+          latitude: 1,
+          longitude: 2,
+          altitude: 10,
+        },
+      };
+      UIController.droneTimestamps = {
+        'uas-000:session_live': '2024-01-01T00:30:00Z',
+      };
+      UIController.loadedTracks = new Map([
+        ['uas-000:session_live', '2024-01-01T00:30:00Z'],
+      ]);
+      UIController.visibleSessions = new Set(['uas-000:session_live']);
+
+      // Diff response: no full snapshot, no changed drones. The client must
+      // NOT treat the omitted drone as expired.
+      API.getRefresh.mockResolvedValue({
+        drones: [],
+        full: false,
+        sources: [],
+        alerts: { active: [] },
+        stats: {},
+      });
+
+      await UIController.refreshData();
+
+      expect(UIController.droneMap['uas-000:session_live']).toBeDefined();
+      expect(UIController.droneTimestamps['uas-000:session_live']).toBe('2024-01-01T00:30:00Z');
+      expect(UIController.loadedTracks.has('uas-000:session_live')).toBe(true);
+    });
+
+    test('records the full-sync heartbeat after a full response', async () => {
+      UIController._lastFullSyncTime = 0;
+      UIController.droneMap = {};
+      UIController.droneTimestamps = {};
+      API.getRefresh.mockResolvedValue({
+        drones: [],
+        full: true,
+        sources: [],
+        alerts: { active: [] },
+        stats: {},
+      });
+
+      await UIController.refreshData();
+
+      expect(UIController._lastFullSyncTime).not.toBe(0);
+    });
+
+    test('applies bundled collectors on a full response instead of fetching', async () => {
+      MapController._applyCollectors.mockClear();
+      MapController._updateCollectors.mockClear();
+      const collectors = [
+        { name: 'Node1', color: '#f00', type: 'fixed', latitude: 37.78, longitude: -122.41, stale: false },
+      ];
+      UIController.droneMap = {};
+      UIController.droneTimestamps = {};
+      API.getRefresh.mockResolvedValue({
+        drones: [],
+        full: true,
+        sources: [],
+        alerts: { active: [] },
+        stats: {},
+        collectors,
+      });
+
+      await UIController.refreshData();
+
+      expect(MapController._applyCollectors).toHaveBeenCalledWith(collectors);
+      expect(MapController._updateCollectors).not.toHaveBeenCalled();
+    });
+
+    test('skips collector work entirely on a diff response', async () => {
+      MapController._applyCollectors.mockClear();
+      MapController._updateCollectors.mockClear();
+      UIController.droneMap = {};
+      UIController.droneTimestamps = {};
+      API.getRefresh.mockResolvedValue({
+        drones: [],
+        full: false,
+        sources: [],
+        alerts: { active: [] },
+        stats: {},
+      });
+
+      await UIController.refreshData();
+
+      expect(MapController._applyCollectors).not.toHaveBeenCalled();
+      expect(MapController._updateCollectors).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('_shouldForceFullSync', () => {
+    test('true before initialization', () => {
+      UIController._initialized = false;
+      expect(UIController._shouldForceFullSync()).toBe(true);
+    });
+
+    test('true while no known timestamps', () => {
+      UIController._initialized = true;
+      UIController.droneTimestamps = {};
+      expect(UIController._shouldForceFullSync()).toBe(true);
+    });
+
+    test('true when the heartbeat interval has elapsed', () => {
+      UIController._initialized = true;
+      UIController.droneTimestamps = { 'uas-000:s1': '2024-01-01T00:00:00Z' };
+      UIController._lastFullSyncTime = 0;
+      expect(UIController._shouldForceFullSync()).toBe(true);
+    });
+
+    test('false shortly after a full sync', () => {
+      UIController._initialized = true;
+      UIController.droneTimestamps = { 'uas-000:s1': '2024-01-01T00:00:00Z' };
+      UIController._lastFullSyncTime = Date.now();
+      expect(UIController._shouldForceFullSync()).toBe(false);
     });
   });
 

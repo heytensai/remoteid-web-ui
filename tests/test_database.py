@@ -1163,3 +1163,71 @@ def test_get_live_drones_empty(db):
 
     result = db.get_live_drones(stale_minutes=30)
     assert result == []
+
+
+# --- get_live_drones_incremental tests ---
+
+def _insert_latest_position(db, uas_id, session_id, timestamp, lat=37.7, lon=-122.4,
+                            altitude=100, height=50, height_type="agl",
+                            max_height=80, source="test"):
+    """Insert a row directly into latest_positions (bypassing session detection)."""
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO latest_positions
+               (uas_id, computed_session_id, max_ts, min_ts, latitude, longitude,
+                altitude, height, height_type, max_height, source)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (uas_id, session_id, timestamp.isoformat(),
+             (timestamp - timedelta(minutes=5)).isoformat(),
+             lat, lon, altitude, height, height_type, max_height, source),
+        )
+        conn.commit()
+    finally:
+        db._put_conn(conn)
+
+
+def test_get_live_drones_incremental_empty_known(db):
+    """With no known timestamps, returns the full live snapshot."""
+    now = datetime.now(timezone.utc)
+    _insert_latest_position(db, "live-001", "session_1", now - timedelta(minutes=1))
+    result = db.get_live_drones_incremental(30, {})
+    assert "live-001" in [r["uas_id"] for r in result]
+
+
+def test_get_live_drones_incremental_all_known_fresh(db):
+    """All known timestamps newer than the data -> no drones returned."""
+    now = datetime.now(timezone.utc)
+    _insert_latest_position(db, "live-002", "session_2", now - timedelta(minutes=1))
+    known = {"live-002:session_2": (now + timedelta(days=1)).isoformat()}
+    assert db.get_live_drones_incremental(30, known) == []
+
+
+def test_get_live_drones_incremental_returns_changed_known(db):
+    """A known session with data newer than its known timestamp is returned."""
+    now = datetime.now(timezone.utc)
+    _insert_latest_position(db, "live-003", "session_3", now - timedelta(minutes=1))
+    known = {
+        "live-003:session_3": (now - timedelta(minutes=10)).isoformat(),
+        "live-004:session_4": (now + timedelta(days=1)).isoformat(),
+    }
+    result = db.get_live_drones_incremental(30, known)
+    assert [r["uas_id"] for r in result] == ["live-003"]
+
+
+def test_get_live_drones_incremental_returns_new_session(db):
+    """A session the client doesn't track is returned even if not in known."""
+    now = datetime.now(timezone.utc)
+    _insert_latest_position(db, "live-005", "session_5", now - timedelta(minutes=1))
+    known = {"live-006:session_6": (now + timedelta(days=1)).isoformat()}
+    result = db.get_live_drones_incremental(30, known)
+    assert [r["uas_id"] for r in result] == ["live-005"]
+
+
+def test_get_live_drones_incremental_stale_session_not_returned(db):
+    """Sessions beyond the stale cutoff are excluded even if newer than known."""
+    now = datetime.now(timezone.utc)
+    _insert_latest_position(db, "live-stale", "session_7", now - timedelta(hours=2))
+    known = {"live-stale:session_7": (now - timedelta(hours=3)).isoformat()}
+    assert db.get_live_drones_incremental(30, known) == []

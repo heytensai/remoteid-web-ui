@@ -863,6 +863,18 @@ class TestApiDronesIncremental:
         data = resp.get_json()
         assert data["drones"] == []
 
+    def test_incremental_drones_malformed_known_timestamps_is_safe(self, client):
+        """Non-dict known_timestamps on the incremental endpoint degrades cleanly."""
+        resp = client.post(
+            "/api/drones/incremental?start=2020-01-01T00:00:00&end=2020-01-02T00:00:00",
+            data=json.dumps({"known_timestamps": [1, 2, 3]}),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "drones" in data
+
 
 class TestApiRefresh:
     def test_refresh_endpoint(self, client, db):
@@ -926,6 +938,185 @@ class TestApiRefresh:
         assert data["stats"]["total_drones"] == len(set(
             d["uas_id"] for d in data["drones"]
         ))
+
+    def test_refresh_live_full_includes_collectors(self, client, db):
+        """A full live response bundles the collector payload."""
+        resp = client.post(
+            "/api/refresh",
+            data=json.dumps({"mode": "live", "full": True}),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["full"] is True
+        assert data["changed"] is True
+        assert "stats" in data
+        assert "sources" in data
+        assert "collectors" in data
+
+    def test_refresh_live_diff_no_changes(self, client, db):
+        """A live diff with nothing newer than the client's timestamps is tiny."""
+        now = datetime.now(timezone.utc)
+        resp = client.post(
+            "/api/refresh",
+            data=json.dumps({
+                "mode": "live",
+                "full": False,
+                "known_timestamps": {
+                    "drone-001:session_a": (now + timedelta(days=1)).isoformat(),
+                },
+            }),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["full"] is False
+        assert data["changed"] is False
+        assert data["drones"] == []
+        assert "alerts" in data
+        assert "stats" not in data
+        assert "sources" not in data
+        assert "collectors" not in data
+
+    def test_refresh_live_diff_returns_only_changed_drone(self, client, db):
+        """A live diff returns only the newly seen drone, not the full set."""
+        import app as _app_module
+        now = datetime.now(timezone.utc)
+
+        def _insert(uas_id, minutes_ago):
+            inserted, _, _ = _app_module.DATABASE.insert_remoteid_records(
+                "test-source",
+                [{
+                    "timestamp": (now - timedelta(minutes=minutes_ago)).isoformat(),
+                    "uas_id": uas_id,
+                    "latitude": 37.70,
+                    "longitude": -122.40,
+                    "altitude": 100.0,
+                }],
+            )
+            assert inserted == 1
+
+        _insert("live-drone-a", minutes_ago=5)
+
+        full = client.post(
+            "/api/refresh",
+            data=json.dumps({"mode": "live", "full": True}),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        ).get_json()
+        assert any(d["uas_id"] == "live-drone-a" for d in full["drones"])
+        known = {
+            f"{d['uas_id']}:{d.get('computed_session_id') or 'unknown'}": d["timestamp"]
+            for d in full["drones"]
+        }
+
+        # Nothing new -> no-op diff
+        noop = client.post(
+            "/api/refresh",
+            data=json.dumps({"mode": "live", "full": False, "known_timestamps": known}),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        ).get_json()
+        assert noop["changed"] is False
+        assert noop["drones"] == []
+
+        # A brand-new drone appears in the next diff, and only it
+        _insert("live-drone-b", minutes_ago=1)
+        diff = client.post(
+            "/api/refresh",
+            data=json.dumps({"mode": "live", "full": False, "known_timestamps": known}),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        ).get_json()
+        assert diff["changed"] is True
+        assert [d["uas_id"] for d in diff["drones"]] == ["live-drone-b"]
+
+    def test_refresh_live_malformed_known_timestamps_type_is_safe(self, client):
+        """Non-dict known_timestamps degrades to a full snapshot (no 500)."""
+        resp = client.post(
+            "/api/refresh",
+            data=json.dumps({"mode": "live", "full": False, "known_timestamps": "oops"}),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["full"] is True
+        assert "drones" in data
+
+    def test_refresh_live_garbage_timestamp_values_sanitized(self, client, db):
+        """Unparseable timestamp values are dropped; the rest still works."""
+        import app as _app_module
+        now = datetime.now(timezone.utc)
+        inserted, _, _ = _app_module.DATABASE.insert_remoteid_records(
+            "test-source",
+            [{
+                "timestamp": (now - timedelta(minutes=1)).isoformat(),
+                "uas_id": "live-sanity-a",
+                "latitude": 38.0,
+                "longitude": -122.5,
+                "altitude": 200.0,
+            }],
+        )
+        assert inserted == 1
+
+        resp = client.post(
+            "/api/refresh",
+            data=json.dumps({
+                "mode": "live",
+                "full": False,
+                "known_timestamps": {
+                    "live-sanity-a:session_1": "not-a-valid-timestamp",
+                    "other:session_2": "also-not-valid",
+                },
+            }),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        # All keys were invalid → cleaned empty → server treats as full snapshot
+        assert data["full"] is True
+        assert any(d["uas_id"] == "live-sanity-a" for d in data["drones"])
+
+    def test_refresh_live_non_string_keys_sanitized(self, client):
+        """Non-string keys are coerced to str without crashing."""
+        resp = client.post(
+            "/api/refresh",
+            data=json.dumps({
+                "mode": "live",
+                "full": False,
+                "known_timestamps": {
+                    123: "2026-01-01T00:00:00+00:00",
+                },
+            }),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "drones" in data
+        assert "alerts" in data
+
+    def test_refresh_known_timestamps_overflow_capped(self, client):
+        """More than MAX_KNOWN_TIMESTAMPS entries are silently capped."""
+        future = (datetime.now() + timedelta(days=1)).isoformat()
+        large = {f"uas-{i}:session_{i}": future for i in range(1500)}
+        resp = client.post(
+            "/api/refresh",
+            data=json.dumps({
+                "mode": "live",
+                "full": False,
+                "known_timestamps": large,
+            }),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "drones" in data
 
     def test_refresh_invalid_mode(self, client):
         resp = client.post(

@@ -1259,6 +1259,112 @@ class WebDatabase:
         finally:
             self._put_conn(conn)
 
+    def get_live_drones_incremental(
+        self, stale_minutes: int, known_timestamps: Dict[str, str]
+    ) -> List[Dict]:
+        """Return live sessions whose data is newer than the client's known timestamps.
+
+        Mirrors :meth:`get_drones_incremental` but bounded by the live stale cutoff
+        instead of an explicit time window. With no known timestamps it behaves
+        exactly like :meth:`get_live_drones` (full live snapshot).
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)
+        conn = self._get_conn()
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
+            if not known_timestamps:
+                cur.execute(
+                    """
+                    SELECT
+                        uas_id,
+                        NULLIF(computed_session_id, '') as computed_session_id,
+                        max_ts as timestamp,
+                        min_ts as session_start,
+                        latitude, longitude, altitude, height, height_type, max_height,
+                        operator_id,
+                        operator_latitude, operator_longitude, source,
+                        collector_latitude, collector_longitude
+                    FROM latest_positions
+                    WHERE max_ts > %s
+                    ORDER BY uas_id, computed_session_id
+                    """,
+                    (cutoff,),
+                )
+                return [self._sanitize_record(dict(row)) for row in cur.fetchall()]
+
+            # Known sessions — reuse per-key "newer than known" clauses
+            conditions = []
+            params = []
+            for key, ts in known_timestamps.items():
+                if ':' in key:
+                    uas_id, session_id = key.split(':', 1)
+                    if session_id != 'unknown':
+                        conditions.append(
+                            "(uas_id = %s AND computed_session_id = %s AND max_ts > %s)"
+                        )
+                        params.extend([uas_id, session_id, ts])
+                    else:
+                        conditions.append(
+                            "(uas_id = %s AND computed_session_id = '' AND max_ts > %s)"
+                        )
+                        params.extend([uas_id, ts])
+                else:
+                    conditions.append(
+                        "(uas_id = %s AND computed_session_id = '' AND max_ts > %s)"
+                    )
+                    params.extend([key, ts])
+
+            results = []
+
+            if conditions:
+                where_clause = " OR ".join(conditions)
+                cur.execute(
+                    f"""
+                    SELECT
+                        uas_id,
+                        NULLIF(computed_session_id, '') as computed_session_id,
+                        max_ts as timestamp, min_ts as session_start,
+                        latitude, longitude, altitude, height, height_type, max_height,
+                        operator_id,
+                        operator_latitude, operator_longitude, source,
+                        collector_latitude, collector_longitude
+                    FROM latest_positions
+                    WHERE ({where_clause}) AND max_ts > %s
+                    ORDER BY uas_id, computed_session_id
+                    """,
+                    params + [cutoff],
+                )
+                results.extend(cur.fetchall())
+
+            # Brand-new sessions the client doesn't track, within the stale window
+            known_keys = set(known_timestamps.keys())
+            cur.execute(
+                """
+                SELECT
+                    uas_id,
+                    NULLIF(computed_session_id, '') as computed_session_id,
+                    max_ts as timestamp, min_ts as session_start,
+                    latitude, longitude, altitude, height, height_type, max_height,
+                    operator_id,
+                    operator_latitude, operator_longitude, source,
+                    collector_latitude, collector_longitude
+                FROM latest_positions
+                WHERE max_ts > %s
+                ORDER BY uas_id, computed_session_id
+                """,
+                (cutoff,),
+            )
+            for row in cur.fetchall():
+                sid = row['computed_session_id'] or 'unknown'
+                key = f"{row['uas_id']}:{sid}"
+                if key not in known_keys:
+                    results.append(row)
+
+            return [self._sanitize_record(dict(row)) for row in results]
+        finally:
+            self._put_conn(conn)
+
     def get_drones(self, start_time: datetime, end_time: datetime) -> List[Dict]:
         """Get list of unique drones seen in time window with latest positions"""
         return self._get_drones_query(start_time, end_time)
