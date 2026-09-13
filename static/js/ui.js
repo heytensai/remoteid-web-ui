@@ -318,25 +318,16 @@ const UIController = {
         if (this._collectorStatusLoading) return;
         this._collectorStatusLoading = true;
         try {
-            const [sourcesResult, collectorsResult] = await Promise.allSettled([
-                API.getSources(),
-                API.getCollectors(),
-            ]);
-            if (sourcesResult.status === 'fulfilled') {
-                const data = sourcesResult.value;
-                this.remotes = (data && data.sources) || [];
-                this._updateRemoteSummary();
-                if (this.remoteDetailOpen) {
-                    this._renderRemoteDetail();
-                }
-            } else {
-                console.warn('[CollectorPoll] Sources refresh failed:', sourcesResult.reason);
+            const data = await API.getSources();
+            const sources = (data && data.sources) || [];
+            this.remotes = sources;
+            this._updateRemoteSummary();
+            if (this.remoteDetailOpen) {
+                this._renderRemoteDetail();
             }
-            if (collectorsResult.status === 'fulfilled') {
-                MapController._applyCollectors(collectorsResult.value);
-            } else {
-                console.warn('[CollectorPoll] Collectors refresh failed:', collectorsResult.reason);
-            }
+            MapController._applyCollectors(sources.filter(s => s.type === 'collector'));
+        } catch (e) {
+            console.warn('[CollectorPoll] Sources refresh failed:', e);
         } finally {
             this._collectorStatusLoading = false;
         }
@@ -956,7 +947,6 @@ const UIController = {
             this.defaultHours = config.default_hours || 24;
             this.droneAliases = config.drone_aliases || {};
             this.manufacturerPrefixes = config.manufacturer_prefixes || {};
-            this.positionStaleMinutes = config.position_stale_minutes || 30;
             this.collectorNames = new Set((config.collectors || []).map(c => c.name));
 
             // Merge server-side permissions if available (auth from middleware)
@@ -1513,6 +1503,7 @@ const UIController = {
      * Load remote sources status from server
      */
     async _loadRemoteStatus() {
+        if (!this.hasPermission('view_sources')) return;
         try {
             const data = await API.getSources();
             this.remotes = data.sources || [];
@@ -1537,17 +1528,10 @@ const UIController = {
             el.innerHTML = 'No remotes configured';
             return;
         }
-        const now = Date.now();
-        const twentyMin = 20 * 60 * 1000;
-        const staleMs = (this.positionStaleMinutes || 30) * 60 * 1000;
         let connected = 0;
         let latestDataTs = 0;
         for (const r of this.remotes) {
-            if (r.last_sync && r.last_sync !== 'Never') {
-                const ts = new Date(r.last_sync).getTime();
-                const threshold = r.type === 'collector' ? staleMs : twentyMin;
-                if (now - ts < threshold) connected++;
-            }
+            if (r.online === true) connected++;
             if (r.last_data && r.last_data !== 'Never') {
                 const ts = new Date(r.last_data).getTime();
                 if (ts > latestDataTs) latestDataTs = ts;
@@ -1575,9 +1559,6 @@ const UIController = {
             return;
         }
         if (header) header.textContent = 'Remote Sources';
-        const now = Date.now();
-        const twentyMin = 20 * 60 * 1000;
-        const staleMs = (this.positionStaleMinutes || 30) * 60 * 1000;
         const esc = (v) => this.escapeHtml(v);
 
         const fmt = (v) => {
@@ -1588,9 +1569,7 @@ const UIController = {
 
         let html = '';
         for (const r of this.remotes) {
-            const syncTs = r.last_sync && r.last_sync !== 'Never' ? new Date(r.last_sync) : null;
-            const threshold = r.type === 'collector' ? staleMs : twentyMin;
-            const isActive = syncTs && (now - syncTs.getTime() < threshold);
+            const isActive = r.online === true;
             const iconHtml = isActive
                 ? '<i class="fas fa-check-circle remote-icon active" title="Active"></i>'
                 : '<i class="fas fa-clock remote-icon stale" title="No recent activity"></i>';

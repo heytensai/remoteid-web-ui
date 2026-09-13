@@ -394,11 +394,164 @@ class TestApiBounds:
 
 
 class TestApiSources:
-    def test_get_sources(self, client):
-        resp = client.get("/api/sources")
+    def _token_for_role(self, client, name, role):
+        import app as _app_module
+        db = _app_module.DATABASE
+        expires = datetime.now(timezone.utc) + timedelta(days=7)
+        db.create_user(name, f"{name}@example.com", role, f"{name}-login", expires)
+        resp = client.post("/api/auth/login",
+            data=json.dumps({"login_token": f"{name}-login"}),
+            content_type="application/json",
+        )
         assert resp.status_code == 200
-        data = resp.get_json()
-        assert "sources" in data
+        return resp.get_json()["token"]
+
+    def test_sources_empty_without_data(self, client, app):
+        """With no data producers and no collectors, returns an empty list."""
+        token = self._token_for_role(client, "OpUser", "operator")
+        resp = client.get("/api/sources", headers={"X-Auth-Token": token})
+        assert resp.status_code == 200
+        assert resp.get_json() == {"sources": []}
+
+    def test_sources_requires_view_sources_permission(self, client, app):
+        """Roles without view_sources get a 403."""
+        token = self._token_for_role(client, "Viewer", "viewer")
+        resp = client.get("/api/sources", headers={"X-Auth-Token": token})
+        assert resp.status_code == 403
+        assert resp.get_json()["required_permission"] == "view_sources"
+
+    def test_sources_lists_api_submitter(self, db, client, app):
+        """A plain API submitter appears with type 'api'."""
+        token = self._token_for_role(client, "OpUser", "operator")
+        resp = client.get("/api/sources", headers={"X-Auth-Token": token})
+        assert resp.status_code == 200
+        sources = resp.get_json()["sources"]
+        assert len(sources) == 1
+        item = sources[0]
+        assert item["name"] == "test-source"
+        assert item["type"] == "api"
+        # No sync_log entries for this source -> total_records is null and
+        # last_sync is synthesized from the newest stored data
+        assert item["total_records"] is None
+        assert item["last_sync"] == item["last_data"]
+        assert item["last_data"] != "Never"
+        # Only data is 1-4h old, outside the 20-minute API window
+        assert item["online"] is False
+
+    def test_sources_online_from_fresh_data_without_sync_log(self, db, client, app):
+        """#171: a source transmitting fresh data is online even when its
+        sync_log entry is missing/stale."""
+        db.insert_remoteid_records("raw-online", [
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "uas_id": "drone-fresh",
+                "latitude": 37.1,
+                "longitude": -122.1,
+                "altitude": 50.0,
+            }
+        ])
+        token = self._token_for_role(client, "OpUser", "operator")
+        resp = client.get("/api/sources", headers={"X-Auth-Token": token})
+        item = next(s for s in resp.get_json()["sources"] if s["name"] == "raw-online")
+        assert item["last_sync"] == item["last_data"]
+        assert item["online"] is True
+
+    def test_sources_online_from_fresh_data_with_stale_sync_log(self, db, client, app):
+        """#171 regression: a stale last_sync must not flip a source offline
+        while its data (last_data) is current — online uses the fresher of the
+        two."""
+        now = datetime.now(timezone.utc)
+        # Stale sync_log row (2h ago) plus fresh remoteid data (5 min ago)
+        conn = db._get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO sync_log (source, last_sync, records_imported) "
+                "VALUES (%s, %s, %s)",
+                ("stale-sync", now - timedelta(hours=2), 0),
+            )
+            conn.commit()
+        finally:
+            db._put_conn(conn)
+        db.insert_remoteid_records("stale-sync", [
+            {
+                "timestamp": (now - timedelta(minutes=5)).isoformat(),
+                "uas_id": "drone-fresh",
+                "latitude": 37.1,
+                "longitude": -122.1,
+                "altitude": 50.0,
+            }
+        ])
+        token = self._token_for_role(client, "OpUser", "operator")
+        resp = client.get("/api/sources", headers={"X-Auth-Token": token})
+        item = next(s for s in resp.get_json()["sources"] if s["name"] == "stale-sync")
+        assert item["last_sync"].startswith("2026")
+        assert item["last_data"].startswith("2026")
+        assert item["online"] is True
+
+    def test_sources_collector_fixed(self, db, client, app, sample_config_yaml):
+        """A configured fixed collector appears with kind/color/position."""
+        config_path = sample_config_yaml
+        import yaml
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        data["web_interface"]["collectors"] = [
+            {"name": "Node1", "api_key": "key1", "color": "#ff0000",
+             "type": "fixed", "lat": 37.78, "lon": -122.41},
+        ]
+        data["web_interface"]["api_keys"]["key1"] = "Node1"
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f)
+
+        import app as _app_module
+        res = _app_module.CONFIG.reload_hot_config()
+        if res is not None:
+            _app_module.CONFIG = res
+            _app_module._config_snapshot = res
+
+        token = self._token_for_role(client, "OpUser", "operator")
+        resp = client.get("/api/sources", headers={"X-Auth-Token": token})
+        assert resp.status_code == 200
+        item = next(s for s in resp.get_json()["sources"] if s["name"] == "Node1")
+        assert item["type"] == "collector"
+        assert item["kind"] == "fixed"
+        assert item["color"] == "#ff0000"
+        assert item["latitude"] == 37.78
+        assert item["longitude"] == -122.41
+        assert item["online"] is False
+
+    def test_sources_collector_mobile_online(self, db, client, app, sample_config_yaml):
+        """A mobile collector reports DB position and is online after a ping."""
+        config_path = sample_config_yaml
+        import yaml
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        data["web_interface"]["collectors"] = [
+            {"name": "Mobile1", "api_key": "key2", "color": "#00ff00",
+             "type": "mobile", "lat": None, "lon": None},
+        ]
+        data["web_interface"]["api_keys"]["key2"] = "Mobile1"
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f)
+
+        import app as _app_module
+        res = _app_module.CONFIG.reload_hot_config()
+        if res is not None:
+            _app_module.CONFIG = res
+            _app_module._config_snapshot = res
+
+        _app_module.DATABASE.update_collector_position("Mobile1", 37.77, -122.40)
+        _app_module.DATABASE.log_submission("Mobile1", 0)
+
+        token = self._token_for_role(client, "OpUser", "operator")
+        resp = client.get("/api/sources", headers={"X-Auth-Token": token})
+        assert resp.status_code == 200
+        item = next(s for s in resp.get_json()["sources"] if s["name"] == "Mobile1")
+        assert item["type"] == "collector"
+        assert item["kind"] == "mobile"
+        assert item["latitude"] == 37.77
+        assert item["longitude"] == -122.40
+        assert item["online"] is True
 
 
 class TestApiSubmit:
@@ -1181,92 +1334,6 @@ class TestApiRefresh:
         assert "stats" in data
         assert len(data["drones"]) >= 3
         assert "total_drones" in data["stats"]
-
-
-class TestApiCollectors:
-    def _operator_token(self, client, app):
-        import app as _app_module
-        db = _app_module.DATABASE
-        expires = datetime.now(timezone.utc) + timedelta(days=7)
-        db.create_user("OpUser", "op@example.com", "operator", "op-login", expires)
-        resp = client.post("/api/auth/login",
-            data=json.dumps({"login_token": "op-login"}),
-            content_type="application/json",
-        )
-        return resp.get_json()["token"]
-
-    def test_collectors_no_config(self, client, app):
-        """With no collectors in config, returns empty list."""
-        token = self._operator_token(client, app)
-        resp = client.get("/api/collectors", headers={"X-Auth-Token": token})
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data == []
-
-    def test_collectors_with_fixed(self, client, app, sample_config_yaml):
-        """A fixed collector appears in the response."""
-        token = self._operator_token(client, app)
-        config_path = sample_config_yaml
-        import yaml
-        with open(config_path, encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-        data["web_interface"]["collectors"] = [
-            {"name": "Node1", "api_key": "key1", "color": "#ff0000",
-             "type": "fixed", "lat": 37.78, "lon": -122.41},
-        ]
-        data["web_interface"]["api_keys"]["key1"] = "Node1"
-        with open(config_path, "w", encoding="utf-8") as f:
-            yaml.dump(data, f)
-
-        import app as _app_module
-        res = _app_module.CONFIG.reload_hot_config()
-        if res is not None:
-            _app_module.CONFIG = res
-            _app_module._config_snapshot = res
-
-        resp = client.get("/api/collectors", headers={"X-Auth-Token": token})
-        assert resp.status_code == 200
-        result = resp.get_json()
-        assert len(result) == 1
-        assert result[0]["name"] == "Node1"
-        assert result[0]["type"] == "fixed"
-        assert result[0]["latitude"] == 37.78
-        assert result[0]["stale"] is True
-
-    def test_collectors_with_mobile(self, client, app, sample_config_yaml):
-        """A mobile collector appears with lat/lon from DB."""
-        config_path = sample_config_yaml
-        import yaml
-        with open(config_path, encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-        data["web_interface"]["collectors"] = [
-            {"name": "Mobile1", "api_key": "key2", "color": "#00ff00",
-             "type": "mobile", "lat": None, "lon": None},
-        ]
-        data["web_interface"]["api_keys"]["key2"] = "Mobile1"
-        with open(config_path, "w", encoding="utf-8") as f:
-            yaml.dump(data, f)
-
-        import app as _app_module
-        res = _app_module.CONFIG.reload_hot_config()
-        if res is not None:
-            _app_module.CONFIG = res
-            _app_module._config_snapshot = res
-
-        # Update collector position via DB and log submission to avoid stale
-        _app_module.DATABASE.update_collector_position("Mobile1", 37.77, -122.40)
-        _app_module.DATABASE.log_submission("Mobile1", 0)
-
-        token = self._operator_token(client, app)
-        resp = client.get("/api/collectors", headers={"X-Auth-Token": token})
-        assert resp.status_code == 200
-        result = resp.get_json()
-        assert len(result) == 1
-        assert result[0]["name"] == "Mobile1"
-        assert result[0]["type"] == "mobile"
-        assert result[0]["latitude"] == 37.77
-        assert result[0]["longitude"] == -122.40
-        assert result[0]["stale"] is False
 
 
 class TestApiPing:

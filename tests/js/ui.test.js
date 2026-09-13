@@ -799,15 +799,32 @@ describe('UIController', () => {
       UIController._collectorStatusLoading = false;
       UIController._updateRemoteSummary = jest.fn();
       UIController._renderRemoteDetail = jest.fn();
+      MapController._applyCollectors.mockClear();
       global.API = {
         getSources: jest.fn().mockResolvedValue({
           sources: [
-            { name: 'node-1', last_sync: '2026-01-01T00:00:00Z', last_data: 'Never', type: 'collector' },
+            {
+              name: 'node-1',
+              last_sync: '2026-01-01T00:00:00Z',
+              last_data: 'Never',
+              total_records: 42,
+              type: 'collector',
+              kind: 'fixed',
+              color: '#f00',
+              latitude: 37.78,
+              longitude: -122.41,
+              online: true,
+            },
+            {
+              name: 'api-1',
+              last_sync: 'Never',
+              last_data: '2026-01-01T00:00:00Z',
+              total_records: 7,
+              type: 'api',
+              online: true,
+            },
           ],
         }),
-        getCollectors: jest.fn().mockResolvedValue([
-          { name: 'node-1', color: '#f00', type: 'fixed', latitude: 37.78, longitude: -122.41, stale: false },
-        ]),
       };
     });
 
@@ -820,16 +837,46 @@ describe('UIController', () => {
       }
     });
 
-    test('refreshes remote sources and collector markers', async () => {
+    test('fetches sources once and applies collector markers', async () => {
       await UIController._refreshCollectorStatus();
-      expect(global.API.getSources).toHaveBeenCalled();
-      expect(global.API.getCollectors).toHaveBeenCalled();
+      expect(global.API.getSources).toHaveBeenCalledTimes(1);
       expect(UIController.remotes).toEqual([
-        { name: 'node-1', last_sync: '2026-01-01T00:00:00Z', last_data: 'Never', type: 'collector' },
+        {
+          name: 'node-1',
+          last_sync: '2026-01-01T00:00:00Z',
+          last_data: 'Never',
+          total_records: 42,
+          type: 'collector',
+          kind: 'fixed',
+          color: '#f00',
+          latitude: 37.78,
+          longitude: -122.41,
+          online: true,
+        },
+        {
+          name: 'api-1',
+          last_sync: 'Never',
+          last_data: '2026-01-01T00:00:00Z',
+          total_records: 7,
+          type: 'api',
+          online: true,
+        },
       ]);
       expect(UIController._updateRemoteSummary).toHaveBeenCalled();
+      // Only type === 'collector' items go to the map
       expect(MapController._applyCollectors).toHaveBeenCalledWith([
-        { name: 'node-1', color: '#f00', type: 'fixed', latitude: 37.78, longitude: -122.41, stale: false },
+        {
+          name: 'node-1',
+          last_sync: '2026-01-01T00:00:00Z',
+          last_data: 'Never',
+          total_records: 42,
+          type: 'collector',
+          kind: 'fixed',
+          color: '#f00',
+          latitude: 37.78,
+          longitude: -122.41,
+          online: true,
+        },
       ]);
     });
 
@@ -839,16 +886,11 @@ describe('UIController', () => {
       expect(UIController._renderRemoteDetail).toHaveBeenCalled();
     });
 
-    test('handles a failed collectors request without throwing', async () => {
-      global.API.getCollectors.mockRejectedValue(new Error('boom'));
-      await expect(UIController._refreshCollectorStatus()).resolves.toBeUndefined();
-      expect(UIController._updateRemoteSummary).toHaveBeenCalled();
-    });
-
-    test('handles a failed sources request without throwing', async () => {
+    test('handles a failed sources request without throwing and without applying markers', async () => {
       global.API.getSources.mockRejectedValue(new Error('boom'));
       await expect(UIController._refreshCollectorStatus()).resolves.toBeUndefined();
-      expect(MapController._applyCollectors).toHaveBeenCalled();
+      expect(UIController._updateRemoteSummary).not.toHaveBeenCalled();
+      expect(MapController._applyCollectors).not.toHaveBeenCalled();
     });
 
     test('is idempotent when started twice', () => {
@@ -872,6 +914,35 @@ describe('UIController', () => {
       UIController.permissions = ['view_map'];
       UIController._startCollectorPolling();
       expect(UIController.collectorPollTimer).toBeNull();
+    });
+  });
+
+  describe('_loadRemoteStatus', () => {
+    beforeEach(() => {
+      UIController.permissions = ['*'];
+      UIController.remotes = [];
+      UIController._updateRemoteSummary = jest.fn();
+      UIController._renderRemoteDetail = jest.fn();
+      global.API = { getSources: jest.fn().mockResolvedValue({ sources: [] }) };
+    });
+
+    afterEach(() => {
+      delete global.API;
+      UIController.permissions = [];
+    });
+
+    test('fetches and renders sources when the user has view_sources', async () => {
+      await UIController._loadRemoteStatus();
+      expect(global.API.getSources).toHaveBeenCalledTimes(1);
+      expect(UIController._updateRemoteSummary).toHaveBeenCalled();
+      expect(UIController._renderRemoteDetail).toHaveBeenCalled();
+    });
+
+    test('skips fetching when the user lacks view_sources', async () => {
+      UIController.permissions = ['view_map'];
+      await UIController._loadRemoteStatus();
+      expect(global.API.getSources).not.toHaveBeenCalled();
+      expect(UIController._updateRemoteSummary).not.toHaveBeenCalled();
     });
   });
 

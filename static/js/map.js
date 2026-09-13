@@ -717,9 +717,10 @@ const MapController = {
     },
 
     /**
-     * Update all collector markers from a given collector payload (same shape as
-     * the /api/collectors response). Called by the frontend's fixed-cadence
-     * collector poller (UIController._refreshCollectorStatus).
+     * Update all collector markers from a given collector payload (the items
+     * with ``type === 'collector'`` from ``GET /api/sources``). Called by the
+     * frontend's fixed-cadence collector poller
+     * (UIController._refreshCollectorStatus).
      */
     _applyCollectors(data) {
         if (!this.ready || !Array.isArray(data)) return;
@@ -738,20 +739,20 @@ const MapController = {
         for (const c of data) {
             if (c.latitude == null || c.longitude == null) continue;
             const center = [c.latitude, c.longitude];
-            const layer = c.type === 'fixed' ? this.layers.fixedCollectors : this.layers.mobileCollectors;
+            const layer = c.kind === 'fixed' ? this.layers.fixedCollectors : this.layers.mobileCollectors;
             if (!layer) continue;
-            const iconClass = c.type === 'fixed' ? 'fa-broadcast-tower' : 'fa-walkie-talkie';
-            const safeColor = c.stale ? '#999' : this._sanitizeColor(c.color, '#e67e22');
+            const iconClass = c.kind === 'fixed' ? 'fa-broadcast-tower' : 'fa-walkie-talkie';
+            const safeColor = c.online ? this._sanitizeColor(c.color, '#e67e22') : '#999';
             const marker = L.marker(center, {
-                icon: this.createCollectorIcon(safeColor, c.stale, iconClass),
+                icon: this.createCollectorIcon(safeColor, !c.online, iconClass),
             }).addTo(layer);
-            const age = c.updated_at
-                ? Math.round((Date.now() - new Date(c.updated_at).getTime()) / 1000)
+            const age = c.last_sync && c.last_sync !== 'Never'
+                ? Math.round((Date.now() - new Date(c.last_sync).getTime()) / 1000)
                 : null;
             const ageText = age != null
                 ? (age < 120 ? `${age}s ago` : `${Math.round(age / 60)}m ago`)
                 : 'never';
-            const typeLabel = c.type === 'fixed' ? 'fixed' : 'mobile';
+            const typeLabel = c.kind === 'fixed' ? 'fixed' : 'mobile';
             let popup = `
                 <div class="popup-title" style="color: ${safeColor};">
                     <i class="fas ${iconClass}"></i> ${esc(c.name)}
@@ -765,7 +766,7 @@ const MapController = {
                     <span class="popup-label">Last Seen:</span>
                     <span class="popup-value">${ageText}</span>
                 </div>`;
-            if (c.stale) {
+            if (!c.online) {
                 popup += `
                 <div class="popup-row" style="color:#999;">
                     <span class="popup-label">Status:</span>
@@ -775,7 +776,7 @@ const MapController = {
             popup += '</div>';
             marker.bindPopup(popup);
             this.collectorMarkers[c.name] = marker;
-            if (c.type === 'fixed') {
+            if (c.kind === 'fixed') {
                 this._fixedMarkerNames.add(c.name);
             } else {
                 this._mobileMarkerNames.add(c.name);

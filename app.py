@@ -28,7 +28,7 @@ from flask_wtf.csrf import CSRFProtect, generate_csrf
 from werkzeug.exceptions import BadRequest
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from config import WebConfig, M_PER_DEG_LAT, FEET_PER_METER
+from config import CollectorConfig, WebConfig, M_PER_DEG_LAT, FEET_PER_METER
 from database import WebDatabase
 from session_detect import process_database as redetect_sessions
 from session_scheduler import SessionScheduler
@@ -516,20 +516,122 @@ def _format_utc_ts(dt):
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-@app.route("/api/sources")
-def get_sources():
-    """Get status of all data sources (API submitters and collectors)"""
-    sources = []
-    collector_names = {c.name for c in _get_config().collectors}
-    for source_info in DATABASE.get_all_sources():
-        sources.append({
-            "name": source_info["source"],
-            "last_sync": _format_utc_ts(source_info["last_sync"]),
-            "last_data": _format_utc_ts(source_info["last_data"]),
-            "type": "collector" if source_info["source"] in collector_names else "api",
-        })
+API_SOURCE_ONLINE_WINDOW_SECONDS = 20 * 60
 
-    return jsonify({"sources": sources})
+
+def _source_is_online(
+    last_sync: Optional[datetime],
+    last_data: Optional[datetime],
+    window_seconds: int,
+    now: Optional[datetime] = None,
+) -> bool:
+    """Whether a data source is currently online.
+
+    A source is online when its most recent activity — the fresher of
+    ``last_sync`` (a submission/batch log entry) and ``last_data`` (the newest
+    drone observation in ``remoteid``) — falls within the freshness window.
+    Using the fresher of the two avoids a source being reported offline while
+    its data is clearly still flowing (#171).
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    best = None
+    for ts in (last_sync, last_data):
+        if not isinstance(ts, datetime):
+            continue
+        if ts.tzinfo is None:
+            local_tz = now.astimezone().tzinfo
+            ts = ts.replace(tzinfo=local_tz).astimezone(timezone.utc)
+        if best is None or ts > best:
+            best = ts
+    if best is None:
+        return False
+    return (now - best).total_seconds() <= window_seconds
+
+
+@app.route("/api/sources")
+@require_permission("view_sources")
+def get_sources():
+    """Get status of all data sources: API submitters and configured collectors.
+
+    Collector items (``type`` == ``"collector"``) additionally carry
+    ``kind`` (``fixed``/``mobile``), ``color``, ``latitude``, ``longitude`` and
+    ``total_records`` — the combined shape formerly split between
+    ``/api/sources`` and ``/api/collectors`` (see #184).
+
+    ``online`` is computed server-side from the fresher of ``last_sync`` /
+    ``last_data`` (see #171):
+
+        - collector: within ``position_stale_minutes``
+        - other/API submitter: within 20 minutes
+    """
+    try:
+        config = _get_config()
+        collector_by_name = {c.name: c for c in config.collectors}
+        positions = DATABASE.get_collector_positions()
+        pos_by_name = {p["name"]: p for p in positions}
+        now = datetime.now(timezone.utc)
+
+        items = []
+        seen = set()
+        for source_info in DATABASE.get_all_sources():
+            name = source_info["source"]
+            collector = collector_by_name.get(name)
+            is_collector = collector is not None
+            window = (
+                config.position_stale_minutes * 60
+                if is_collector
+                else API_SOURCE_ONLINE_WINDOW_SECONDS
+            )
+            item = {
+                "name": name,
+                "type": "collector" if is_collector else "api",
+                "last_sync": _format_utc_ts(source_info["last_sync"]),
+                "last_data": _format_utc_ts(source_info["last_data"]),
+                "total_records": source_info["total_records"],
+                "online": _source_is_online(
+                    source_info["last_sync"], source_info["last_data"], window, now
+                ),
+            }
+            if collector:
+                _attach_collector_fields(item, collector, pos_by_name.get(name, {}))
+            items.append(item)
+            seen.add(name)
+
+        # Configured collectors that have never submitted must still appear
+        # (e.g. map markers for a never-heard-from station).
+        for collector in config.collectors:
+            if collector.name in seen:
+                continue
+            item = {
+                "name": collector.name,
+                "type": "collector",
+                "last_sync": "Never",
+                "last_data": "Never",
+                "total_records": None,
+                "online": False,
+            }
+            _attach_collector_fields(item, collector, pos_by_name.get(collector.name, {}))
+            items.append(item)
+
+        return jsonify({"sources": sorted(items, key=lambda s: s["name"])})
+    except psycopg2.Error:
+        logger.exception("Error getting sources")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+def _attach_collector_fields(
+    item: Dict, collector: CollectorConfig, position: Dict
+) -> None:
+    """Add the collector-only display fields to a source item."""
+    item["kind"] = collector.type
+    item["color"] = collector.color
+    if collector.type == "fixed":
+        item["latitude"] = collector.lat
+        item["longitude"] = collector.lon
+    else:
+        item["latitude"] = position.get("latitude")
+        item["longitude"] = position.get("longitude")
 
 
 @app.route("/api/drones")
@@ -592,8 +694,8 @@ def get_refresh():
     """Consolidated refresh: returns drones, alerts, and stats in one call.
 
     Remote-source/collector status is deliberately NOT included — the frontend
-    polls that on a fixed cadence via ``GET /api/sources`` and
-    ``GET /api/collectors``, independent of drone activity (see #183).
+    polls that on a fixed cadence via ``GET /api/sources``, independent of
+    drone activity (see #183).
 
     POST body:
         mode: "live" (default) or "archive"
@@ -1192,68 +1294,6 @@ def submit_ping():
     except psycopg2.Error:
         logger.exception("Error logging heartbeat from %s", source)
         return jsonify({"success": False, "error": "Internal server error"}), 500
-
-
-def _build_collector_payload(sources: Optional[List[Dict]] = None) -> List[Dict]:
-    """Build the collector status array (same shape as ``GET /api/collectors``).
-
-    ``sources`` may be passed in when the caller has already fetched
-    :meth:`WebDatabase.get_all_sources` to avoid a duplicate query; otherwise it
-    is fetched here.
-    """
-    config = _get_config()
-    if not config.collectors:
-        return []
-    positions = DATABASE.get_collector_positions()
-    pos_by_name = {p["name"]: p for p in positions}
-    if sources is None:
-        sources = DATABASE.get_all_sources()
-    last_sync_by_name = {s["source"]: s["last_sync"] for s in sources}
-    stale_seconds = config.position_stale_minutes * 60
-    now = datetime.now(timezone.utc)
-    result = []
-    for c in config.collectors:
-        last_sync = last_sync_by_name.get(c.name)
-        updated = None
-        is_stale = True
-        if last_sync and isinstance(last_sync, datetime):
-            if last_sync.tzinfo is None:
-                local_tz = datetime.now(timezone.utc).astimezone().tzinfo
-                last_sync = last_sync.replace(tzinfo=local_tz).astimezone(timezone.utc)
-            updated = last_sync
-            if (now - last_sync).total_seconds() <= stale_seconds:
-                is_stale = False
-        if c.type == "fixed":
-            result.append({
-                "name": c.name,
-                "color": c.color,
-                "type": "fixed",
-                "latitude": c.lat,
-                "longitude": c.lon,
-                "updated_at": updated,
-                "stale": is_stale,
-            })
-        else:
-            pos = pos_by_name.get(c.name, {})
-            lat = pos.get("latitude")
-            lon = pos.get("longitude")
-            result.append({
-                "name": c.name,
-                "color": c.color,
-                "type": "mobile",
-                "latitude": lat,
-                "longitude": lon,
-                "updated_at": updated,
-                "stale": is_stale,
-            })
-    return result
-
-
-@app.route("/api/collectors")
-@require_permission("view_sources")
-def get_collectors():
-    """Get current positions and status for all configured collectors"""
-    return jsonify(_build_collector_payload())
 
 
 @app.route("/api/sessions/redetect", methods=["POST"])

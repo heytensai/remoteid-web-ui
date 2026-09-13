@@ -227,13 +227,6 @@ const API = {
     },
 
     /**
-     * Get mobile collector positions
-     */
-    async getCollectors() {
-        return this._get('/api/collectors');
-    },
-
-    /**
      * Get active geozone alerts
      */
     async getAlerts() {

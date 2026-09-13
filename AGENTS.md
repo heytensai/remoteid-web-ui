@@ -146,7 +146,7 @@ Storage keeps one row per `(uas_id, source, timestamp)` (v9) so each collector's
 The frontend runs **two independent pollers** (see `ui.js`):
 
 1. **Drone poller** (`_startPolling`) — adaptive: 10s normally, switching to 2s (`pollFastMs`) only when **new drone UAS IDs** appear (`lastActivityTime`, `_adjustPollTimer`). It hits `POST /api/refresh`.
-2. **Collector/source poller** (`_startCollectorPolling`) — a **fixed 10s** cadence (`collectorPollIntervalMs`) that fetches `GET /api/sources` (remote sources bar) and `GET /api/collectors` (collector markers) via `_refreshCollectorStatus`. It is independent of and never influences the drone poller's fast/slow switch (#183).
+2. **Collector/source poller** (`_startCollectorPolling`) — a **fixed 10s** cadence (`collectorPollIntervalMs`) that fetches the single `GET /api/sources` endpoint (remote sources bar + collector markers) via `_refreshCollectorStatus`. Collector online/offline status is computed **server-side** (`online`/`kind`/`color`/`position` fields, see #184; `online` from the fresher of `last_sync`/`last_data`, see #171) — the frontend never re-derives it. It is independent of and never influences the drone poller's fast/slow switch (#183).
 
 **Consequence:** `POST /api/refresh` intentionally does **not** include `sources`/`collectors` — collector status is never bundled into the drone poll cycle. If you add collector-status data, fetch it in `_refreshCollectorStatus`, not in `/api/refresh`.
 
