@@ -62,6 +62,11 @@ const UIController = {
     // whether a collector is online/offline does not need fast updates.
     collectorPollTimer: null,
     collectorPollIntervalMs: 10000,
+    // Phase offset between the collector poller and the drone poller so the two
+    // never fire in the same instant (sharing a keep-alive connection with the
+    // drone poller caused pair-aborts when gunicorn's sync worker closed the
+    // connection; see #185).
+    collectorPollPhaseOffsetMs: 5000,
     _wasCollectorPolling: false,
 
     // Incremental update tracking
@@ -291,12 +296,17 @@ const UIController = {
      */
     _startCollectorPolling() {
         if (this.collectorPollTimer || !this.hasPermission('view_sources')) return;
-        console.debug(`[CollectorPoll] Starting timer (${this.collectorPollIntervalMs}ms)`);
+        console.debug(`[CollectorPoll] Starting timer (${this.collectorPollIntervalMs}ms, phase offset ${this.collectorPollPhaseOffsetMs}ms)`);
         this._refreshCollectorStatus();
-        this.collectorPollTimer = setInterval(
-            () => this._refreshCollectorStatus(),
-            this.collectorPollIntervalMs
-        );
+        // Kick off the first interval after a phase offset so collector polls
+        // land mid-way between drone-poller ticks instead of on top of them.
+        // A timeout + interval share the collectorPollTimer handle so
+        // _stopCollectorPolling() clears whichever phase is active.
+        const tick = () => this._refreshCollectorStatus();
+        this.collectorPollTimer = setTimeout(() => {
+            tick();
+            this.collectorPollTimer = setInterval(tick, this.collectorPollIntervalMs);
+        }, this.collectorPollPhaseOffsetMs);
     },
 
     /**

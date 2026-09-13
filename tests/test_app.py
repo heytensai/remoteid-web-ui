@@ -554,6 +554,29 @@ class TestApiSources:
         assert item["online"] is True
 
 
+class TestApiKeyRateKey:
+    """Keying of submit rate limits by API identity (see #185)."""
+
+    def test_uses_api_key_identity(self, app):
+        import app as _app_module
+        with app.test_request_context(headers={"Authorization": "Bearer key-A"}):
+            expected = "api:" + hashlib.sha256(b"key-A").hexdigest()[:16]
+            assert _app_module._api_key_rate_key() == expected
+
+    def test_distinct_keys_get_distinct_buckets(self, app):
+        import app as _app_module
+        with app.test_request_context(headers={"Authorization": "Bearer key-A"}):
+            key_a = _app_module._api_key_rate_key()
+        with app.test_request_context(headers={"Authorization": "Bearer key-B"}):
+            key_b = _app_module._api_key_rate_key()
+        assert key_a != key_b
+
+    def test_falls_back_to_remote_address(self, app):
+        import app as _app_module
+        with app.test_request_context("/"):
+            assert _app_module._api_key_rate_key() == "127.0.0.1"
+
+
 class TestApiSubmit:
     def test_submit_without_auth(self, client):
         resp = client.post(

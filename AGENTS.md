@@ -213,6 +213,10 @@ All POST endpoints in `app.py` are protected by `flask_wtf.csrf.CSRFProtect` (ex
 4. All POST requests from the frontend include the token as the `X-CSRFToken` header
 5. The `/api/submit` endpoint is `@csrf.exempt` since it authenticates via API key Bearer token
 
+### Rate Limiting of Submit Endpoints
+
+`/api/submit` and `/api/submit/ping` are rate-limited at `30/minute` **keyed by API key** (Bearer identity, hashed) rather than by IP — see `_api_key_rate_key()` in `app.py`. This lets multiple collectors behind a single public IP (NAT) each have their own bucket instead of exhaustively sharing the per-IP limit (see #185). Requests without a Bearer token fall back to the remote address key.
+
 ### When Adding New POST Endpoints
 
 1. Add the route to `app.py` — CSRF protection is automatic

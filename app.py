@@ -1151,9 +1151,26 @@ def _get_api_key_source():
     return _get_config().collectors_by_key.get(api_key)
 
 
+def _api_key_rate_key() -> str:
+    """Rate-limit key for submit endpoints.
+
+    Key by API key (Bearer identity) so multiple collectors behind one public
+    IP each get their own bucket instead of exhaustively sharing the per-IP
+    limit (see #185). Falls back to the remote address for requests without a
+    Bearer token.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        api_key = auth_header[7:]
+        if api_key:
+            digest = hashlib.sha256(api_key.encode()).hexdigest()
+            return "api:" + digest[:16]
+    return get_remote_address()
+
+
 @app.route("/api/submit", methods=["POST"])
 @csrf.exempt
-@limiter.limit("30/minute")
+@limiter.limit("30/minute", key_func=_api_key_rate_key)
 def submit_data():
     """Submit remote ID data from remote nodes.
 
@@ -1262,7 +1279,7 @@ def submit_data():
 
 @app.route("/api/submit/ping", methods=["GET"])
 @csrf.exempt
-@limiter.limit("30/minute")
+@limiter.limit("30/minute", key_func=_api_key_rate_key)
 def submit_ping():
     """Heartbeat endpoint for API key submitters and collectors.
 
