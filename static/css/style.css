@@ -2003,6 +2003,18 @@ body.dark-mode .color-mode-btn.active {
     .mobile-only {
         display: block;
     }
+
+    /* Center the search panel on screen so it stays fully visible */
+    .search-panel.dropdown-menu {
+        position: fixed;
+        top: 68px;
+        left: 50%;
+        right: auto;
+        transform: translateX(-50%);
+        width: calc(100vw - 24px);
+        max-width: 360px;
+        min-width: 0;
+    }
 }
 
 @media (min-width: 768px) {
