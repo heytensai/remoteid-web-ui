@@ -62,7 +62,7 @@ tests/
 | `config.py` | 8 | Loading defaults, MapConfig, CollectorConfig, `to_dict`, missing files |
 | `database.py` | 24 | Record validation, sanitize, insert, duplicates, queries (drones, positions, tracks, operators, bounds, timestamps), session detection |
 | `app.py` | 29 | All API endpoints, auth (Bearer token, CSRF), error handling, time range parsing |
-| `index.html` | 17 | Template rendering, DOM structure, CDN links, JS/CSS assets, CSP, favicon, time presets |
+| `index.html` | 17 | Template rendering, DOM structure, local vendored asset links, JS/CSS assets, CSP, favicon, time presets |
 
 ### Running Python Tests
 
@@ -86,7 +86,7 @@ pytest tests/test_app.py::TestApiDrones -v  # Single class
 The HTML template is rendered through Flask's `render_template` and parsed with `BeautifulSoup`. Tests verify:
 
 - Required DOM elements exist by ID
-- CDN links (Leaflet, Flatpickr, Font Awesome) are present
+- Vendored assets (Leaflet, Flatpickr, Font Awesome) are served from local `/vendor/` paths with zero CDN URLs
 - All 4 JS files and CSS files are loaded
 - Content-Security-Policy meta tag is set
 - Time preset buttons (1h, 6h, 24h, 7d) exist

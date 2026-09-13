@@ -1,13 +1,21 @@
-const CACHE = 'drone-tracker-v3';
+const CACHE = 'drone-tracker-v4';
 
 const PRECACHE = [
-  './',
-  './static/css/style.css',
-  './static/js/units.js',
-  './static/js/api.js',
-  './static/js/map.js',
-  './static/js/ui.js',
-  './static/favicon.svg',
+  '__URL_PREFIX__/',
+  '__URL_PREFIX__/static/css/style.css',
+  '__URL_PREFIX__/static/js/units.js',
+  '__URL_PREFIX__/static/js/api.js',
+  '__URL_PREFIX__/static/js/map.js',
+  '__URL_PREFIX__/static/js/ui.js',
+  '__URL_PREFIX__/static/vendor/leaflet/leaflet.css',
+  '__URL_PREFIX__/static/vendor/leaflet/leaflet.js',
+  '__URL_PREFIX__/static/vendor/flatpickr/flatpickr.min.css',
+  '__URL_PREFIX__/static/vendor/flatpickr/flatpickr.min.js',
+  '__URL_PREFIX__/static/vendor/font-awesome/css/all.min.css',
+  '__URL_PREFIX__/static/vendor/font-awesome/webfonts/fa-brands-400.woff2',
+  '__URL_PREFIX__/static/vendor/font-awesome/webfonts/fa-regular-400.woff2',
+  '__URL_PREFIX__/static/vendor/font-awesome/webfonts/fa-solid-900.woff2',
+  '__URL_PREFIX__/static/favicon.svg',
 ];
 
 self.addEventListener('install', (event) => {
@@ -38,7 +46,7 @@ const NEVER_CACHE = ['/api/', '/manifest.json', '/sw.js'];
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Bypass SW for cross-origin requests (CDN resources)
+  // Bypass SW for cross-origin requests (map tile servers)
   if (url.origin !== self.location.origin) {
     return;
   }
@@ -58,7 +66,7 @@ self.addEventListener('fetch', (event) => {
         caches.open(CACHE).then((cache) => cache.put(event.request, clone));
       }
       return response;
-    }).catch(() => caches.match(event.request))
+    }).catch(() => caches.match(event.request, { ignoreSearch: true }))
   );
 });
 

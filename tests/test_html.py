@@ -6,7 +6,7 @@ import app as app_module
 
 
 def _app_js_srcs(soup):
-    """Return src attributes of the four application (non-CDN) script tags."""
+    """Return src attributes of the four application script tags (excludes /vendor/)."""
     return [
         s.get("src", "")
         for s in soup.find_all("script")
@@ -37,6 +37,11 @@ class TestIndexTemplate:
         assert meta_csp is None
         assert "Content-Security-Policy" in resp.headers
         assert "default-src 'self'" in resp.headers["Content-Security-Policy"]
+        # No third-party asset hosts allowed in script/style/font sources
+        csp = resp.headers["Content-Security-Policy"]
+        assert "script-src 'self';" in csp
+        assert "style-src 'self' 'unsafe-inline';" in csp
+        assert "font-src 'self';" in csp
 
     def test_key_elements_present(self, client):
         resp = client.get("/")
@@ -63,21 +68,26 @@ class TestIndexTemplate:
         assert soup.find(id="showKnownDrones") is not None
         assert soup.find(id="showUnknownDrones") is not None
 
-    def test_cdn_links_present(self, client):
+    def test_vendor_assets_local(self, client):
+        """Leaflet, Flatpickr, and Font Awesome are served from local /vendor/ paths."""
         resp = client.get("/")
         soup = BeautifulSoup(resp.data, "html.parser")
 
-        # Leaflet CSS
-        leaflet_css = soup.find("link", href=lambda v: v and "leaflet" in v)
-        assert leaflet_css is not None
+        vendored = [
+            "/vendor/leaflet/leaflet.css",
+            "/vendor/flatpickr/flatpickr.min.css",
+            "/vendor/font-awesome/css/all.min.css",
+            "/vendor/leaflet/leaflet.js",
+            "/vendor/flatpickr/flatpickr.min.js",
+        ]
+        hrefs = [l.get("href", "") for l in soup.find_all("link")]
+        srcs = [s.get("src", "") for s in soup.find_all("script")]
+        for path in vendored:
+            assert any(path in url for url in hrefs + srcs), f"Missing vendored asset: {path}"
 
-        # Flatpickr CSS
-        flatpickr_css = soup.find("link", href=lambda v: v and "flatpickr" in v)
-        assert flatpickr_css is not None
-
-        # Font Awesome CSS
-        fa_css = soup.find("link", href=lambda v: v and "font-awesome" in v)
-        assert fa_css is not None
+        # Everything must be same-origin; zero CDN URLs remain
+        resource_urls = hrefs + srcs
+        assert not any(url.startswith(("http://", "https://")) for url in resource_urls)
 
     def test_js_scripts_present(self, client):
         resp = client.get("/")
@@ -90,10 +100,10 @@ class TestIndexTemplate:
         for js in js_files:
             assert any(js in src for src in srcs), f"Missing script: {js}"
 
-        # Leaflet JS
-        assert any("leaflet" in src for src in srcs)
-        # Flatpickr JS
-        assert any("flatpickr" in src for src in srcs)
+        # Leaflet JS served locally
+        assert any("vendor/leaflet/leaflet.js" in src for src in srcs)
+        # Flatpickr JS served locally
+        assert any("vendor/flatpickr/flatpickr.min.js" in src for src in srcs)
 
     def _assert_app_order(self, srcs):
         """App scripts must load units, api, map, ui in that order."""

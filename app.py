@@ -192,9 +192,9 @@ def bad_request(error):  # pylint: disable=unused-argument
 _CSP = (
     "default-src 'self';"
     " manifest-src 'self';"
-    " script-src 'self' https://unpkg.com https://cdn.jsdelivr.net;"
-    " style-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com;"
-    " font-src 'self' https://cdnjs.cloudflare.com;"
+    " script-src 'self';"
+    " style-src 'self' 'unsafe-inline';"
+    " font-src 'self';"
     " img-src 'self' https://*.tile.openstreetmap.org https://*.basemaps.cartocdn.com data:;"
     " connect-src 'self';"
     " worker-src 'self';"

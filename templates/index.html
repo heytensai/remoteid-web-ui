@@ -13,13 +13,13 @@
     <link rel="apple-touch-icon" href="{{ url_prefix }}{{ url_for('static', filename='favicon.svg') }}">
 
     <!-- Leaflet CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="{{ url_prefix }}{{ static_url('vendor/leaflet/leaflet.css') }}" />
 
     <!-- Flatpickr CSS -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <link rel="stylesheet" href="{{ url_prefix }}{{ static_url('vendor/flatpickr/flatpickr.min.css') }}">
 
     <!-- Font Awesome -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_prefix }}{{ static_url('vendor/font-awesome/css/all.min.css') }}">
 
     <!-- Custom CSS -->
     <link rel="stylesheet" href="{{ url_prefix }}{{ static_url('css/style.css') }}">
@@ -458,10 +458,10 @@
     </div>
 
     <!-- Leaflet JS -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="{{ url_prefix }}{{ static_url('vendor/leaflet/leaflet.js') }}"></script>
 
     <!-- Flatpickr JS -->
-    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script src="{{ url_prefix }}{{ static_url('vendor/flatpickr/flatpickr.min.js') }}"></script>
 
     <!-- Application JS -->
     <script src="{{ url_prefix }}{{ static_url(js_dir ~ '/units.js') }}"></script>

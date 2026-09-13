@@ -1,12 +1,19 @@
-.PHONY: test test-py test-js test-py-cov lint lint-py lint-js build install
+.PHONY: test test-py test-js test-py-cov lint lint-py lint-js build vendor vendor-check install
 
 PYTHON = env/bin/python
 NPM = npm
+NODE = node
 
-test: test-py test-js
+test: test-py test-js vendor-check
 
-build:
+build: vendor
 	$(NPM) run build
+
+vendor:
+	$(NODE) scripts/vendor-deps.mjs
+
+vendor-check:
+	$(NODE) scripts/vendor-deps.mjs --check
 
 test-py:
 	$(PYTHON) -m pytest tests/ -v
@@ -29,5 +36,3 @@ install:
 	$(PYTHON) -m pip install -r requirements.txt
 	$(PYTHON) -m pip install -r dev-requirements.txt
 	$(NPM) install
-
-.PHONY: test test-py test-js test-py-cov lint lint-py lint-js build install

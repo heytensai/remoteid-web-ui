@@ -311,6 +311,36 @@ The CLI initializes the app internally (`_init_app`), so it requires the `--conf
 - Ephemeral creation: `INFO` with name and IP
 - Token validation: `DEBUG` only (not visible in production)
 
+## Vendored Frontend Dependencies
+
+Leaflet, Flatpickr, and Font Awesome are **vendored locally** into `static/vendor/` — no CDN URLs at runtime. The CSP restricts script/style/font sources to `'self'` and the map tile hosts only.
+
+### How It Works
+
+- Dependencies are **exact-pinned devDependencies** in `package.json` (locked by `package-lock.json`) — never edit `static/vendor/` by hand.
+- `make vendor` runs `scripts/vendor-deps.mjs`, which copies the pinned dist files from `node_modules/` into `static/vendor/` (CSS, JS, Font Awesome webfonts, and each library's LICENSE).
+- `make vendor-check` SHA-256-compares `static/vendor/` against `node_modules/` and fails if anything is out of sync. It runs automatically as part of `make test` and `make build`.
+
+### Updating a Dependency
+
+```bash
+npm install --save-dev --save-exact leaflet@1.9.4
+make build          # regenerates static/vendor/ + min/ bundles
+git diff --stat static/vendor/   # review exactly what changed
+```
+
+1. Bump only the intended package (`--save-exact` pins the version).
+2. Rebuild so `static/vendor/` is regenerated from `node_modules/`.
+3. Review the `static/vendor/` diff and commit it with the version bump.
+4. Re-run `make test` (includes `vendor-check`).
+
+### Rules
+
+1. **Never edit `static/vendor/` by hand** — always regenerate via `make vendor`.
+2. **Never add a new CDN URL** to `templates/index.html` — new frontend deps must be vendored the same way (add as an exact-pinned devDependency + a `FILE_MAP` entry in `scripts/vendor-deps.mjs`).
+3. **CSP** (`_CSP` in `app.py`) must stay local-first: `script-src 'self'`, `style-src 'self' 'unsafe-inline'`, `font-src 'self'`. Only `img-src` (map tiles) may reference external hosts.
+4. **`static/sw.js`** precaches every vendored asset; when a new asset is added, add it to `PRECACHE` and bump the `CACHE` version so clients re-cache.
+
 ## Testing Strategy
 
 Tests live in `tests/` with Python (`pytest`) and JavaScript (`Jest` + `jsdom`) suites.
@@ -319,7 +349,7 @@ Tests live in `tests/` with Python (`pytest`) and JavaScript (`Jest` + `jsdom`) 
 
 - **Python backend** — add or update tests in `tests/`. Key areas: config loading (`test_config.py`), database operations (`test_database.py`), API endpoints (`test_app.py`), and HTML template rendering via BeautifulSoup (`test_html.py`).
 - **JavaScript frontend** — add or update tests in `tests/js/`. External dependencies (Leaflet, fetch, flatpickr) are mocked. Only pure functions are tested for `MapController` and `UIController` (map rendering requires a real browser).
-- **HTML template** — structural tests in `test_html.py` verify required DOM elements, CDN links, CSP headers, and asset loading.
+- **HTML template** — structural tests in `test_html.py` verify required DOM elements, local vendored asset links, CSP headers, and asset loading.
 
 ### Testing Conventions
 
