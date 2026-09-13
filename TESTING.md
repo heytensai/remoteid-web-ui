@@ -60,7 +60,7 @@ tests/
 | Module | Tests | Scope |
 |--------|-------|-------|
 | `config.py` | 8 | Loading defaults, MapConfig, CollectorConfig, `to_dict`, missing files |
-| `database.py` | 24 | Record validation, sanitize, insert, duplicates, queries (drones, positions, tracks, operators, bounds, timestamps), session detection |
+| `database.py` | 24 | Record validation, sanitize, insert, duplicates, queries (drones, positions, tracks, operators, bounds, timestamps), multi-source track dedup, session detection |
 | `app.py` | 29 | All API endpoints, auth (Bearer token, CSRF), error handling, time range parsing |
 | `index.html` | 17 | Template rendering, DOM structure, local vendored asset links, JS/CSS assets, CSP, favicon, time presets |
 

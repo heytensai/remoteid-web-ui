@@ -18,6 +18,12 @@ logger = logging.getLogger(__name__)
 # Current schema version — bump this and add a migration in _migrate()
 SCHEMA_VERSION = 9
 
+# Multi-collector track dedup parameters (read-path only, see #181). Storage
+# keeps one row per (uas_id, source, timestamp) for attribution; these only
+# collapse near-simultaneous duplicate observations at query time.
+TRACK_DEDUP_TIME_WINDOW_S = 2.0
+TRACK_DEDUP_COORD_EPS = 1e-5
+
 
 class WebDatabase:
     """Manages PostgreSQL database for web interface"""
@@ -1005,6 +1011,96 @@ class WebDatabase:
                 return s + "Z"
         return s
 
+    @staticmethod
+    def _parse_track_timestamp(value) -> Optional[datetime]:
+        """Parse a sanitized (ISO string) or datetime timestamp value.
+
+        Returns a **timezone-aware** datetime (UTC assumed for naive inputs) or
+        ``None`` for falsy/unparseable values.
+        """
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value
+        if not value:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    @staticmethod
+    def _collapse_multi_source_positions(positions: List[Dict]) -> List[Dict]:
+        """Collapse near-simultaneous, near-identical positions observed by
+        multiple collectors into a single point (read-path dedup, #181).
+
+        Input must be ordered by timestamp ascending. Consecutive rows are
+        grouped while each stays within ``TRACK_DEDUP_TIME_WINDOW_S`` of the
+        run start and within ``TRACK_DEDUP_COORD_EPS`` degrees of the run's
+        first coordinate. A group is collapsed only when it spans at least two
+        distinct sources, so single-collector hover/loiter cadence is
+        preserved untouched.
+
+        The kept point retains the first row's fields, keeps ``source`` for
+        backward compatibility, and gains a ``sources`` list holding every
+        distinct collector in the group (in order of first appearance).
+        """
+        if not positions:
+            return []
+
+        window = timedelta(seconds=TRACK_DEDUP_TIME_WINDOW_S)
+        collapsed = []
+        run = [positions[0]]
+
+        def flush():
+            nonlocal run, collapsed
+            srcs = {p.get('source') for p in run}
+            if len(run) == 1 or len(srcs) < 2:
+                collapsed.extend(run)
+            else:
+                kept = dict(run[0])
+                sources = []
+                seen = set()
+                for p in run:
+                    src = p.get('source')
+                    if src is not None and src not in seen:
+                        seen.add(src)
+                        sources.append(src)
+                kept['sources'] = sources
+                collapsed.append(kept)
+            run = []
+
+        for pos in positions[1:]:
+            first = run[0]
+            ts = WebDatabase._parse_track_timestamp(pos.get('timestamp'))
+            ts0 = WebDatabase._parse_track_timestamp(first.get('timestamp'))
+            in_window = ts is not None and ts0 is not None and (ts - ts0) <= window
+            in_box = (
+                WebDatabase._coord_within(
+                    pos.get('latitude'), first.get('latitude'), TRACK_DEDUP_COORD_EPS
+                )
+                and WebDatabase._coord_within(
+                    pos.get('longitude'), first.get('longitude'), TRACK_DEDUP_COORD_EPS
+                )
+            )
+            if in_window and in_box:
+                run.append(pos)
+            else:
+                flush()
+                run = [pos]
+        flush()
+        return collapsed
+
+    @staticmethod
+    def _coord_within(value, reference, eps) -> bool:
+        """True when both values are non-None floats and within ``eps``."""
+        if value is None or reference is None:
+            return False
+        return abs(value - reference) <= eps
+
     def _get_last_sync(self, source_name: str) -> Optional[datetime]:
         """Get the last sync time for a source"""
         conn = self._get_conn()
@@ -1647,7 +1743,7 @@ class WebDatabase:
                 """
                 SELECT latitude, longitude, altitude, height, height_type, timestamp,
                        operator_id, operator_latitude, operator_longitude,
-                       computed_session_id
+                       computed_session_id, source
                 FROM remoteid
                 WHERE uas_id = %s AND timestamp BETWEEN %s AND %s
                 ORDER BY timestamp ASC
@@ -1655,7 +1751,8 @@ class WebDatabase:
                 (uas_id, start_time, end_time),
             )
 
-            return [self._sanitize_record(dict(row)) for row in cur.fetchall()]
+            positions = [self._sanitize_record(dict(row)) for row in cur.fetchall()]
+            return self._collapse_multi_source_positions(positions)
         finally:
             self._put_conn(conn)
 
@@ -1680,7 +1777,8 @@ class WebDatabase:
                 (uas_id, session_id),
             )
 
-            return [self._sanitize_record(dict(row)) for row in cur.fetchall()]
+            positions = [self._sanitize_record(dict(row)) for row in cur.fetchall()]
+            return self._collapse_multi_source_positions(positions)
         finally:
             self._put_conn(conn)
 
@@ -1706,6 +1804,7 @@ class WebDatabase:
             )
 
             positions = [self._sanitize_record(dict(row)) for row in cur.fetchall()]
+            positions = self._collapse_multi_source_positions(positions)
 
             # Group by session
             sessions = {}

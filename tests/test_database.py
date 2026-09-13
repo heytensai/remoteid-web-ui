@@ -324,6 +324,132 @@ def test_get_track_session_positions_nonexistent(db):
     assert positions == []
 
 
+# ---------------------------------------------------------------------------
+# Multi-collector track dedup (#181)
+# ---------------------------------------------------------------------------
+
+
+def _mk_pos(timestamp, source, lat=40.0, lon=-74.0):
+    """Build a sanitized track position dict for collapse tests."""
+    return {
+        "uas_id": "drone-181",
+        "timestamp": timestamp,
+        "latitude": lat,
+        "longitude": lon,
+        "altitude": 100.0,
+        "computed_session_id": "session_test",
+        "source": source,
+    }
+
+
+def test_collapse_empty_positions(db):
+    out = db._collapse_multi_source_positions([])
+    assert out == []
+
+
+def test_collapse_single_source_untouched(db):
+    """Rows from a single collector are never collapsed (hover cadence kept)."""
+    t0 = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    rows = [
+        _mk_pos(t0, "collector-a"),
+        _mk_pos(t0 + timedelta(seconds=1), "collector-a"),
+        _mk_pos(t0 + timedelta(seconds=2), "collector-a"),
+    ]
+    out = db._collapse_multi_source_positions(rows)
+    assert len(out) == 3
+    assert all("sources" not in p for p in out)
+
+
+def test_collapse_two_collectors_same_packet(db):
+    t0 = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    rows = [_mk_pos(t0, "collector-a"), _mk_pos(t0, "collector-b")]
+    out = db._collapse_multi_source_positions(rows)
+    assert len(out) == 1
+    assert out[0]["source"] == "collector-a"
+    assert out[0]["sources"] == ["collector-a", "collector-b"]
+
+
+def test_collapse_two_collectors_across_instants(db):
+    """Separate broadcast instants stay separate even when both are multi-source."""
+    t0 = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    rows = [
+        _mk_pos(t0, "collector-a"),
+        _mk_pos(t0 + timedelta(milliseconds=50), "collector-b"),
+        _mk_pos(t0 + timedelta(seconds=5), "collector-a"),
+        _mk_pos(t0 + timedelta(seconds=5, milliseconds=50), "collector-b"),
+    ]
+    out = db._collapse_multi_source_positions(rows)
+    assert len(out) == 2
+    for point in out:
+        assert point["sources"] == ["collector-a", "collector-b"]
+
+
+def test_collapse_moving_drone_not_merged(db):
+    """Movement beyond the coord epsilon breaks the run; instants stay distinct."""
+    t0 = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    rows = [
+        _mk_pos(t0, "collector-a", lat=40.0),
+        _mk_pos(t0 + timedelta(milliseconds=50), "collector-b", lat=40.0),
+        _mk_pos(t0 + timedelta(seconds=5), "collector-a", lat=40.001),
+        _mk_pos(t0 + timedelta(seconds=5, milliseconds=50), "collector-b", lat=40.001),
+    ]
+    out = db._collapse_multi_source_positions(rows)
+    assert len(out) == 2
+    assert out[0]["latitude"] == 40.0
+    assert out[1]["latitude"] == 40.001
+
+
+def test_collapse_parses_iso_timestamp_strings(db):
+    """Sanitized records carry ISO timestamp strings, not datetimes."""
+    rows = [
+        _mk_pos("2026-01-01T00:00:00+00:00", "collector-a"),
+        _mk_pos("2026-01-01T00:00:00.050000+00:00", "collector-b"),
+    ]
+    out = db._collapse_multi_source_positions(rows)
+    assert len(out) == 1
+    assert out[0]["sources"] == ["collector-a", "collector-b"]
+
+
+def test_collapse_normalizes_naive_timestamps(db):
+    """Naive datetimes and ISO strings without offset are treated as UTC."""
+    rows = [
+        _mk_pos(datetime(2026, 1, 1, 0, 0, 0), "collector-a"),
+        _mk_pos(datetime(2026, 1, 1, 0, 0, 0, 500000), "collector-b"),
+    ]
+    out = db._collapse_multi_source_positions(rows)
+    assert len(out) == 1
+    assert out[0]["sources"] == ["collector-a", "collector-b"]
+
+
+def test_track_session_positions_collapses_two_sources(db):
+    """Two collectors storing the same packet yield one collapsed row that
+    still lists both collectors via the ``sources`` array."""
+    now = datetime.now(timezone.utc)
+    record = {
+        "timestamp": now.isoformat(),
+        "uas_id": "drone-181",
+        "latitude": 40.7128,
+        "longitude": -74.0060,
+        "altitude": 300.0,
+        "mac_address": "aa:bb:cc:dd:ee:81",
+    }
+    inserted, errors, _ = db.insert_remoteid_records("collector-2.4ghz", [record])
+    assert inserted == 1
+    inserted, errors, _ = db.insert_remoteid_records("collector-5.8ghz", [record])
+    assert inserted == 1
+
+    sessions = db.get_track_sessions(
+        "drone-181", now - timedelta(days=1), now + timedelta(days=1)
+    )
+    assert len(sessions) == 1
+    target_id = sessions[0]["session_id"]
+
+    positions = db.get_track_session_positions("drone-181", target_id)
+    assert len(positions) == 1
+    assert positions[0]["source"] == "collector-2.4ghz"
+    assert positions[0]["sources"] == ["collector-2.4ghz", "collector-5.8ghz"]
+
+
 def test_get_operators(db):
     now = datetime.now(timezone.utc)
     start = now - timedelta(days=1)

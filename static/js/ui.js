@@ -2967,9 +2967,14 @@ const UIController = {
         const names = [];
         const seen = new Set();
         for (const pos of positions || []) {
-            if (!pos.source || !known.has(pos.source) || seen.has(pos.source)) continue;
-            seen.add(pos.source);
-            names.push(pos.source);
+            const sources = Array.isArray(pos.sources) && pos.sources.length > 0
+                ? pos.sources
+                : (pos.source ? [pos.source] : []);
+            for (const src of sources) {
+                if (!src || !known.has(src) || seen.has(src)) continue;
+                seen.add(src);
+                names.push(src);
+            }
         }
         return names;
     },

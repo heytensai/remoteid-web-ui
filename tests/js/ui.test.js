@@ -183,6 +183,22 @@ describe('UIController', () => {
       UIController.collectorNames = undefined;
       expect(UIController._collectorNamesForPositions([{ source: 'sar' }])).toEqual([]);
     });
+
+    test('uses sources array when present (collapsed multi-collector point)', () => {
+      UIController.collectorNames = new Set(['sar', 'detector04']);
+      const names = UIController._collectorNamesForPositions([
+        { source: 'sar', sources: ['sar', 'detector04'] },
+        { source: 'detector04', sources: ['detector04', 'sar'] },
+      ]);
+      expect(names).toEqual(['sar', 'detector04']);
+    });
+
+    test('falls back to single source when sources array is empty', () => {
+      UIController.collectorNames = new Set(['sar']);
+      expect(UIController._collectorNamesForPositions([{ source: 'sar', sources: [] }])).toEqual([
+        'sar',
+      ]);
+    });
   });
 
   describe('_haversineDistance', () => {

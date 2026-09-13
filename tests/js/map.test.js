@@ -423,6 +423,22 @@ describe('MapController', () => {
     test('returns empty array when no positions have source', () => {
       expect(MapController._collectorNamesForPositions([{ source: null }, {}])).toEqual([]);
     });
+
+    test('uses sources array when present (collapsed multi-collector point)', () => {
+      const positions = [
+        { source: 'Node1', sources: ['Node1', 'Node2'] },
+        { source: 'Node2', sources: ['Node2', 'Node1'] },
+      ];
+      expect(MapController._collectorNamesForPositions(positions)).toEqual([
+        'Node1',
+        'Node2',
+      ]);
+    });
+
+    test('falls back to source when sources array is empty', () => {
+      const positions = [{ source: 'Node1', sources: [] }];
+      expect(MapController._collectorNamesForPositions(positions)).toEqual(['Node1']);
+    });
   });
 
   describe('_createSessionPointPopup', () => {

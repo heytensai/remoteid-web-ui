@@ -320,6 +320,46 @@ class TestApiTracks:
         )
         assert resp.status_code == 400
 
+    def test_tracks_batch_collapses_multi_source(self, client, db):
+        """A packet observed by two collectors yields one collapsed track point
+        that still lists both collectors via ``sources`` (#181)."""
+        now = datetime.now()
+        start = (now - timedelta(days=1)).isoformat()
+        end = (now + timedelta(days=1)).isoformat()
+        record = {
+            "timestamp": now.isoformat(),
+            "uas_id": "drone-181",
+            "latitude": 40.7128,
+            "longitude": -74.0060,
+            "altitude": 300.0,
+            "mac_address": "aa:bb:cc:dd:ee:81",
+        }
+        inserted, _, _ = db.insert_remoteid_records("collector-2.4ghz", [record])
+        assert inserted == 1
+        inserted, _, _ = db.insert_remoteid_records("collector-5.8ghz", [record])
+        assert inserted == 1
+
+        resp = client.get(f"/api/tracks/drone-181?sessions=true&start={start}&end={end}")
+        sessions = resp.get_json()["sessions"]
+        assert len(sessions) == 1
+        target_id = sessions[0]["session_id"]
+
+        resp2 = client.post(
+            "/api/tracks/batch",
+            data=json.dumps(
+                {"sessions": [{"uas_id": "drone-181", "session_id": target_id}]}
+            ),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp2.status_code == 200
+        track = resp2.get_json()["tracks"][f"drone-181:{target_id}"]
+        assert len(track["positions"]) == 1
+        assert track["positions"][0]["sources"] == [
+            "collector-2.4ghz",
+            "collector-5.8ghz",
+        ]
+
 
 class TestApiOperators:
     def test_get_operators(self, client, db):
