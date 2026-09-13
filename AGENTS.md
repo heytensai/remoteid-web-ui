@@ -141,6 +141,15 @@ The `_schema_version` table records each migration step so any gap between the c
 
 Storage keeps one row per `(uas_id, source, timestamp)` (v9) so each collector's observation is attributed. To avoid Nx-redundant track points when several collectors see the same broadcast, the **track query methods** (`get_track`, `get_track_session_positions`, `get_track_sessions`) collapse near-simultaneous, near-identical positions via `_collapse_multi_source_positions` (see constants `TRACK_DEDUP_TIME_WINDOW_S` / `TRACK_DEDUP_COORD_EPS` in `database.py`). A group is collapsed only when it spans at least two distinct `source`s, so single-collector hover/loiter cadence is never touched. The kept point carries `source` (backward compatible) plus a `sources` array listing every distinct collector. Frontend helpers `_collectorNamesForPositions` (map.js + ui.js) read `sources` with a `source` fallback.
 
+### Frontend Polling (Two Independent Timers)
+
+The frontend runs **two independent pollers** (see `ui.js`):
+
+1. **Drone poller** (`_startPolling`) — adaptive: 10s normally, switching to 2s (`pollFastMs`) only when **new drone UAS IDs** appear (`lastActivityTime`, `_adjustPollTimer`). It hits `POST /api/refresh`.
+2. **Collector/source poller** (`_startCollectorPolling`) — a **fixed 10s** cadence (`collectorPollIntervalMs`) that fetches `GET /api/sources` (remote sources bar) and `GET /api/collectors` (collector markers) via `_refreshCollectorStatus`. It is independent of and never influences the drone poller's fast/slow switch (#183).
+
+**Consequence:** `POST /api/refresh` intentionally does **not** include `sources`/`collectors` — collector status is never bundled into the drone poll cycle. If you add collector-status data, fetch it in `_refreshCollectorStatus`, not in `/api/refresh`.
+
 ## Code Style Guidelines
 
 - JavaScript: Use single quotes for strings

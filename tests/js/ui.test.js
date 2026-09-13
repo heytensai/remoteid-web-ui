@@ -72,7 +72,6 @@ global.MapController = {
   loadTrackSession: jest.fn(),
   loadTracksBatch: jest.fn().mockResolvedValue({}),
   updateAlertState: jest.fn(),
-  _updateCollectors: jest.fn(),
   _applyCollectors: jest.fn(),
 };
 
@@ -569,7 +568,6 @@ describe('UIController', () => {
       UIController._trackRefreshFailure = jest.fn();
       UIController._adjustPollTimer = jest.fn();
       UIController._updateReplayButtonState = jest.fn();
-      MapController._updateCollectors = jest.fn().mockResolvedValue();
       MapController.config = { center_lat: 1 };
       MapController.loadTracksBatch = jest.fn().mockResolvedValue([]);
     });
@@ -750,9 +748,8 @@ describe('UIController', () => {
       expect(UIController._lastFullSyncTime).not.toBe(0);
     });
 
-    test('applies bundled collectors on a full response instead of fetching', async () => {
+    test('refreshData does not touch collector status on a full response', async () => {
       MapController._applyCollectors.mockClear();
-      MapController._updateCollectors.mockClear();
       const collectors = [
         { name: 'Node1', color: '#f00', type: 'fixed', latitude: 37.78, longitude: -122.41, stale: false },
       ];
@@ -769,13 +766,14 @@ describe('UIController', () => {
 
       await UIController.refreshData();
 
-      expect(MapController._applyCollectors).toHaveBeenCalledWith(collectors);
-      expect(MapController._updateCollectors).not.toHaveBeenCalled();
+      // Collector/source status is handled by the fixed-cadence collector
+      // poller (_refreshCollectorStatus), never by the drone poll (#183).
+      expect(MapController._applyCollectors).not.toHaveBeenCalled();
     });
 
-    test('skips collector work entirely on a diff response', async () => {
+    test('refreshData never refreshes the sources bar or collectors', async () => {
       MapController._applyCollectors.mockClear();
-      MapController._updateCollectors.mockClear();
+      UIController._updateRemoteSummary.mockClear();
       UIController.droneMap = {};
       UIController.droneTimestamps = {};
       API.getRefresh.mockResolvedValue({
@@ -789,7 +787,91 @@ describe('UIController', () => {
       await UIController.refreshData();
 
       expect(MapController._applyCollectors).not.toHaveBeenCalled();
-      expect(MapController._updateCollectors).not.toHaveBeenCalled();
+      expect(UIController._updateRemoteSummary).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('fixed-cadence collector polling', () => {
+    beforeEach(() => {
+      UIController.permissions = ['*'];
+      UIController.remotes = [];
+      UIController.remoteDetailOpen = false;
+      UIController._collectorStatusLoading = false;
+      UIController._updateRemoteSummary = jest.fn();
+      UIController._renderRemoteDetail = jest.fn();
+      global.API = {
+        getSources: jest.fn().mockResolvedValue({
+          sources: [
+            { name: 'node-1', last_sync: '2026-01-01T00:00:00Z', last_data: 'Never', type: 'collector' },
+          ],
+        }),
+        getCollectors: jest.fn().mockResolvedValue([
+          { name: 'node-1', color: '#f00', type: 'fixed', latitude: 37.78, longitude: -122.41, stale: false },
+        ]),
+      };
+    });
+
+    afterEach(() => {
+      delete global.API;
+      UIController.permissions = [];
+      if (UIController.collectorPollTimer) {
+        clearInterval(UIController.collectorPollTimer);
+        UIController.collectorPollTimer = null;
+      }
+    });
+
+    test('refreshes remote sources and collector markers', async () => {
+      await UIController._refreshCollectorStatus();
+      expect(global.API.getSources).toHaveBeenCalled();
+      expect(global.API.getCollectors).toHaveBeenCalled();
+      expect(UIController.remotes).toEqual([
+        { name: 'node-1', last_sync: '2026-01-01T00:00:00Z', last_data: 'Never', type: 'collector' },
+      ]);
+      expect(UIController._updateRemoteSummary).toHaveBeenCalled();
+      expect(MapController._applyCollectors).toHaveBeenCalledWith([
+        { name: 'node-1', color: '#f00', type: 'fixed', latitude: 37.78, longitude: -122.41, stale: false },
+      ]);
+    });
+
+    test('renders remote detail when the detail panel is open', async () => {
+      UIController.remoteDetailOpen = true;
+      await UIController._refreshCollectorStatus();
+      expect(UIController._renderRemoteDetail).toHaveBeenCalled();
+    });
+
+    test('handles a failed collectors request without throwing', async () => {
+      global.API.getCollectors.mockRejectedValue(new Error('boom'));
+      await expect(UIController._refreshCollectorStatus()).resolves.toBeUndefined();
+      expect(UIController._updateRemoteSummary).toHaveBeenCalled();
+    });
+
+    test('handles a failed sources request without throwing', async () => {
+      global.API.getSources.mockRejectedValue(new Error('boom'));
+      await expect(UIController._refreshCollectorStatus()).resolves.toBeUndefined();
+      expect(MapController._applyCollectors).toHaveBeenCalled();
+    });
+
+    test('is idempotent when started twice', () => {
+      jest.useFakeTimers();
+      try {
+        UIController._startCollectorPolling();
+        const first = UIController.collectorPollTimer;
+        UIController._startCollectorPolling();
+        expect(UIController.collectorPollTimer).toBe(first);
+        expect(global.API.getSources).toHaveBeenCalledTimes(1);
+      } finally {
+        if (UIController.collectorPollTimer) {
+          clearInterval(UIController.collectorPollTimer);
+          UIController.collectorPollTimer = null;
+        }
+        jest.useRealTimers();
+      }
+    });
+
+    test('does not start without the view_sources permission', () => {
+      UIController.permissions = ['view_map'];
+      UIController._startCollectorPolling();
+      expect(UIController.collectorPollTimer).toBeNull();
     });
   });
 
@@ -1033,7 +1115,6 @@ describe('UIController', () => {
       UIController._updateDroneList = jest.fn();
       UIController._batchLoadTracks = jest.fn();
       MapController.config = { center_lat: 1 };
-      MapController._updateCollectors = jest.fn().mockResolvedValue();
       MapController.loadTracksBatch = jest.fn().mockResolvedValue([]);
       global.API = {
         getRefresh: jest.fn().mockResolvedValue({

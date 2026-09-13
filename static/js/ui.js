@@ -57,6 +57,13 @@ const UIController = {
     lastActivityTime: null,
     _wasPolling: false,
 
+    // Collector/source status — refreshed on a fixed cadence independent of the
+    // drone poller (which may speed up to 2s when drones are detected). Knowing
+    // whether a collector is online/offline does not need fast updates.
+    collectorPollTimer: null,
+    collectorPollIntervalMs: 10000,
+    _wasCollectorPolling: false,
+
     // Incremental update tracking
     droneTimestamps: {}, // Map of "uas_id:session_id" -> last known timestamp
 
@@ -235,6 +242,7 @@ const UIController = {
         await this._applyPermalinkSearch();
         this._applyPermissionGating();
         this._startPolling();
+        this._startCollectorPolling();
         // Register service worker (fire-and-forget)
         this._registerServiceWorker();
     },
@@ -274,6 +282,63 @@ const UIController = {
             clearInterval(this.pollTimer);
             this.pollTimer = null;
             console.debug('[Poll] Timer stopped');
+        }
+    },
+
+    /**
+     * Start the fixed-cadence collector status poller. Collector online/offline
+     * status is decoupled from the drone poller and never drives its fast mode.
+     */
+    _startCollectorPolling() {
+        if (this.collectorPollTimer || !this.hasPermission('view_sources')) return;
+        console.debug(`[CollectorPoll] Starting timer (${this.collectorPollIntervalMs}ms)`);
+        this._refreshCollectorStatus();
+        this.collectorPollTimer = setInterval(
+            () => this._refreshCollectorStatus(),
+            this.collectorPollIntervalMs
+        );
+    },
+
+    /**
+     * Stop the fixed-cadence collector status poller
+     */
+    _stopCollectorPolling() {
+        if (this.collectorPollTimer) {
+            clearInterval(this.collectorPollTimer);
+            this.collectorPollTimer = null;
+            console.debug('[CollectorPoll] Timer stopped');
+        }
+    },
+
+    /**
+     * Refresh collector/source status: the remote sources bar and the collector
+     * markers on the map. Runs on a fixed cadence regardless of drone activity.
+     */
+    async _refreshCollectorStatus() {
+        if (this._collectorStatusLoading) return;
+        this._collectorStatusLoading = true;
+        try {
+            const [sourcesResult, collectorsResult] = await Promise.allSettled([
+                API.getSources(),
+                API.getCollectors(),
+            ]);
+            if (sourcesResult.status === 'fulfilled') {
+                const data = sourcesResult.value;
+                this.remotes = (data && data.sources) || [];
+                this._updateRemoteSummary();
+                if (this.remoteDetailOpen) {
+                    this._renderRemoteDetail();
+                }
+            } else {
+                console.warn('[CollectorPoll] Sources refresh failed:', sourcesResult.reason);
+            }
+            if (collectorsResult.status === 'fulfilled') {
+                MapController._applyCollectors(collectorsResult.value);
+            } else {
+                console.warn('[CollectorPoll] Collectors refresh failed:', collectorsResult.reason);
+            }
+        } finally {
+            this._collectorStatusLoading = false;
         }
     },
 
@@ -1068,6 +1133,8 @@ const UIController = {
             console.debug('[Poll] Page hidden — pausing timer');
             this._wasPolling = !!this.pollTimer;
             this._stopPolling();
+            this._wasCollectorPolling = !!this.collectorPollTimer;
+            this._stopCollectorPolling();
         } else {
             console.debug('[Poll] Page visible — resuming');
 
@@ -1088,6 +1155,12 @@ const UIController = {
                 this._wasPolling = false;
                 this._startPolling();
                 this.refreshData(false);
+            }
+
+            // Resume collector status polling (fires an immediate refresh)
+            if (this._wasCollectorPolling) {
+                this._wasCollectorPolling = false;
+                this._startCollectorPolling();
             }
         }
     },
@@ -1584,15 +1657,8 @@ const UIController = {
                 this.droneTimestamps, this._dataMode, wantFull
             );
 
-            // Update remote status (full responses only — diff responses omit sources)
-            const hasSources = Array.isArray(data.sources);
-            this.remotes = data.sources || this.remotes;
-            if (hasSources) {
-                this._updateRemoteSummary();
-                if (this.remoteDetailOpen) {
-                    this._renderRemoteDetail();
-                }
-            }
+            // Remote sources/collector status is handled by the fixed-cadence
+            // collector poller (_refreshCollectorStatus), not the drone poll.
             const newDrones = data.drones || [];
             if (newDrones.length > 0 && this._initialized) {
                 const existingUasIds = new Set(Object.keys(this.droneMap).map(k => k.split(':')[0]));
@@ -1708,13 +1774,8 @@ const UIController = {
                 }
             }
 
-            // Update collector positions — bundled into full live responses;
-            // fetched directly in archive mode (always full).
-            if (data.collectors) {
-                await MapController._applyCollectors(data.collectors);
-            } else if (data.full) {
-                await MapController._updateCollectors();
-            }
+            // Collector markers are handled by the fixed-cadence collector poller
+            // (_refreshCollectorStatus), not the drone poll.
 
             // Update last update time
             this._updateLastUpdateTime();

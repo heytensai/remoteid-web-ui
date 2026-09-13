@@ -717,26 +717,9 @@ const MapController = {
     },
 
     /**
-     * Fetch and update all collector positions on the map
-     */
-    async _updateCollectors() {
-        if (!this.ready) return;
-        try {
-            const data = await API.getCollectors();
-            this._applyCollectors(data);
-        } catch (e) {
-            console.error('Failed to update collectors:', e);
-            if (typeof UIController !== 'undefined' && UIController.showToast) {
-                UIController.showToast('Failed to update collector positions', 'warning', {
-                    dedupeKey: 'collector-update',
-                });
-            }
-        }
-    },
-
-    /**
      * Update all collector markers from a given collector payload (same shape as
-     * the /api/collectors response, also bundled into full /api/refresh responses).
+     * the /api/collectors response). Called by the frontend's fixed-cadence
+     * collector poller (UIController._refreshCollectorStatus).
      */
     _applyCollectors(data) {
         if (!this.ready || !Array.isArray(data)) return;

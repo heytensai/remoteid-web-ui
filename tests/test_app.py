@@ -929,7 +929,6 @@ class TestApiRefresh:
         assert "drones" in data
         assert "alerts" in data
         assert "stats" in data
-        assert "sources" in data
         assert len(data["drones"]) >= 3
         assert data["alerts"]["count"] >= 0
 
@@ -974,13 +973,13 @@ class TestApiRefresh:
         assert "drones" in data
         assert "alerts" in data
         assert "stats" in data
-        assert "sources" in data
         assert data["stats"]["total_drones"] == len(set(
             d["uas_id"] for d in data["drones"]
         ))
 
-    def test_refresh_live_full_includes_collectors(self, client, db):
-        """A full live response bundles the collector payload."""
+    def test_refresh_live_full_omits_collector_status(self, client, db):
+        """Collector/source status is polled separately — not bundled into the
+        refresh response (#183)."""
         resp = client.post(
             "/api/refresh",
             data=json.dumps({"mode": "live", "full": True}),
@@ -992,8 +991,8 @@ class TestApiRefresh:
         assert data["full"] is True
         assert data["changed"] is True
         assert "stats" in data
-        assert "sources" in data
-        assert "collectors" in data
+        assert "sources" not in data
+        assert "collectors" not in data
 
     def test_refresh_live_diff_no_changes(self, client, db):
         """A live diff with nothing newer than the client's timestamps is tiny."""
@@ -1180,7 +1179,6 @@ class TestApiRefresh:
         assert "drones" in data
         assert "alerts" in data
         assert "stats" in data
-        assert "sources" in data
         assert len(data["drones"]) >= 3
         assert "total_drones" in data["stats"]
 
