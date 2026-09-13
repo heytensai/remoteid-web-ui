@@ -50,22 +50,48 @@ function checkFile(srcPath, destPath) {
   return false;
 }
 
+// Copy a file only when it is missing or its content differs, leaving the
+// mtimes of unchanged files untouched so incremental deploys (rsync, etc.)
+// don't re-upload every vendored asset on every build (#186).
+function copyIfChanged(srcPath, destPath) {
+  if (existsSync(destPath) && sha256(srcPath) === sha256(destPath)) {
+    return false;
+  }
+  ensureDir(destPath);
+  copyFileSync(srcPath, destPath);
+  return true;
+}
+
+// Returns the number of files that were changed (check mode: out of sync;
+// copy mode: written).
 function copyTree(srcDir, destDir) {
+  let changed = 0;
   for (const srcFile of listFiles(srcDir)) {
     const destFile = join(destDir, relative(srcDir, srcFile));
     if (CHECK) {
-      return checkFile(srcFile, destFile);
+      if (checkFile(srcFile, destFile)) changed += 1;
+    } else if (copyIfChanged(srcFile, destFile)) {
+      changed += 1;
     }
-    ensureDir(destFile);
-    copyFileSync(srcFile, destFile);
   }
-  return false;
+  return changed;
 }
 
-let mismatch = false;
+function totalFiles() {
+  return FILE_MAP.reduce((total, [srcRel]) => {
+    const srcPath = join(SRC, srcRel);
+    return total + (statSync(srcPath).isDirectory() ? listFiles(srcPath).length : 1);
+  }, 0);
+}
+
+let mismatch = 0;
+let copied = 0;
+let total = 0;
 
 if (CHECK) {
   console.log(`Verifying ${FILE_MAP.length} vendored entries against node_modules...`);
+} else {
+  total = totalFiles();
 }
 
 for (const [srcRel, destRel] of FILE_MAP) {
@@ -77,23 +103,28 @@ for (const [srcRel, destRel] of FILE_MAP) {
   }
 
   if (statSync(srcPath).isDirectory()) {
-    mismatch = copyTree(srcPath, destPath) || mismatch;
+    if (CHECK) {
+      mismatch += copyTree(srcPath, destPath);
+    } else {
+      copied += copyTree(srcPath, destPath);
+    }
     continue;
   }
 
   if (CHECK) {
-    mismatch = checkFile(srcPath, destPath) || mismatch;
-  } else {
-    ensureDir(destPath);
-    copyFileSync(srcPath, destPath);
+    if (checkFile(srcPath, destPath)) mismatch += 1;
+  } else if (copyIfChanged(srcPath, destPath)) {
+    copied += 1;
   }
 }
 
-if (CHECK && mismatch) {
+if (CHECK && mismatch > 0) {
   console.error('static/vendor is out of sync - run make vendor');
   process.exit(1);
 } else if (CHECK) {
   console.log('static/vendor is in sync with node_modules');
 } else {
-  console.log('Vendored dependencies copied to static/vendor');
+  console.log(
+    `Vendored dependencies copied to static/vendor (${copied} written, ${total - copied} unchanged)`
+  );
 }
