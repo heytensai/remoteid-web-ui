@@ -1289,6 +1289,23 @@ const MapController = {
     },
 
     /**
+     * Fit the map to a loaded session's track, mirroring the zoom that
+     * clicking that session in the list produces. Falls back to panToDrone
+     * when the track isn't loaded yet.
+     */
+    fitToSession(uasId, sessionId) {
+        if (!this.ready) return;
+        const sessionKey = `${uasId}:${sessionId}`;
+        const positions = this.sessionPositions[sessionKey];
+        if (positions && positions.length > 0) {
+            const latLngs = positions.map(p => [p.latitude, p.longitude]);
+            this.map.fitBounds(latLngs, { padding: [50, 50], maxZoom: 16 });
+        } else {
+            this.panToDrone(uasId);
+        }
+    },
+
+    /**
      * Pan to a specific drone
      */
     panToDrone(uasId) {

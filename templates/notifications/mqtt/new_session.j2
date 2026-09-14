@@ -19,7 +19,9 @@
 {% if lon is defined and lon is not none %},
   "longitude": {{ '%.6f' % lon }}
 {% endif %}
-{% if server_url %},
+{% if flight_url or server_url %},
+  "flight_url": "{{ (flight_url or server_url)|json_escape }}"
+{% endif %}{% if server_url %},
   "server_url": "{{ server_url|json_escape }}"
 {% endif %}
 }

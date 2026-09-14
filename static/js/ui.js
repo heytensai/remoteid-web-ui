@@ -2196,7 +2196,7 @@ const UIController = {
         }
         const allPending = [...pending, ...refreshPending];
         if (allPending.length > 0) {
-            MapController.loadTracksBatch(allPending).then(loaded => {
+            return MapController.loadTracksBatch(allPending).then(loaded => {
                 if (loaded.length > 0) {
                     this.showToast(`Loaded ${loaded.length} track${loaded.length > 1 ? 's' : ''}`, 'success', {
                         duration: 2500,
@@ -2212,6 +2212,7 @@ const UIController = {
                 this._updateReplayButtonState();
             });
         }
+        return Promise.resolve();
     },
 
     /**
@@ -2751,7 +2752,8 @@ const UIController = {
 
         this._droneListCacheKey = null;
         this._updateDroneList(this._applySearchFilter(this._filterKnownUnknownDrones()));
-        this._batchLoadTracks([newest]);
+        await this._batchLoadTracks([newest]);
+        MapController.fitToSession(newest.uas_id, newest.computed_session_id);
         this._updateReplayButtonState();
     },
 
@@ -2785,7 +2787,8 @@ const UIController = {
 
         this._droneListCacheKey = null;
         this._updateDroneList(this._applySearchFilter(this._filterKnownUnknownDrones()));
-        this._batchLoadTracks([session]);
+        await this._batchLoadTracks([session]);
+        MapController.fitToSession(session.uas_id, session.computed_session_id);
         this._updateReplayButtonState();
     },
 

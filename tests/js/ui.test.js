@@ -67,6 +67,7 @@ global.MapController = {
   fitBounds: jest.fn(),
   panToDrone: jest.fn(),
   highlightDrone: jest.fn(),
+  fitToSession: jest.fn(),
   filterOperatorsByUasIds: jest.fn(),
   removeTrack: jest.fn(),
   loadTrackSession: jest.fn(),
@@ -100,6 +101,7 @@ uiCode = uiCode
 const realRefreshData = UIController.refreshData;
 // The search tests mock the render helpers; keep the real one for direct tests.
 const realRenderUASSearchResult = UIController._renderUASSearchResult;
+const realRenderSessionSearchResult = UIController._renderSessionSearchResult;
 
 describe('UIController', () => {
   beforeEach(() => {
@@ -1146,6 +1148,37 @@ describe('UIController', () => {
       expect(UIController.loadedTracks.size).toBe(0);
       expect(MapController.clearAllTracks).toHaveBeenCalled();
       expect(UIController._batchLoadTracks).toHaveBeenCalledWith([result.sessions[0]]);
+      expect(MapController.fitToSession).toHaveBeenCalledWith('drone-001', 'session_new');
+    });
+
+    test('_renderSessionSearchResult merges the session and zooms to its track', async () => {
+      UIController._renderSessionSearchResult = realRenderSessionSearchResult;
+      UIController._forceUASView = jest.fn();
+      UIController._switchToArchive = jest.fn();
+      UIController._updateDroneList = jest.fn();
+      UIController._batchLoadTracks = jest.fn();
+      UIController._updateReplayButtonState = jest.fn();
+      MapController.clearAllTracks = jest.fn();
+      UIController._searchTarget = { type: 'session', uasId: 'drone-001', sessionId: 'session_abc' };
+      UIController._dataMode = 'live';
+
+      const result = {
+        type: 'session',
+        q: 'session_abc',
+        sessions: [
+          { uas_id: 'drone-001', computed_session_id: 'session_abc', timestamp: '2024-01-01T01:00:00Z', latitude: 1, longitude: 2, altitude: 10 },
+        ],
+      };
+
+      await UIController._renderSessionSearchResult(result);
+
+      expect(UIController._forceUASView).toHaveBeenCalled();
+      expect(UIController._switchToArchive).toHaveBeenCalled();
+      expect(UIController.droneMap['drone-001:session_abc']).toBeDefined();
+      expect(UIController.visibleSessions.has('drone-001:session_abc')).toBe(true);
+      expect(MapController.clearAllTracks).toHaveBeenCalled();
+      expect(UIController._batchLoadTracks).toHaveBeenCalledWith([result.sessions[0]]);
+      expect(MapController.fitToSession).toHaveBeenCalledWith('drone-001', 'session_abc');
     });
 
     test('_clearSearchFocus clears the target, input, permalink, and focus bar', () => {

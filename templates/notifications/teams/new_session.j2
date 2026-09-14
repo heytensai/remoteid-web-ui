@@ -31,10 +31,10 @@
               ,{"title": "Height{% if height_type %} ({{ height_type|json_escape }}){% endif %}", "value": "{{ '%.0f' % (height if use_metric else height * 3.28084) }}{{ 'm' if use_metric else 'ft' }}"}
               {% endif -%}
             ]
-          }{% if server_url %},
+          }{% if flight_url or server_url %},
           {
             "type": "TextBlock",
-            "text": "[Open in Remote ID]({{ server_url }})",
+            "text": "[Open in Remote ID]({{ flight_url or server_url }})",
             "isSubtle": true,
             "size": "Small"
           }{% endif %}

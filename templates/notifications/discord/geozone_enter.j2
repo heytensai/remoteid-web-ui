@@ -7,7 +7,7 @@
       {"name": "Drone", "value": "{{ name|json_escape }}", "inline": true},
       {"name": "Zone", "value": "{{ geozone_name|json_escape }}", "inline": true}
     ],
-    "timestamp": "{{ timestamp }}"{% if server_url %},
-    "url": "{{ server_url }}"{% endif %}
+    "timestamp": "{{ timestamp }}"{% if flight_url or server_url %},
+    "url": "{{ flight_url or server_url }}"{% endif %}
   }]
 }

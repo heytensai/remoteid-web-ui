@@ -18,10 +18,10 @@
           {
             "type": "TextBlock",
             "text": "Drone **{{ name|json_escape }}** left **{{ geozone_name|json_escape }}**"
-          }{% if server_url %},
+          }{% if flight_url or server_url %},
           {
             "type": "TextBlock",
-            "text": "[Open in Remote ID]({{ server_url }})",
+            "text": "[Open in Remote ID]({{ flight_url or server_url }})",
             "isSubtle": true,
             "size": "Small"
           }{% endif %}

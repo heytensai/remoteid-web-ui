@@ -13,7 +13,7 @@
       ,{"name": "Height{% if height_type %} ({{ height_type|json_escape }}){% endif %}", "value": "{{ '%.0f' % (height if use_metric else height * 3.28084) }}{{ 'm' if use_metric else 'ft' }}", "inline": true}
       {% endif -%}
     ],
-    "timestamp": "{{ timestamp }}"{% if server_url %},
-    "url": "{{ server_url }}"{% endif %}
+    "timestamp": "{{ timestamp }}"{% if flight_url or server_url %},
+    "url": "{{ flight_url or server_url }}"{% endif %}
   }]
 }

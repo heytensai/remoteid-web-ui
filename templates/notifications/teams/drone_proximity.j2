@@ -18,10 +18,10 @@
           {
             "type": "TextBlock",
             "text": "**{{ name_a|json_escape }}** and **{{ name_b|json_escape }}** are **{{ distance_str }}** apart"
-          }{% if server_url %},
+          }{% if flight_url or server_url %},
           {
             "type": "TextBlock",
-            "text": "[Open in Remote ID]({{ server_url }})",
+            "text": "[Open in Remote ID]({{ flight_url or server_url }})",
             "isSubtle": true,
             "size": "Small"
           }{% endif %}

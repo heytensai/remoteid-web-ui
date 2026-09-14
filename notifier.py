@@ -507,6 +507,16 @@ class NotifierService:
         """
         ctx.setdefault("server_url", self._server_url)
         ctx.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+        ctx.setdefault("flight_url", None)
+
+        # Build a deep-link URL so notification recipients click through
+        # to the relevant flight, not just the dashboard root (#182).
+        if "session_id" in ctx:
+            ctx["flight_url"] = f"{self._server_url}?session={ctx['session_id']}"
+        elif "uas_id" in ctx:
+            ctx["flight_url"] = f"{self._server_url}?uas={ctx['uas_id']}"
+        elif "uas_id_a" in ctx:
+            ctx["flight_url"] = f"{self._server_url}?uas={ctx['uas_id_a']}"
 
         for nt in self._targets:
             if not nt.enabled:
@@ -528,7 +538,9 @@ class NotifierService:
                 elif nt.type == "ntfy":
                     payload = template.render(**ctx)
                     ntfy_headers = dict(_NTFY_EVENT_HEADERS.get(event, {}))
-                    if ctx.get("server_url"):
+                    if ctx.get("flight_url"):
+                        ntfy_headers["click_url"] = ctx["flight_url"]
+                    elif ctx.get("server_url"):
                         ntfy_headers["click_url"] = ctx["server_url"]
                     logger.debug("ntfy payload for %s: %s", nt.name, payload)
                     _send_ntfy(nt.webhook_url, payload, token=nt.token,

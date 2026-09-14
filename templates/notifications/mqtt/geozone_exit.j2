@@ -4,7 +4,9 @@
   "uas_id": "{{ uas_id|json_escape }}",
   "name": "{{ name|json_escape }}",
   "geozone": "{{ geozone_name|json_escape }}"
-{% if server_url %},
+{% if flight_url or server_url %},
+  "flight_url": "{{ (flight_url or server_url)|json_escape }}"
+{% endif %}{% if server_url %},
   "server_url": "{{ server_url|json_escape }}"
 {% endif %}
 }

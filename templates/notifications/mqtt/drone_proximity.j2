@@ -7,7 +7,9 @@
   "name_b": "{{ name_b|json_escape }}",
   "distance_m": {{ '%.2f' % distance_m }},
   "distance": "{{ distance_str|json_escape }}"
-{% if server_url %},
+{% if flight_url or server_url %},
+  "flight_url": "{{ (flight_url or server_url)|json_escape }}"
+{% endif %}{% if server_url %},
   "server_url": "{{ server_url|json_escape }}"
 {% endif %}
 }
