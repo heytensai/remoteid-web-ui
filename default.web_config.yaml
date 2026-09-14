@@ -6,6 +6,10 @@ web_interface:
   host: "0.0.0.0"
   port: 5000
 
+  # Set to true when serving over HTTPS (reverse proxy or direct TLS).
+  # Marks session cookies as Secure so browsers only send them over HTTPS.
+  secure_cookies: false
+
   # PostgreSQL connection URL
   # Format: postgresql://user:password@host:5432/dbname
   # For Docker: use "postgresql://remoteid:${POSTGRES_PASSWORD}@db:5432/remoteid"

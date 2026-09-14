@@ -133,6 +133,159 @@ notifications:
 
 Supported types: `discord`, `ntfy`, `teams`. See `default.web_config.yaml` for full examples.
 
+## HTTPS / Reverse Proxy
+
+Even on private networks, HTTPS is a good practice. The app listens on plain HTTP (port 5000) and expects a reverse proxy to handle TLS termination.
+
+### Required Config Changes
+
+Set these in `config/web_config.yaml`:
+
+```yaml
+web_interface:
+  # The public URL — must include the scheme and any url_prefix
+  server_url: "https://drone.example.com"
+
+  # Optional: sub-path prefix if hosting under a path (e.g. /rid)
+  # url_prefix: "/rid"
+
+  # Mark session cookies as Secure so browsers only send them over HTTPS
+  secure_cookies: true
+```
+
+### Nginx (self-signed cert)
+
+Generate a self-signed certificate:
+
+```bash
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/nginx/ssl/selfsigned.key \
+  -out /etc/nginx/ssl/selfsigned.crt \
+  -subj "/CN=drone.example.com"
+```
+
+Nginx config (`/etc/nginx/sites-available/remoteid`):
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name drone.example.com;
+
+    ssl_certificate     /etc/nginx/ssl/selfsigned.crt;
+    ssl_certificate_key /etc/nginx/ssl/selfsigned.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    client_max_body_size 16m;
+
+    location / {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# Optional: redirect HTTP → HTTPS
+server {
+    listen 80;
+    server_name drone.example.com;
+    return 301 https://$host$request_uri;
+}
+```
+
+Enable the site:
+
+```bash
+ln -s /etc/nginx/sites-available/remoteid /etc/nginx/sites-enabled/
+nginx -t && systemctl reload nginx
+```
+
+### Caddy (automatic or self-signed)
+
+Caddy handles TLS automatically. For a real domain with ACME, just use the domain name. For self-signed on a private network, use `tls internal`:
+
+```bash
+# Caddyfile
+drone.example.com {
+    tls internal
+
+    reverse_proxy 127.0.0.1:5000 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}
+```
+
+Start Caddy:
+
+```bash
+caddy run --config Caddyfile
+```
+
+### Apache (self-signed cert)
+
+Generate a self-signed certificate:
+
+```bash
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/apache2/ssl/selfsigned.key \
+  -out /etc/apache2/ssl/selfsigned.crt \
+  -subj "/CN=drone.example.com"
+```
+
+Enable required modules:
+
+```bash
+a2enmod ssl proxy proxy_http headers
+```
+
+Apache config (`/etc/apache2/sites-available/remoteid.conf`):
+
+```apache
+<VirtualHost *:443>
+    ServerName drone.example.com
+
+    SSLEngine on
+    SSLCertificateFile    /etc/apache2/ssl/selfsigned.crt
+    SSLCertificateKeyFile /etc/apache2/ssl/selfsigned.key
+
+    ProxyPreserveHost On
+    RequestHeader set X-Forwarded-Proto "https"
+    RequestHeader set X-Forwarded-For "%{REMOTE_ADDR}s"
+
+    ProxyPass / http://127.0.0.1:5000/
+    ProxyPassReverse / http://127.0.0.1:5000/
+</VirtualHost>
+
+# Optional: redirect HTTP → HTTPS
+<VirtualHost *:80>
+    ServerName drone.example.com
+    Redirect permanent / https://drone.example.com/
+</VirtualHost>
+```
+
+Enable the site:
+
+```bash
+a2ensite remoteid && apachectl configtest && systemctl reload apache2
+```
+
+### Collector Submissions Over HTTPS
+
+Once behind a reverse proxy, collector API calls should use the public HTTPS URL:
+
+```bash
+curl -X POST https://drone.example.com/api/submit \
+  -H "Authorization: Bearer your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '[{"timestamp": "2026-06-02T14:30:00", "uas_id": "drone-123", "latitude": 43.5, "longitude": -112.0, "altitude": 100.5}]'
+```
+
+See [COLLECTOR_API.md](COLLECTOR_API.md) for full API details.
+
 ## Data Ingestion
 
 ### HTTP API (Primary)

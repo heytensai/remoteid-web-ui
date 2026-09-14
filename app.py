@@ -86,12 +86,13 @@ csrf = CSRFProtect(app)
 logging.getLogger("flask_wtf.csrf").setLevel(logging.WARNING)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB limit
 app.config["WTF_CSRF_TIME_LIMIT"] = None  # No time limit on CSRF tokens (session-scoped only)
+app.config["WTF_CSRF_SSL_STRICT"] = False  # Disable referrer check — breaks behind reverse proxies
 
 # Session cookie security settings
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=False,  # Set to True if serving over HTTPS
+    SESSION_COOKIE_SECURE=False,  # Overridden by secure_cookies in _init_app
 )
 
 limiter = Limiter(
@@ -1613,6 +1614,9 @@ def _init_app(config_path: str):
 
     logger.info("Loading configuration from %s", config_path)
     CONFIG = WebConfig(config_path)
+
+    # Apply HTTPS cookie flag from config (defaults to False for plain HTTP)
+    app.config["SESSION_COOKIE_SECURE"] = CONFIG.secure_cookies
 
     db_url = os.environ.get("DATABASE_URL", "") or CONFIG.database_url
     if not db_url:

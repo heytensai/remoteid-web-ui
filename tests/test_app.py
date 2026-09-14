@@ -1739,3 +1739,23 @@ class TestAuth:
         assert data["token"] != existing_token
         assert data["user"]["name"] == "Dave"
         assert data["user"]["role"] == "operator"
+
+
+class TestSecureCookies:
+    def test_session_cookie_secure_default_false(self, app):
+        # Default config (no secure_cookies) leaves SESSION_COOKIE_SECURE False
+        assert app.config["SESSION_COOKIE_SECURE"] is False
+
+    def test_session_cookie_secure_true_from_config(self, app, sample_config_yaml):
+        import yaml
+
+        config_path = sample_config_yaml
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        data["web_interface"]["secure_cookies"] = True
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f)
+
+        from app import _init_app
+        new_app = _init_app(config_path)
+        assert new_app.config["SESSION_COOKIE_SECURE"] is True

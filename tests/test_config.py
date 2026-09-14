@@ -48,6 +48,7 @@ def test_web_config_defaults():
         assert cfg.max_positions_per_query == 5000
         assert cfg.use_metric is True
         assert cfg.url_prefix == ""
+        assert cfg.secure_cookies is False
         assert cfg.map.tile_provider == "osm"
         assert cfg.api_keys == {}
         assert cfg.drone_aliases == {}
@@ -67,6 +68,7 @@ def test_web_config_full():
                 "max_positions_per_query": 1000,
                 "use_metric": False,
                 "url_prefix": "/rid",
+                "secure_cookies": True,
                 "map": {
                     "center_lat": 51.5,
                     "center_lon": -0.12,
@@ -93,6 +95,7 @@ def test_web_config_full():
             assert cfg.max_positions_per_query == 1000
             assert cfg.use_metric is False
             assert cfg.url_prefix == "/rid"
+            assert cfg.secure_cookies is True
             assert cfg.map.center_lat == 51.5
             assert cfg.map.tile_provider == "carto-light"
             assert cfg.api_keys == {"key1": "source1"}

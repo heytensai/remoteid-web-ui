@@ -222,6 +222,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
     position_stale_minutes: int = 30
     roles: Dict[str, RoleConfig] = field(default_factory=dict)
     server_url: str = ""
+    secure_cookies: bool = False
     notifications: List[NotificationTargetConfig] = field(default_factory=list)
 
     def __init__(self, yaml_file: str):
@@ -299,6 +300,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
 
         # Notification targets
         self.server_url = web_data.get("server_url", "")
+        self.secure_cookies = web_data.get("secure_cookies", False)
         self.notifications = self._parse_notifications(web_data.get("notifications") or [])
 
     def _parse_roles(self, roles_data: dict) -> Dict[str, RoleConfig]:
@@ -532,6 +534,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
             ],
             "position_stale_minutes": self.position_stale_minutes,
             "server_url": self.server_url,
+            "secure_cookies": self.secure_cookies,
             "notifications": [
                 {
                     "name": n.name,
