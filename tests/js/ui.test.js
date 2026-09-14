@@ -554,6 +554,7 @@ describe('UIController', () => {
 
       UIController.elements = {
         refreshBtn: document.createElement('button'),
+        loadingOverlay: Object.assign(document.createElement('div'), { hidden: true }),
         droneList: document.createElement('div'),
         lastUpdateSpan: document.createElement('span'),
       };
@@ -791,6 +792,44 @@ describe('UIController', () => {
 
       expect(MapController._applyCollectors).not.toHaveBeenCalled();
       expect(UIController._updateRemoteSummary).not.toHaveBeenCalled();
+    });
+
+    test('shows the loading overlay during a full refresh and hides it in finally', async () => {
+      UIController.droneMap = {};
+      UIController.droneTimestamps = {};
+      let resolveRefresh;
+      API.getRefresh.mockReturnValue(new Promise(resolve => {
+        resolveRefresh = resolve;
+      }));
+
+      const pending = UIController.refreshData();
+      // Overlay is visible while the request is in flight for a full refresh
+      expect(UIController.elements.loadingOverlay.hidden).toBe(false);
+
+      resolveRefresh({
+        drones: [],
+        full: true,
+        alerts: { active: [] },
+        stats: {},
+      });
+      await pending;
+
+      expect(UIController.elements.loadingOverlay.hidden).toBe(true);
+    });
+
+    test('never shows the loading overlay for background polls', async () => {
+      UIController.droneMap = {};
+      UIController.droneTimestamps = {};
+      API.getRefresh.mockResolvedValue({
+        drones: [],
+        full: false,
+        alerts: { active: [] },
+        stats: {},
+      });
+
+      await UIController.refreshData(false);
+
+      expect(UIController.elements.loadingOverlay.hidden).toBe(true);
     });
   });
 

@@ -780,6 +780,39 @@ body.dark-mode .search-focus-clear:hover {
     to { transform: rotate(360deg); }
 }
 
+/* Loading overlay — shown for coarse refreshes (initial load, manual
+   refresh, mode/time-window switches), never for background polls. */
+.loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.6);
+    z-index: 2000;
+    pointer-events: none;
+}
+
+.loading-overlay i {
+    font-size: 3rem;
+    color: #007bff;
+}
+
+.loading-overlay[hidden] {
+    display: none;
+}
+
+body.dark-mode .loading-overlay {
+    background: rgba(26, 26, 46, 0.75);
+}
+
+body.dark-mode .loading-overlay i {
+    color: #4da3ff;
+}
+
 @keyframes wp-flash {
     0% { transform: scale(1); }
     50% { transform: scale(1.8); box-shadow: 0 0 12px rgba(0, 0, 0, 0.5); }

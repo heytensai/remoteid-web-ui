@@ -437,6 +437,7 @@ const UIController = {
             detailOperatorId: document.getElementById('detailOperatorId'),
             detailOperatorPos: document.getElementById('detailOperatorPos'),
             refreshBtn: document.getElementById('refreshBtn'),
+            loadingOverlay: document.getElementById('loadingOverlay'),
             searchBtn: document.getElementById('searchBtn'),
             searchPanel: document.getElementById('searchPanel'),
             searchInput: document.getElementById('searchInput'),
@@ -1144,6 +1145,9 @@ const UIController = {
                 console.warn('[Poll] isLoading was stuck true — resetting');
                 this.isLoading = false;
                 this.elements.refreshBtn.classList.remove('spinning');
+                if (this.elements.loadingOverlay) {
+                    this.elements.loadingOverlay.hidden = true;
+                }
             }
 
             // Re-acquire wake lock if needed
@@ -1635,6 +1639,9 @@ const UIController = {
         this.isLoading = true;
         if (showSpinner) {
             this.elements.refreshBtn.classList.add('spinning');
+            if (this.elements.loadingOverlay) {
+                this.elements.loadingOverlay.hidden = false;
+            }
         }
 
         try {
@@ -1789,6 +1796,9 @@ const UIController = {
         } finally {
             this.isLoading = false;
             this.elements.refreshBtn.classList.remove('spinning');
+            if (this.elements.loadingOverlay) {
+                this.elements.loadingOverlay.hidden = true;
+            }
             this._adjustPollTimer();
         }
     },
@@ -1802,6 +1812,9 @@ const UIController = {
             console.warn('[Refresh] forceRefresh — was stuck, resetting isLoading');
             this.isLoading = false;
             this.elements.refreshBtn.classList.remove('spinning');
+            if (this.elements.loadingOverlay) {
+                this.elements.loadingOverlay.hidden = true;
+            }
         }
         this.refreshData(true);
     },

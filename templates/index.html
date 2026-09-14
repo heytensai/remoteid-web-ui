@@ -457,6 +457,12 @@
         <span>Connection lost — retrying…</span>
     </div>
 
+    <!-- Loading overlay: shown for coarse refreshes (initial load, manual
+         refresh, mode/time-window switches), never for background polls -->
+    <div id="loadingOverlay" class="loading-overlay" hidden>
+        <i class="fas fa-spinner fa-spin"></i>
+    </div>
+
     <!-- Leaflet JS -->
     <script src="{{ url_prefix }}{{ static_url('vendor/leaflet/leaflet.js') }}"></script>
 
