@@ -441,6 +441,96 @@ describe('MapController', () => {
     });
   });
 
+  describe('_droneAnnotationContent', () => {
+    beforeEach(() => {
+      MapController.droneAliases = {};
+      Units.formatAltitude.mockClear();
+      Units.formatAltitude.mockReturnValue('100m');
+    });
+
+    const withHeight = {
+      latitude: 37.77,
+      longitude: -122.41,
+      height: 150,
+      altitude: 100,
+      timestamp: '2024-01-01T12:00:00Z',
+    };
+
+    test('shows the friendly alias on the first line when available', () => {
+      MapController.droneAliases = { 'drone-001': 'Alpha' };
+      const html = MapController._droneAnnotationContent('drone-001', withHeight);
+      expect(html).toContain('class="drone-annotation-id"');
+      expect(html).toContain('Alpha');
+    });
+
+    test('shows the serial (uas_id) when no alias is set', () => {
+      const html = MapController._droneAnnotationContent('W34-ABC123', withHeight);
+      expect(html).toContain('W34-ABC123');
+    });
+
+    test('escapes the display name', () => {
+      MapController.droneAliases = { 'drone-001': '<script>alert(1)</script>' };
+      const html = MapController._droneAnnotationContent('drone-001', withHeight);
+      expect(html).not.toContain('<script>');
+      expect(html).toContain('&lt;script&gt;');
+    });
+
+    test('formats the height of the latest packet on the second line', () => {
+      MapController._droneAnnotationContent('drone-001', withHeight);
+      expect(Units.formatAltitude).toHaveBeenCalledWith(150, true, 0);
+      const html = MapController._droneAnnotationContent('drone-001', withHeight);
+      expect(html).toContain('class="drone-annotation-meta"');
+      expect(html).toContain('100m');
+    });
+
+    test('falls back to altitude when height is missing', () => {
+      const pos = { latitude: 1, longitude: 2, altitude: 88, timestamp: '2024-01-01T12:00:00Z' };
+      MapController._droneAnnotationContent('drone-001', pos);
+      expect(Units.formatAltitude).toHaveBeenCalledWith(88, true, 0);
+    });
+
+    test('shows the time (no date) of the latest packet', () => {
+      const html = MapController._droneAnnotationContent('drone-001', withHeight);
+      expect(html).toContain('&middot;');
+      expect(html).not.toContain('2024-01-01');
+    });
+
+    test('renders both lines, no field labels', () => {
+      const html = MapController._droneAnnotationContent('drone-001', withHeight);
+      expect(html).toContain('drone-annotation-id');
+      expect(html).toContain('drone-annotation-meta');
+      expect(html).not.toMatch(/alias|height|time|altitude/i);
+    });
+  });
+
+  describe('_bindDroneAnnotation', () => {
+    beforeEach(() => {
+      MapController.isLiveMode = false;
+    });
+
+    test('does nothing outside live mode', () => {
+      const marker = { bindTooltip: jest.fn() };
+      MapController._bindDroneAnnotation(marker, 'drone-001', {});
+      expect(marker.bindTooltip).not.toHaveBeenCalled();
+    });
+
+    test('binds a permanent top tooltip in live mode', () => {
+      MapController.isLiveMode = true;
+      MapController.droneAliases = { 'drone-001': 'Alpha' };
+      const marker = { bindTooltip: jest.fn() };
+      const pos = { height: 20, timestamp: '2024-01-01T12:00:00Z' };
+      MapController._bindDroneAnnotation(marker, 'drone-001', pos);
+      expect(marker.bindTooltip).toHaveBeenCalledWith(
+        expect.stringContaining('Alpha'),
+        expect.objectContaining({
+          permanent: true,
+          direction: 'top',
+          className: 'drone-annotation',
+        })
+      );
+    });
+  });
+
   describe('_createSessionPointPopup', () => {
     const pos = {
       latitude: 37.7749,

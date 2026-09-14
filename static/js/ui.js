@@ -231,6 +231,7 @@ const UIController = {
         MapController.clearAllOperators();
 
         // Start in live mode — disable time controls
+        MapController.setLiveMode(this._dataMode === 'live');
         if (this._dataMode === 'live') {
             if (this.elements.headerTimeControls) {
                 this.elements.headerTimeControls.classList.add('disabled');
@@ -2434,6 +2435,7 @@ const UIController = {
         this.droneTimestamps = {};
         this._clearActivePreset();
         this._clearStoredPreset();
+        MapController.setLiveMode(true);
 
         // Update live button state
         if (this.elements.liveBtn) {
@@ -2481,6 +2483,7 @@ const UIController = {
         if (this._dataMode === 'archive' && !presetHours) return;
         this._dataMode = 'archive';
         this.droneTimestamps = {};
+        MapController.setLiveMode(false);
 
         // Update live button state
         if (this.elements.liveBtn) {

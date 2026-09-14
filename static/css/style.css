@@ -2476,6 +2476,37 @@ body.dark-mode .drone-position-icon {
     background: #1a1a2e;
 }
 
+/* Live-mode annotation bubble on drone markers */
+.drone-annotation.leaflet-tooltip {
+    background: rgba(20, 26, 40, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+    padding: 3px 8px;
+    font-size: 11px;
+    line-height: 1.35;
+    text-align: center;
+    font-weight: 500;
+}
+
+.drone-annotation .drone-annotation-id {
+    font-weight: 700;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.drone-annotation .drone-annotation-meta {
+    opacity: 0.85;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Tooltip arrow matches the bubble background */
+.drone-annotation.leaflet-tooltip-top:before {
+    border-top-color: rgba(20, 26, 40, 0.92);
+}
+
 /* Manufacturer badge in drone list */
 .mfr-badge {
     display: inline-flex;

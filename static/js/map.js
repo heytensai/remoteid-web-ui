@@ -45,6 +45,14 @@ const MapController = {
     staleTimeout: 300,
     alertUasIds: new Set(),
     colorMode: 'drone', // 'drone' = per-UAS-ID color, 'height' = height-band color
+    isLiveMode: false,
+
+    /**
+     * Enable/disable live-mode drone annotation bubbles.
+     */
+    setLiveMode(enabled) {
+        this.isLiveMode = !!enabled;
+    },
 
     escapeHtml(str) {
         if (str === null || str === undefined) return '';
@@ -1099,6 +1107,42 @@ const MapController = {
     },
 
     /**
+     * Build the HTML content for a live-mode drone annotation bubble.
+     * Line 1: UAS display name (alias if set, otherwise the serial).
+     * Line 2: height of the latest packet + time of the latest packet.
+     * @param {string} uasId
+     * @param {Object} pos - Position object with latitude/longitude/height/altitude/timestamp.
+     * @returns {string} Escaped, safe HTML for the annotation tooltip.
+     */
+    _droneAnnotationContent(uasId, pos) {
+        const esc = (v) => this.escapeHtml(v);
+        const height = pos.height != null ? pos.height : pos.altitude;
+        const heightStr = Units.formatAltitude(height, true, 0);
+        const time = new Date(pos.timestamp);
+        const timeStr = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+        return `
+            <div class="drone-annotation-id">${esc(this.getDroneName(uasId))}</div>
+            <div class="drone-annotation-meta">${heightStr} &middot; ${timeStr}</div>
+        `;
+    },
+
+    /**
+     * Bind a permanent annotation bubble to a drone marker so it follows the
+     * drone as it moves. Only active in live mode. The bubble is re-bound with
+     * fresh height/time each time the marker is rebuilt for a new packet.
+     */
+    _bindDroneAnnotation(marker, uasId, pos) {
+        if (!this.isLiveMode) return;
+        marker.bindTooltip(this._droneAnnotationContent(uasId, pos), {
+            permanent: true,
+            direction: 'top',
+            offset: [0, -10],
+            opacity: 1,
+            className: 'drone-annotation'
+        });
+    },
+
+    /**
      * Distinct friendly names of configured collectors that saw a session
      */
     _collectorNamesForPositions(positions) {
@@ -1145,6 +1189,7 @@ const MapController = {
             marker._uasId = uasId;
             marker._height = pos.height != null ? pos.height : pos.altitude;
             marker.bindPopup(this._createSessionPointPopup(uasId, sessionId, pos, 'Position', color, collectorNames));
+            this._bindDroneAnnotation(marker, uasId, pos);
             this.tracks[trackKey].markers.push(marker);
             return;
         }
@@ -1176,6 +1221,9 @@ const MapController = {
         endMarker._uasId = uasId;
         endMarker._height = endPos.height != null ? endPos.height : endPos.altitude;
         endMarker.bindPopup(this._createSessionPointPopup(uasId, sessionId, endPos, 'End', color, collectorNames));
+        if (isActive) {
+            this._bindDroneAnnotation(endMarker, uasId, endPos);
+        }
         this.tracks[trackKey].markers.push(endMarker);
     },
 

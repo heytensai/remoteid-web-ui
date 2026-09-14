@@ -74,6 +74,7 @@ global.MapController = {
   loadTracksBatch: jest.fn().mockResolvedValue({}),
   updateAlertState: jest.fn(),
   _applyCollectors: jest.fn(),
+  setLiveMode: jest.fn(),
 };
 
 global.Units = {
