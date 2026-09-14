@@ -511,12 +511,13 @@ class NotifierService:
 
         # Build a deep-link URL so notification recipients click through
         # to the relevant flight, not just the dashboard root (#182).
+        # &live=true opens in Live mode so the drone updates in real-time.
         if "session_id" in ctx:
-            ctx["flight_url"] = f"{self._server_url}?session={ctx['session_id']}"
+            ctx["flight_url"] = f"{self._server_url}?session={ctx['session_id']}&live=true"
         elif "uas_id" in ctx:
-            ctx["flight_url"] = f"{self._server_url}?uas={ctx['uas_id']}"
+            ctx["flight_url"] = f"{self._server_url}?uas={ctx['uas_id']}&live=true"
         elif "uas_id_a" in ctx:
-            ctx["flight_url"] = f"{self._server_url}?uas={ctx['uas_id_a']}"
+            ctx["flight_url"] = f"{self._server_url}?uas={ctx['uas_id_a']}&live=true"
 
         for nt in self._targets:
             if not nt.enabled:

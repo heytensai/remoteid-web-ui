@@ -258,6 +258,38 @@ class TestNotifierServiceNtfy:
         assert mock_send.call_args[1]["tags"] == "drone"
 
     @patch("notifier._send_ntfy")
+    def test_dispatch_ntfy_new_session_click_url_includes_live(self, mock_send):
+        target = self._make_target(
+            name="ntfy-sessions",
+            events=["new_session"],
+        )
+        svc = NotifierService(
+            notifications=[target],
+            server_url="https://example.com",
+        )
+
+        svc.dispatch("new_session", name="Drone-2", session_id="abc12345",
+                      altitude=100.0, height=50.0, height_type="agl",
+                      use_metric=True)
+
+        click_url = mock_send.call_args[1]["click_url"]
+        assert click_url == "https://example.com?session=abc12345&live=true"
+
+    @patch("notifier._send_ntfy")
+    def test_dispatch_ntfy_geozone_enter_click_url_includes_live(self, mock_send):
+        target = self._make_target()
+        svc = NotifierService(
+            notifications=[target],
+            server_url="https://example.com",
+        )
+
+        svc.dispatch("geozone_enter", uas_id="drone-001",
+                      name="Drone", geozone_name="Zone")
+
+        click_url = mock_send.call_args[1]["click_url"]
+        assert click_url == "https://example.com?uas=drone-001&live=true"
+
+    @patch("notifier._send_ntfy")
     def test_dispatch_ntfy_with_token(self, mock_send):
         target = self._make_target(token="tk_secret123")
         svc = NotifierService(

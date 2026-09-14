@@ -2650,6 +2650,7 @@ const UIController = {
         const url = new URL(window.location);
         url.searchParams.delete('uas');
         url.searchParams.delete('session');
+        url.searchParams.delete('live');
         window.history.replaceState({}, '', url);
     },
 
@@ -2817,9 +2818,42 @@ const UIController = {
         const params = new URLSearchParams(window.location.search);
         const sessionParam = params.get('session');
         const uasParam = params.get('uas');
+        const liveParam = params.get('live');
         const q = sessionParam || uasParam;
         if (!q) return;
         await this._doSearch(q, 14);
+        // Notification deep-link: if live=true was in the URL, switch back
+        // to live mode after loading the track so the drone updates in
+        // real-time.  The loaded track stays on the map.
+        if (liveParam === 'true' && this._dataMode === 'archive') {
+            this._dataMode = 'live';
+            this.droneTimestamps = {};
+            MapController.setLiveMode(true);
+            if (this.elements.liveBtn) {
+                this.elements.liveBtn.classList.add('active');
+                this.elements.liveBtn.setAttribute('aria-pressed', 'true');
+            }
+            if (this.elements.liveBtnM) {
+                this.elements.liveBtnM.classList.add('active');
+                this.elements.liveBtnM.setAttribute('aria-pressed', 'true');
+            }
+            if (this.elements.headerTimeControls) {
+                this.elements.headerTimeControls.classList.add('disabled');
+            }
+            if (this.elements.settingsTimeControls) {
+                this.elements.settingsTimeControls.classList.add('disabled');
+            }
+            if (this.viewMode === 'date') {
+                this._switchView('uas');
+            }
+            this.refreshData();
+        }
+        // Clean up the one-shot live param from the URL
+        if (liveParam !== null) {
+            const url = new URL(window.location);
+            url.searchParams.delete('live');
+            window.history.replaceState({}, '', url);
+        }
     },
 
 

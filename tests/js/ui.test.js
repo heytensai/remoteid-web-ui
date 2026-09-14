@@ -1235,6 +1235,79 @@ describe('UIController', () => {
       expect(window.location.search).not.toContain('uas=');
     });
 
+    test('_clearSearchFocus also removes the live param from the URL', () => {
+      window.history.replaceState({}, '', '/?uas=drone-001&live=true');
+      UIController._searchTarget = { type: 'uas', uasId: 'drone-001', q: 'drone-001' };
+      UIController.elements.searchInput.value = 'drone-001';
+
+      UIController._clearSearchFocus();
+
+      expect(window.location.search).not.toContain('live=');
+    });
+
+    test('_applyPermalinkSearch with live=true switches to live mode after search', async () => {
+      window.history.replaceState({}, '', '/?session=abc&live=true');
+      UIController._dataMode = 'archive';
+      UIController.viewMode = 'date';
+      UIController._switchView = jest.fn();
+      UIController.refreshData = jest.fn();
+      UIController.droneTimestamps = { 'old:key': 'ts' };
+
+      const liveBtn = document.createElement('button');
+      const liveBtnM = document.createElement('button');
+      const headerTimeControls = document.createElement('div');
+      const settingsTimeControls = document.createElement('div');
+      Object.assign(UIController.elements, {
+        liveBtn, liveBtnM, headerTimeControls, settingsTimeControls,
+      });
+
+      UIController._renderSessionSearchResult = jest.fn();
+      UIController._writeSearchPermalink = jest.fn();
+      UIController._updateSearchFocusBar = jest.fn();
+      UIController._forceUASView = jest.fn();
+      UIController._mergeSearchSessions = jest.fn().mockReturnValue([]);
+      global.API = {
+        search: jest.fn().mockResolvedValue({
+          type: 'session', q: 'abc',
+          sessions: [{ uas_id: 'drone-001', computed_session_id: 'abc' }],
+        }),
+      };
+
+      await UIController._applyPermalinkSearch();
+
+      expect(UIController._dataMode).toBe('live');
+      expect(MapController.setLiveMode).toHaveBeenCalledWith(true);
+      expect(UIController.refreshData).toHaveBeenCalled();
+      expect(liveBtn.classList.contains('active')).toBe(true);
+      expect(headerTimeControls.classList.contains('disabled')).toBe(true);
+      expect(window.location.search).not.toContain('live=');
+    });
+
+    test('_applyPermalinkSearch without live=true stays in archive mode', async () => {
+      window.history.replaceState({}, '', '/?session=abc');
+      UIController._dataMode = 'archive';
+      UIController._switchView = jest.fn();
+      UIController.refreshData = jest.fn();
+      MapController.setLiveMode.mockClear();
+
+      UIController._renderSessionSearchResult = jest.fn();
+      UIController._writeSearchPermalink = jest.fn();
+      UIController._updateSearchFocusBar = jest.fn();
+      UIController._forceUASView = jest.fn();
+      UIController._mergeSearchSessions = jest.fn().mockReturnValue([]);
+      global.API = {
+        search: jest.fn().mockResolvedValue({
+          type: 'session', q: 'abc',
+          sessions: [{ uas_id: 'drone-001', computed_session_id: 'abc' }],
+        }),
+      };
+
+      await UIController._applyPermalinkSearch();
+
+      expect(UIController._dataMode).toBe('archive');
+      expect(MapController.setLiveMode).not.toHaveBeenCalledWith(true);
+    });
+
     test('refreshData filters drones to the active search target', async () => {
       UIController.refreshData = realRefreshData;
       UIController._searchTarget = { type: 'uas', uasId: 'drone-001' };
