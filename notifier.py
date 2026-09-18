@@ -31,7 +31,9 @@ from datetime import datetime, timezone
 from typing import Dict, List
 from urllib.parse import urlparse
 
-from jinja2 import Environment, Template, TemplateError
+from jinja2 import Environment, Template, TemplateError, Undefined
+
+from config import FEET_PER_METER
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,38 @@ _jinja_env.filters["json_escape"] = lambda s: (
      .replace("\r", "\\r")
      .replace("\t", "\\t")
 )
+
+
+def format_altitude(altitude, height, height_type=None, use_metric=True):
+    """Render an altitude string like ``200ft AGL (4500ft MSL)``.
+
+    Returns an empty string when neither altitude nor height is available.
+    ``height_type`` (e.g. ``"agl"``) labels the height value; altitude is
+    labeled ``MSL``.  When only one value is present it is rendered alone.
+    """
+    def render(value):
+        if value is None or isinstance(value, Undefined):
+            return None
+        if use_metric:
+            return f"{value:.0f}m"
+        return f"{value * FEET_PER_METER:.0f}ft"
+
+    height_display = render(height)
+    altitude_display = render(altitude)
+    if height_display is None and altitude_display is None:
+        return ""
+    parts = []
+    if height_display is not None:
+        label = (height_type or "AGL").upper() if height_type is not None else "AGL"
+        parts.append(f"{height_display} {label}")
+    if altitude_display is not None:
+        parts.append(f"{altitude_display} MSL")
+    if len(parts) == 2:
+        return f"{parts[0]} ({parts[1]})"
+    return parts[0]
+
+
+_jinja_env.globals["format_altitude"] = format_altitude
 
 VALID_EVENTS = ("geozone_enter", "geozone_exit", "new_session", "unrecognized_drone",
                 "drone_proximity")

@@ -54,6 +54,7 @@ This file is the user's personal, gitignored configuration. Even if it contains 
 - `server_url` - Public base URL for notification embeds (hot-reloadable)
 - `secure_cookies` - When true, session cookies are marked Secure (set this when serving over HTTPS behind a reverse proxy). Default: false
 - `notifications` - List of notification targets (name, type, events[], webhook_url). Supported types: discord, ntfy, teams, mqtt. MQTT targets also accept `broker_url` (mqtt:// or mqtts://) and `topic_prefix` (messages publish to `{topic_prefix}/{event}` as JSON), plus optional `username`/`password`. Events: geozone_enter, geozone_exit, new_session, unrecognized_drone, drone_proximity. If empty, notifications disabled. (hot-reloadable)
+  - Templates in `templates/notifications/<type>/<event>.j2` are user-customizable. They receive raw values (altitude in meters MSL, height in meters, height_type, lat/lon, use_metric). A Jinja global `format_altitude(altitude, height, height_type, use_metric)` (defined in `notifier.py`) renders a compact display string like `200ft AGL (4500ft MSL)`; use it instead of duplicating unit math in templates. All 5 events carry altitude/height data today, so templates can rely on these fields being present (may be `None` for legacy/absent telemetry — guard with `is defined and is not none`).
 
 ## Database Schema Versioning
 

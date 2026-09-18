@@ -80,10 +80,12 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
     """Evaluates drone positions against configured alert conditions.
 
     Callbacks (set externally):
-      on_new_alert(uas_id, geozone_name)   — drone entered a geozone
-      on_geozone_exit(uas_id, geozone_name) — drone left a geozone
+      on_new_alert(uas_id, geozone_name, position=None)   — drone entered a geozone
+      on_geozone_exit(uas_id, geozone_name, position=None) — drone left a geozone
       on_new_session(uas_id, session_id, first_position) — drone started a new flight
       on_unrecognized_drone(uas_id, session_id, first_position) — unknown drone started a new flight
+      on_drone_proximity(uas_id_a, name_a, uas_id_b, name_b, distance_m,
+                         position_a=None, position_b=None) — two drones too close
     """
 
     def __init__(self, database, config):
@@ -275,11 +277,12 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
                         lat, lon, gz.lat, gz.lon, gz.width, gz.height
                     )
                 if inside:
-                    self._handle_entry(uas_id, gz.name, ts)
+                    self._handle_entry(uas_id, gz.name, ts, pos)
                 else:
-                    self._handle_exit(uas_id, gz.name, ts)
+                    self._handle_exit(uas_id, gz.name, ts, pos)
 
-    def _handle_entry(self, uas_id: str, geozone_name: str, timestamp: datetime):
+    def _handle_entry(self, uas_id: str, geozone_name: str, timestamp: datetime,
+                      position: Optional[Dict] = None):
         """Called when a position is inside a geozone. Creates or updates event."""
         # Atomic across processes: only the caller that actually creates the
         # new event row fires the notification, so concurrent gunicorn
@@ -303,9 +306,10 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
             )
         else:
             self._geozone_alert_cooldown[cooldown_key] = now
-            self._fire(self.on_new_alert, uas_id, geozone_name)
+            self._fire(self.on_new_alert, uas_id, geozone_name, position)
 
-    def _handle_exit(self, uas_id: str, geozone_name: str, timestamp: datetime):
+    def _handle_exit(self, uas_id: str, geozone_name: str, timestamp: datetime,
+                     position: Optional[Dict] = None):
         """Called when a position is outside a geozone. Exits active event."""
         events = self._db.get_geozone_events_for_uas(uas_id)
         active = [e for e in events if e["geozone_name"] == geozone_name and e["exited_at"] is None]
@@ -330,7 +334,7 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
             )
         else:
             self._geozone_alert_cooldown[cooldown_key] = now
-            self._fire(self.on_geozone_exit, uas_id, geozone_name)
+            self._fire(self.on_geozone_exit, uas_id, geozone_name, position)
 
     # --- Drone proximity ---
 
@@ -387,6 +391,7 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
                     a["uas_id"], name_a,
                     b["uas_id"], name_b,
                     dist,
+                    a, b,
                 )
 
     # --- Batch processing ---

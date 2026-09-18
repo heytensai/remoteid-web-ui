@@ -269,9 +269,15 @@ web_interface:
   #   - geozone_exit      — drone leaves an alert-enabled geozone
   #   - new_session       — drone starts a new flight
   #   - unrecognized_drone — drone not in the aliases list starts a new flight
+  #   - drone_proximity   — two drones are within proximity_distance of each other
   #
   # Templates live in templates/notifications/<type>/<event>.j2
   # and can be customized per deployment.
+  #
+  # Templates receive the raw measurement values (altitude in meters MSL, height
+  # in meters, height_type e.g. "agl", lat/lon, use_metric). The Jinja global
+  # `format_altitude(altitude, height, height_type, use_metric)` renders a
+  # compact display string like "200ft AGL (4500ft MSL)".
   #
   # If no notification targets are configured, notifications are disabled.
   # (hot-reloadable)

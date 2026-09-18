@@ -7,6 +7,36 @@
   "name_b": "{{ name_b|json_escape }}",
   "distance_m": {{ '%.2f' % distance_m }},
   "distance": "{{ distance_str|json_escape }}"
+{% if altitude_a is defined and altitude_a is not none %},
+  "altitude_a": {{ '%.2f' % altitude_a }}
+{% endif %}
+{% if height_a is defined and height_a is not none %},
+  "height_a": {{ '%.2f' % height_a }}
+{% endif %}
+{% if height_type_a is defined and height_type_a is not none %},
+  "height_type_a": "{{ height_type_a|json_escape }}"
+{% endif %}
+{% if altitude_b is defined and altitude_b is not none %},
+  "altitude_b": {{ '%.2f' % altitude_b }}
+{% endif %}
+{% if height_b is defined and height_b is not none %},
+  "height_b": {{ '%.2f' % height_b }}
+{% endif %}
+{% if height_type_b is defined and height_type_b is not none %},
+  "height_type_b": "{{ height_type_b|json_escape }}"
+{% endif %}
+{% if lat_a is defined and lat_a is not none %},
+  "latitude_a": {{ '%.6f' % lat_a }}
+{% endif %}
+{% if lon_a is defined and lon_a is not none %},
+  "longitude_a": {{ '%.6f' % lon_a }}
+{% endif %}
+{% if lat_b is defined and lat_b is not none %},
+  "latitude_b": {{ '%.6f' % lat_b }}
+{% endif %}
+{% if lon_b is defined and lon_b is not none %},
+  "longitude_b": {{ '%.6f' % lon_b }}
+{% endif %}
 {% if flight_url or server_url %},
   "flight_url": "{{ (flight_url or server_url)|json_escape }}"
 {% endif %}{% if server_url %},

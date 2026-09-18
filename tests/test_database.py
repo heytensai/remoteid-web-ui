@@ -1357,3 +1357,27 @@ def test_get_live_drones_incremental_stale_session_not_returned(db):
     _insert_latest_position(db, "live-stale", "session_7", now - timedelta(hours=2))
     known = {"live-stale:session_7": (now - timedelta(hours=3)).isoformat()}
     assert db.get_live_drones_incremental(30, known) == []
+
+
+# --- get_live_positions ---
+
+def test_get_live_positions_includes_altitude_height(db):
+    """get_live_positions now returns altitude, height, and height_type."""
+    now = datetime.now(timezone.utc)
+    _insert_latest_position(db, "drone-001", "session_1", now - timedelta(minutes=1),
+                            altitude=300.0, height=200.0, height_type="agl")
+    result = db.get_live_positions(now - timedelta(minutes=5))
+    assert len(result) == 1
+    pos = result[0]
+    assert pos["uas_id"] == "drone-001"
+    assert pos["altitude"] == 300.0
+    assert pos["height"] == 200.0
+    assert pos["height_type"] == "agl"
+
+
+def test_get_live_positions_skips_old(db):
+    """Positions older than *since* are excluded."""
+    now = datetime.now(timezone.utc)
+    _insert_latest_position(db, "drone-old", "session_1", now - timedelta(hours=2))
+    result = db.get_live_positions(now - timedelta(minutes=5))
+    assert result == []

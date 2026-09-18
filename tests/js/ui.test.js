@@ -1187,7 +1187,7 @@ describe('UIController', () => {
       expect(UIController.expandedGroups.has('drone-001')).toBe(true);
       expect(UIController.loadedTracks.size).toBe(0);
       expect(MapController.clearAllTracks).toHaveBeenCalled();
-      expect(UIController._batchLoadTracks).toHaveBeenCalledWith([result.sessions[0]]);
+      expect(UIController._batchLoadTracks).toHaveBeenCalledWith([result.sessions[0]], true);
       expect(MapController.fitToSession).toHaveBeenCalledWith('drone-001', 'session_new');
     });
 
@@ -1217,7 +1217,7 @@ describe('UIController', () => {
       expect(UIController.droneMap['drone-001:session_abc']).toBeDefined();
       expect(UIController.visibleSessions.has('drone-001:session_abc')).toBe(true);
       expect(MapController.clearAllTracks).toHaveBeenCalled();
-      expect(UIController._batchLoadTracks).toHaveBeenCalledWith([result.sessions[0]]);
+      expect(UIController._batchLoadTracks).toHaveBeenCalledWith([result.sessions[0]], true);
       expect(MapController.fitToSession).toHaveBeenCalledWith('drone-001', 'session_abc');
     });
 

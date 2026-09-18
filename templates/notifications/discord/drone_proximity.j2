@@ -7,6 +7,18 @@
       {"name": "Drone A", "value": "{{ name_a|json_escape }}", "inline": true},
       {"name": "Drone B", "value": "{{ name_b|json_escape }}", "inline": true},
       {"name": "Distance", "value": "{{ distance_str }}", "inline": true}
+      {% if height_a is defined and height_a is not none -%}
+      ,{"name": "Height A{% if height_type_a %} ({{ height_type_a|json_escape }}){% endif %}", "value": "{{ '%.0f' % (height_a if use_metric else height_a * 3.28084) }}{{ 'm' if use_metric else 'ft' }}", "inline": true}
+      {% endif -%}
+      {% if altitude_a is defined and altitude_a is not none -%}
+      ,{"name": "Altitude A", "value": "{{ '%.0f' % (altitude_a if use_metric else altitude_a * 3.28084) }}{{ 'm' if use_metric else 'ft' }}", "inline": true}
+      {% endif -%}
+      {% if height_b is defined and height_b is not none -%}
+      ,{"name": "Height B{% if height_type_b %} ({{ height_type_b|json_escape }}){% endif %}", "value": "{{ '%.0f' % (height_b if use_metric else height_b * 3.28084) }}{{ 'm' if use_metric else 'ft' }}", "inline": true}
+      {% endif -%}
+      {% if altitude_b is defined and altitude_b is not none -%}
+      ,{"name": "Altitude B", "value": "{{ '%.0f' % (altitude_b if use_metric else altitude_b * 3.28084) }}{{ 'm' if use_metric else 'ft' }}", "inline": true}
+      {% endif -%}
     ],
     "timestamp": "{{ timestamp }}"{% if flight_url or server_url %},
     "url": "{{ flight_url or server_url }}"{% endif %}

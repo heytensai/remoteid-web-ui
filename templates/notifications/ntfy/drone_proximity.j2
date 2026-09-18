@@ -1,1 +1,1 @@
-{{ name_a }} and {{ name_b }} are {{ distance_str }} apart
+{% set _alt_a = format_altitude(altitude_a, height_a, height_type_a, use_metric) %}{% set _alt_b = format_altitude(altitude_b, height_b, height_type_b, use_metric) %}{{ name_a }}{% if _alt_a %} ({{ _alt_a }}){% endif %} and {{ name_b }}{% if _alt_b %} ({{ _alt_b }}){% endif %} are {{ distance_str }} apart

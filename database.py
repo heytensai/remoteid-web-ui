@@ -2125,7 +2125,7 @@ class WebDatabase:
             cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
             if since:
                 cur.execute(
-                    """SELECT latitude, longitude, timestamp
+                    """SELECT latitude, longitude, altitude, height, height_type, timestamp
                        FROM remoteid
                        WHERE uas_id = %s AND timestamp >= %s
                        ORDER BY timestamp ASC""",
@@ -2133,7 +2133,7 @@ class WebDatabase:
                 )
             else:
                 cur.execute(
-                    """SELECT latitude, longitude, timestamp
+                    """SELECT latitude, longitude, altitude, height, height_type, timestamp
                        FROM remoteid
                        WHERE uas_id = %s
                        ORDER BY timestamp ASC""",
@@ -2379,13 +2379,18 @@ class WebDatabase:
             self._put_conn(conn)
 
     def get_live_positions(self, since: datetime) -> List[Dict]:
-        """Get the most recent position for each drone that has been updated since *since*."""
+        """Get the most recent position for each drone updated since *since*.
+
+        Returns dicts with ``uas_id``, ``latitude``, ``longitude``,
+        ``altitude``, ``height``, ``height_type``, and ``max_ts``.
+        """
         conn = self._get_conn()
         try:
             cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
             cur.execute(
                 """
-                SELECT DISTINCT ON (uas_id) uas_id, latitude, longitude, max_ts
+                SELECT DISTINCT ON (uas_id)
+                    uas_id, latitude, longitude, altitude, height, height_type, max_ts
                 FROM latest_positions
                 WHERE latitude IS NOT NULL
                   AND longitude IS NOT NULL

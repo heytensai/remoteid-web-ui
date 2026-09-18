@@ -194,6 +194,52 @@ def test_engine_evaluate_inside_rectangle(engine):
     assert events[0]["geozone_name"] == "TestRect"
 
 
+def test_geozone_callback_receives_position(engine):
+    """on_new_alert gets the position dict so altitude/height can be shown."""
+    alert_engine, _, _ = engine
+    now = datetime.now(timezone.utc)
+    calls = []
+    alert_engine.on_new_alert = lambda uas_id, gz, pos=None: calls.append((uas_id, gz, pos))
+
+    alert_engine.evaluate("drone-001", [{
+        "latitude": 37.78, "longitude": -122.42, "timestamp": now,
+        "altitude": 300.0, "height": 200.0, "height_type": "agl",
+    }])
+
+    assert len(calls) == 1
+    uas_id, gz, pos = calls[0]
+    assert uas_id == "drone-001"
+    assert gz == "TestCircle"
+    assert pos["altitude"] == 300.0
+    assert pos["height"] == 200.0
+    assert pos["height_type"] == "agl"
+
+    # Same entry in the other geozone does not re-fire on_new_alert
+    assert len(calls) == 1
+
+
+def test_geozone_exit_callback_receives_position(engine):
+    """on_geozone_exit gets the position dict so altitude/height can be shown."""
+    alert_engine, _, _ = engine
+    now = datetime.now(timezone.utc)
+    inside = {"latitude": 37.78, "longitude": -122.42, "timestamp": now}
+    alert_engine.evaluate("drone-001", [inside])
+
+    calls = []
+    alert_engine.on_geozone_exit = lambda uas_id, gz, pos=None: calls.append((uas_id, gz, pos))
+    alert_engine.evaluate("drone-001", [{
+        "latitude": 38.0, "longitude": -122.0,
+        "timestamp": now + timedelta(seconds=60),
+        "altitude": 250.0, "height": 150.0, "height_type": "agl",
+    }])
+
+    assert len(calls) == 1
+    _, gz, pos = calls[0]
+    assert gz == "TestCircle"
+    assert pos["altitude"] == 250.0
+    assert pos["height"] == 150.0
+
+
 def test_engine_evaluate_outside(engine):
     alert_engine, db, _ = engine
     now = datetime.now(timezone.utc)
@@ -515,7 +561,7 @@ def test_proximity_two_drones_within_distance(proximity_engine):
     _insert_position(db, "drone-B", 37.7805, -122.42, now)  # ~55m north
 
     calls = []
-    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append((uid_a, uid_b, dist))
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist, pos_a=None, pos_b=None: calls.append((uid_a, uid_b, dist))
     eng._check_drone_proximity()
 
     assert len(calls) == 1
@@ -532,7 +578,7 @@ def test_proximity_two_drones_outside_distance(proximity_engine):
     _insert_position(db, "drone-B", 38.0, -122.0, now)  # ~25km away
 
     calls = []
-    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append(1)
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist, pos_a=None, pos_b=None: calls.append(1)
     eng._check_drone_proximity()
 
     assert len(calls) == 0
@@ -547,7 +593,7 @@ def test_proximity_ignores_stale_drones(proximity_engine):
     _insert_position(db, "drone-B", 37.7805, -122.42, now - timedelta(seconds=600))
 
     calls = []
-    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append(1)
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist, pos_a=None, pos_b=None: calls.append(1)
     eng._check_drone_proximity()
 
     assert len(calls) == 0
@@ -560,10 +606,33 @@ def test_proximity_single_drone_no_alert(proximity_engine):
     _insert_position(db, "drone-A", 37.78, -122.42, now)
 
     calls = []
-    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append(1)
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist, pos_a=None, pos_b=None: calls.append(1)
     eng._check_drone_proximity()
 
     assert len(calls) == 0
+
+
+def test_proximity_callback_receives_positions(proximity_engine):
+    """on_drone_proximity receives position dicts for both drones."""
+    eng, db, config = proximity_engine
+    now = datetime.now(timezone.utc)
+    _insert_position(db, "drone-A", 37.78, -122.42, now)
+    _insert_position(db, "drone-B", 37.7805, -122.42, now)
+
+    calls = []
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist, pos_a=None, pos_b=None: calls.append((pos_a, pos_b))
+    eng._check_drone_proximity()
+
+    assert len(calls) == 1
+    pos_a, pos_b = calls[0]
+    assert pos_a is not None
+    assert pos_b is not None
+    assert pos_a["uas_id"] == "drone-A"
+    assert pos_b["uas_id"] == "drone-B"
+    # get_live_positions now carries altitude/height/height_type
+    assert "altitude" in pos_a
+    assert "height" in pos_a
+    assert "height_type" in pos_a
 
 
 def test_proximity_cooldown_suppresses_duplicate(proximity_engine):
@@ -574,7 +643,7 @@ def test_proximity_cooldown_suppresses_duplicate(proximity_engine):
     _insert_position(db, "drone-B", 37.7805, -122.42, now)
 
     calls = []
-    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append(1)
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist, pos_a=None, pos_b=None: calls.append(1)
     eng._check_drone_proximity()
     eng._check_drone_proximity()
 
@@ -590,7 +659,7 @@ def test_proximity_uses_aliases(proximity_engine):
     _insert_position(db, "drone-B", 37.7805, -122.42, now)
 
     calls = []
-    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append((name_a, name_b))
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist, pos_a=None, pos_b=None: calls.append((name_a, name_b))
     eng._check_drone_proximity()
 
     assert len(calls) == 1
@@ -607,7 +676,7 @@ def test_proximity_disabled_when_zero(proximity_engine):
     _insert_position(db, "drone-B", 37.7805, -122.42, now)
 
     calls = []
-    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append(1)
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist, pos_a=None, pos_b=None: calls.append(1)
     eng._check_drone_proximity()
 
     assert len(calls) == 0
@@ -623,7 +692,7 @@ def test_proximity_three_drones_multiple_pairs(proximity_engine):
     _insert_position(db, "drone-C", 37.78, -122.4195, now)
 
     calls = []
-    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append((uid_a, uid_b))
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist, pos_a=None, pos_b=None: calls.append((uid_a, uid_b))
     eng._check_drone_proximity()
 
     assert len(calls) == 3
@@ -641,7 +710,7 @@ def test_proximity_runs_via_evaluate_all(proximity_engine):
     _insert_position(db, "drone-B", 37.7805, -122.42, now)
 
     calls = []
-    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append(1)
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist, pos_a=None, pos_b=None: calls.append(1)
     eng.evaluate_all(since=now - timedelta(hours=1))
 
     assert len(calls) == 1
@@ -655,7 +724,7 @@ def test_proximity_does_not_run_via_evaluate(proximity_engine):
     _insert_position(db, "drone-B", 37.7805, -122.42, now)
 
     calls = []
-    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append(1)
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist, pos_a=None, pos_b=None: calls.append(1)
     eng.evaluate("drone-A", [{"latitude": 37.78, "longitude": -122.42, "timestamp": now}])
 
     assert len(calls) == 0
@@ -687,7 +756,7 @@ def test_proximity_imperial_config():
     _insert_position(db, "drone-B", 37.7805, -122.42, now)
 
     calls = []
-    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist: calls.append((uid_a, uid_b, dist))
+    eng.on_drone_proximity = lambda uid_a, name_a, uid_b, name_b, dist, pos_a=None, pos_b=None: calls.append((uid_a, uid_b, dist))
     eng._check_drone_proximity()
 
     assert len(calls) == 1
@@ -799,8 +868,8 @@ def test_geozone_enter_fires_once_across_engines(engine_db, engine_config_yaml):
     pos = {"latitude": 37.78, "longitude": -122.42, "timestamp": now}
 
     calls = []
-    engine_a.on_new_alert = lambda uas_id, gz: calls.append((uas_id, gz))
-    engine_b.on_new_alert = lambda uas_id, gz: calls.append((uas_id, gz))
+    engine_a.on_new_alert = lambda uas_id, gz, pos=None: calls.append((uas_id, gz))
+    engine_b.on_new_alert = lambda uas_id, gz, pos=None: calls.append((uas_id, gz))
 
     engine_a.evaluate("drone-001", [pos])
     engine_b.evaluate("drone-001", [pos])
@@ -820,8 +889,8 @@ def test_geozone_exit_fires_once_across_engines(engine_db, engine_config_yaml):
     engine_a.evaluate("drone-001", [inside])
 
     calls = []
-    engine_a.on_geozone_exit = lambda uas_id, gz: calls.append((uas_id, gz))
-    engine_b.on_geozone_exit = lambda uas_id, gz: calls.append((uas_id, gz))
+    engine_a.on_geozone_exit = lambda uas_id, gz, pos=None: calls.append((uas_id, gz))
+    engine_b.on_geozone_exit = lambda uas_id, gz, pos=None: calls.append((uas_id, gz))
 
     engine_a.evaluate("drone-001", [outside])
     engine_b.evaluate("drone-001", [outside])

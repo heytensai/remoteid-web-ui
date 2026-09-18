@@ -1,1 +1,1 @@
-{{ name }} entered {{ geozone_name }}
+{{ name }} entered {{ geozone_name }}{% set _alt = format_altitude(altitude, height, height_type, use_metric) %}{% if _alt %} at {{ _alt }}{% endif %}

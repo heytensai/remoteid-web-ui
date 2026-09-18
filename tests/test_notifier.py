@@ -11,7 +11,7 @@ import pytest
 from config import NotificationTargetConfig
 from notifier import (
     NotifierService, _send_ntfy, _send_discord, _send_teams, _send_mqtt,
-    _jinja_env,
+    _jinja_env, format_altitude,
 )
 
 
@@ -938,3 +938,91 @@ class TestNotifierServiceMqtt:
                      use_metric=True)
 
         mock_send.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# format_altitude
+# ---------------------------------------------------------------------------
+
+
+class TestFormatAltitude:
+    def test_both_metric(self):
+        assert format_altitude(100.0, 50.0, "agl", True) == "50m AGL (100m MSL)"
+
+    def test_both_imperial(self):
+        assert format_altitude(1371.6, 60.96, "agl", False) == "200ft AGL (4500ft MSL)"
+
+    def test_height_only(self):
+        assert format_altitude(None, 50.0) == "50m AGL"
+
+    def test_altitude_only(self):
+        assert format_altitude(100.0, None) == "100m MSL"
+
+    def test_none_values(self):
+        assert format_altitude(None, None) == ""
+
+    def test_missing_height_type_defaults_agl(self):
+        assert format_altitude(100.0, 50.0) == "50m AGL (100m MSL)"
+
+    def test_height_type_uppercased(self):
+        assert format_altitude(100.0, 50.0, "above_takeoff", True) == \
+            "50m ABOVE_TAKEOFF (100m MSL)"
+
+    def test_undefined_values(self):
+        assert format_altitude(100.0, None, use_metric=True) == "100m MSL"
+
+    def test_available_as_jinja_global(self):
+        assert _jinja_env.globals["format_altitude"] is format_altitude
+
+
+# ---------------------------------------------------------------------------
+# Altitude in dispatched text payloads
+# ---------------------------------------------------------------------------
+
+
+class TestAltitudeInNotifications:
+    def _make_ntfy_target(self, events):
+        return NotificationTargetConfig(
+            name="alt-test", type="ntfy",
+            webhook_url="https://ntfy.sh/test-topic",
+            events=events,
+        )
+
+    @patch("notifier._send_ntfy")
+    def test_ntfy_geozone_enter_includes_altitude(self, mock_send):
+        target = self._make_ntfy_target(["geozone_enter"])
+        svc = NotifierService(notifications=[target], server_url="https://example.com")
+
+        svc.dispatch("geozone_enter", name="Drone-1", geozone_name="ZoneA",
+                     altitude=100.0, height=50.0, height_type="agl",
+                     use_metric=True)
+
+        payload = mock_send.call_args[0][1]
+        assert "ZoneA" in payload
+        assert "50m AGL (100m MSL)" in payload
+
+    @patch("notifier._send_ntfy")
+    def test_ntfy_geozone_enter_no_altitude_no_crash(self, mock_send):
+        target = self._make_ntfy_target(["geozone_enter"])
+        svc = NotifierService(notifications=[target], server_url="https://example.com")
+
+        svc.dispatch("geozone_enter", name="Drone-1", geozone_name="ZoneA",
+                     use_metric=True)
+
+        payload = mock_send.call_args[0][1]
+        assert "ZoneA" in payload
+
+    @patch("notifier._send_ntfy")
+    def test_ntfy_proximity_includes_both_positions(self, mock_send):
+        target = self._make_ntfy_target(["drone_proximity"])
+        svc = NotifierService(notifications=[target], server_url="https://example.com")
+
+        svc.dispatch("drone_proximity", uas_id_a="a", name_a="A", uas_id_b="b",
+                     name_b="B", distance_m=50.0, distance_str="50 m",
+                     altitude_a=1371.6, height_a=60.96, height_type_a="agl",
+                     altitude_b=100.0, height_b=30.0, height_type_b="agl",
+                     use_metric=False)
+
+        payload = mock_send.call_args[0][1]
+        assert "200ft AGL (4500ft MSL)" in payload
+        assert "98ft AGL (328ft MSL)" in payload

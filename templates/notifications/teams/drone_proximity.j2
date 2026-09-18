@@ -18,6 +18,26 @@
           {
             "type": "TextBlock",
             "text": "**{{ name_a|json_escape }}** and **{{ name_b|json_escape }}** are **{{ distance_str }}** apart"
+          },
+          {
+            "type": "FactSet",
+            "facts": [
+              {"title": "Drone A", "value": "{{ name_a|json_escape }}"},
+              {"title": "Drone B", "value": "{{ name_b|json_escape }}"},
+              {"title": "Distance", "value": "{{ distance_str }}"}
+              {% if height_a is defined and height_a is not none -%}
+              ,{"title": "Height A{% if height_type_a %} ({{ height_type_a|json_escape }}){% endif %}", "value": "{{ '%.0f' % (height_a if use_metric else height_a * 3.28084) }}{{ 'm' if use_metric else 'ft' }}"}
+              {% endif -%}
+              {% if altitude_a is defined and altitude_a is not none -%}
+              ,{"title": "Altitude A", "value": "{{ '%.0f' % (altitude_a if use_metric else altitude_a * 3.28084) }}{{ 'm' if use_metric else 'ft' }}"}
+              {% endif -%}
+              {% if height_b is defined and height_b is not none -%}
+              ,{"title": "Height B{% if height_type_b %} ({{ height_type_b|json_escape }}){% endif %}", "value": "{{ '%.0f' % (height_b if use_metric else height_b * 3.28084) }}{{ 'm' if use_metric else 'ft' }}"}
+              {% endif -%}
+              {% if altitude_b is defined and altitude_b is not none -%}
+              ,{"title": "Altitude B", "value": "{{ '%.0f' % (altitude_b if use_metric else altitude_b * 3.28084) }}{{ 'm' if use_metric else 'ft' }}"}
+              {% endif -%}
+            ]
           }{% if flight_url or server_url %},
           {
             "type": "TextBlock",

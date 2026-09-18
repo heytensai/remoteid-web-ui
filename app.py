@@ -1722,28 +1722,42 @@ def revoke_tokens(user_id, config):
     print(f"All session tokens revoked for user id={user_id}.")
 
 
-def _on_new_alert(uas_id: str, geozone_name: str):
+def _on_new_alert(uas_id: str, geozone_name: str,
+                  position: Optional[Dict] = None):
     """Callback fired when a new geozone alert is triggered. Dispatches to notifier."""
     name = CONFIG.drone_aliases.get(uas_id, uas_id)
-    NOTIFIER_SERVICE.dispatch(
-        "geozone_enter",
-        uas_id=uas_id,
-        name=name,
-        geozone_name=geozone_name,
-        use_metric=CONFIG.use_metric,
-    )
+    ctx = {
+        "uas_id": uas_id,
+        "name": name,
+        "geozone_name": geozone_name,
+        "use_metric": CONFIG.use_metric,
+    }
+    if position:
+        ctx["altitude"] = position.get("altitude")
+        ctx["height"] = position.get("height")
+        ctx["height_type"] = position.get("height_type")
+        ctx["lat"] = position.get("latitude")
+        ctx["lon"] = position.get("longitude")
+    NOTIFIER_SERVICE.dispatch("geozone_enter", **ctx)
 
 
-def _on_geozone_exit(uas_id: str, geozone_name: str):
+def _on_geozone_exit(uas_id: str, geozone_name: str,
+                     position: Optional[Dict] = None):
     """Callback fired when a drone leaves a geozone. Dispatches to notifier."""
     name = CONFIG.drone_aliases.get(uas_id, uas_id)
-    NOTIFIER_SERVICE.dispatch(
-        "geozone_exit",
-        uas_id=uas_id,
-        name=name,
-        geozone_name=geozone_name,
-        use_metric=CONFIG.use_metric,
-    )
+    ctx = {
+        "uas_id": uas_id,
+        "name": name,
+        "geozone_name": geozone_name,
+        "use_metric": CONFIG.use_metric,
+    }
+    if position:
+        ctx["altitude"] = position.get("altitude")
+        ctx["height"] = position.get("height")
+        ctx["height_type"] = position.get("height_type")
+        ctx["lat"] = position.get("latitude")
+        ctx["lon"] = position.get("longitude")
+    NOTIFIER_SERVICE.dispatch("geozone_exit", **ctx)
 
 
 def _on_new_session(uas_id: str, session_id: str, first_position: Optional[Dict] = None):
@@ -1782,10 +1796,12 @@ def _on_unrecognized_drone(uas_id: str, session_id: str, first_position: Optiona
     NOTIFIER_SERVICE.dispatch("unrecognized_drone", **ctx)
 
 
-def _on_drone_proximity(
+def _on_drone_proximity(  # pylint: disable=too-many-positional-arguments
     uas_id_a: str, name_a: str,
     uas_id_b: str, name_b: str,
     distance_m: float,
+    position_a: Optional[Dict] = None,
+    position_b: Optional[Dict] = None,
 ):
     """Callback fired when two drones are within proximity distance. Dispatches to notifier."""
     if CONFIG.use_metric:
@@ -1793,16 +1809,23 @@ def _on_drone_proximity(
     else:
         feet = distance_m * FEET_PER_METER
         distance_str = f"{feet:.0f} ft"
-    NOTIFIER_SERVICE.dispatch(
-        "drone_proximity",
-        uas_id_a=uas_id_a,
-        name_a=name_a,
-        uas_id_b=uas_id_b,
-        name_b=name_b,
-        distance_m=distance_m,
-        distance_str=distance_str,
-        use_metric=CONFIG.use_metric,
-    )
+    ctx = {
+        "uas_id_a": uas_id_a,
+        "name_a": name_a,
+        "uas_id_b": uas_id_b,
+        "name_b": name_b,
+        "distance_m": distance_m,
+        "distance_str": distance_str,
+        "use_metric": CONFIG.use_metric,
+    }
+    for prefix, position in (("a", position_a), ("b", position_b)):
+        if position:
+            ctx[f"altitude_{prefix}"] = position.get("altitude")
+            ctx[f"height_{prefix}"] = position.get("height")
+            ctx[f"height_type_{prefix}"] = position.get("height_type")
+            ctx[f"lat_{prefix}"] = position.get("latitude")
+            ctx[f"lon_{prefix}"] = position.get("longitude")
+    NOTIFIER_SERVICE.dispatch("drone_proximity", **ctx)
 
 
 def start_background_services():
