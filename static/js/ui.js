@@ -2190,7 +2190,7 @@ const UIController = {
     /**
      * Batch-load tracks for a list of drones
      */
-    _batchLoadTracks(drones) {
+    _batchLoadTracks(drones, showToast = false) {
         const pending = [];
         const refreshPending = [];
         for (const drone of drones) {
@@ -2211,7 +2211,7 @@ const UIController = {
         const allPending = [...pending, ...refreshPending];
         if (allPending.length > 0) {
             return MapController.loadTracksBatch(allPending).then(loaded => {
-                if (loaded.length > 0) {
+                if (loaded.length > 0 && showToast) {
                     this.showToast(`Loaded ${loaded.length} track${loaded.length > 1 ? 's' : ''}`, 'success', {
                         duration: 2500,
                         icon: 'fa-route',
@@ -2769,7 +2769,7 @@ const UIController = {
 
         this._droneListCacheKey = null;
         this._updateDroneList(this._applySearchFilter(this._filterKnownUnknownDrones()));
-        await this._batchLoadTracks([newest]);
+        await this._batchLoadTracks([newest], true);
         MapController.fitToSession(newest.uas_id, newest.computed_session_id);
         this._updateReplayButtonState();
     },
@@ -2804,7 +2804,7 @@ const UIController = {
 
         this._droneListCacheKey = null;
         this._updateDroneList(this._applySearchFilter(this._filterKnownUnknownDrones()));
-        await this._batchLoadTracks([session]);
+        await this._batchLoadTracks([session], true);
         MapController.fitToSession(session.uas_id, session.computed_session_id);
         this._updateReplayButtonState();
     },
