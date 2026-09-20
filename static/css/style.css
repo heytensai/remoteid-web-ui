@@ -3151,4 +3151,23 @@ body.dark-mode .connection-banner.recovering {
 
 body.dark-mode .leaflet-tile-pane {
     filter: invert(1) hue-rotate(180deg) saturate(0.6);
+}
+
+/* Visible keyboard focus indicators (issue #160) */
+:focus-visible {
+    outline: 2px solid #007bff;
+    outline-offset: 2px;
+}
+
+input[type="range"]:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px #007bff;
+}
+
+body.dark-mode :focus-visible {
+    outline-color: #4da3ff;
+}
+
+body.dark-mode input[type="range"]:focus-visible {
+    box-shadow: 0 0 0 2px #4da3ff;
 } 

@@ -30,9 +30,9 @@
         <!-- Main Content -->
         <div id="main" class="main">
             <!-- Header -->
-            <div class="header">
+            <div class="header" role="banner">
                 <div class="header-start">
-                    <button id="openSidebar" class="menu-btn">
+                    <button id="openSidebar" class="menu-btn" aria-label="Open sidebar">
                         <i class="fas fa-bars"></i>
                     </button>
 
@@ -42,7 +42,7 @@
                 </div>
 
                 <div class="header-end">
-                    <button id="refreshBtn" class="refresh-btn" title="Refresh">
+                    <button id="refreshBtn" class="refresh-btn" title="Refresh" aria-label="Refresh data">
                         <i class="fas fa-sync-alt"></i>
                     </button>
                     <div class="search-dropdown">
@@ -53,7 +53,7 @@
                             <div class="dropdown-header">Search Flights</div>
                             <div class="search-input-row">
                                 <input type="text" id="searchInput" class="search-input" placeholder="UAS ID or session ID" autocomplete="off" spellcheck="false">
-                                <button id="searchSubmitBtn" class="search-submit-btn" title="Search">
+                                <button id="searchSubmitBtn" class="search-submit-btn" title="Search" aria-label="Search">
                                     <i class="fas fa-magnifying-glass"></i>
                                 </button>
                             </div>
@@ -138,7 +138,7 @@
                             </div>
                         </div>
                     </div>
-                    <button id="openSettings" class="settings-btn" title="Settings">
+                    <button id="openSettings" class="settings-btn" title="Settings" aria-label="Open settings">
                         <i class="fas fa-cog"></i>
                     </button>
                 </div>
@@ -146,13 +146,13 @@
 
             <div class="main-body">
                 <!-- Sidebar -->
-                <div id="sidebar" class="sidebar">
+                <div id="sidebar" class="sidebar" role="region" aria-label="Recorded flights">
                     <div class="sidebar-header">
                         <span class="sidebar-header-label">Recorded Flights</span>
-                        <button id="replayPlayBtn" class="replay-play-btn" title="Replay checked flights">
+                        <button id="replayPlayBtn" class="replay-play-btn" title="Replay checked flights" aria-label="Replay checked flights">
                             <i class="fas fa-play"></i>
                         </button>
-                        <button id="closeSidebar" class="close-btn">
+                        <button id="closeSidebar" class="close-btn" aria-label="Close sidebar">
                             <i class="fas fa-times"></i>
                         </button>
                     </div>
@@ -179,7 +179,7 @@
                 </div>
 
                 <!-- Map Container -->
-                <div id="map" class="map-container">
+                <div id="map" class="map-container" role="region" aria-label="Drone map">
                     <!-- Height-band color legend (visible only in By Height mode) -->
                     <div id="heightLegend" class="height-legend" style="display: none;">
                         <div class="height-legend-title">Height Bands (ft)</div>
@@ -283,11 +283,11 @@
             </div>
 
             <!-- Alert Log Modal -->
-            <div id="alertLogModal" class="modal-overlay" style="display: none;">
+            <div id="alertLogModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="alertLogTitle" style="display: none;">
                 <div class="modal-content">
                     <div class="modal-header">
-                        <h3><i class="fas fa-history"></i> Geozone Alert History</h3>
-                        <button id="closeAlertLog" class="close-btn">
+                        <h3 id="alertLogTitle"><i class="fas fa-history"></i> Geozone Alert History</h3>
+                        <button id="closeAlertLog" class="close-btn" aria-label="Close alert history">
                             <i class="fas fa-times"></i>
                         </button>
                     </div>
@@ -337,11 +337,11 @@
             </div>
 
             <!-- Chart Modal -->
-            <div id="chartModal" class="modal-overlay" style="display: none;">
+            <div id="chartModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="chartModalTitle" style="display: none;">
                 <div class="modal-content modal-chart">
                     <div class="modal-header">
-                        <h3><i class="fas fa-chart-line"></i> Flight Profile</h3>
-                        <button id="closeChartModal" class="close-btn">
+                        <h3 id="chartModalTitle"><i class="fas fa-chart-line"></i> Flight Profile</h3>
+                        <button id="closeChartModal" class="close-btn" aria-label="Close chart">
                             <i class="fas fa-times"></i>
                         </button>
                     </div>
@@ -355,7 +355,7 @@
             <div id="droneDetail" class="drone-detail">
                 <div class="drone-detail-header">
                     <h3 class="drone-detail-title"><i class="fas fa-plane"></i> <span id="detailUasId"></span></h3>
-                    <button id="closeDetail" class="close-btn" title="Close">
+                    <button id="closeDetail" class="close-btn" title="Close" aria-label="Close details">
                         <i class="fas fa-times"></i>
                     </button>
                 </div>
@@ -410,12 +410,12 @@
             <!-- Time Controls -->
             <div class="time-controls">
                 <!-- Playback Bar -->
-                <div id="replayControls" class="replay-controls" style="display: none;">
+                <div id="replayControls" class="replay-controls" role="group" aria-label="Replay controls" style="display: none;">
                     <div class="replay-controls-left">
-                        <button id="replayPlayPauseBtn" class="replay-btn" title="Play/Pause">
+                        <button id="replayPlayPauseBtn" class="replay-btn" title="Play/Pause" aria-label="Play or pause replay">
                             <i class="fas fa-pause"></i>
                         </button>
-                        <button id="replayStopBtn" class="replay-btn" title="Stop">
+                        <button id="replayStopBtn" class="replay-btn" title="Stop" aria-label="Stop replay">
                             <i class="fas fa-stop"></i>
                         </button>
                         <div class="replay-speed-group">
@@ -426,7 +426,7 @@
                         </div>
                     </div>
                     <div class="replay-controls-center">
-                        <input type="range" id="replayTimeline" class="replay-timeline" min="0" max="1000" value="0">
+                        <input type="range" id="replayTimeline" class="replay-timeline" min="0" max="1000" value="0" aria-label="Replay timeline">
                     </div>
                     <div class="replay-controls-right">
                         <span id="replayTimeDisplay" class="replay-time-display">00:00:00</span>
@@ -437,7 +437,7 @@
                         <span id="remoteSummary">No remotes configured</span>
                     </div>
                     <div class="remote-bar-right">
-                        <span id="lastUpdate">Last updated: never</span>
+                        <span id="lastUpdate" aria-live="polite">Last updated: never</span>
                     </div>
                 </div>
                 <div class="remote-detail" id="remoteDetail" style="display: none;">
@@ -449,7 +449,7 @@
     </div>
 
     <!-- Toast notification container -->
-    <div id="toastContainer" class="toast-container"></div>
+    <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
     <!-- Connection lost banner -->
     <div id="connectionBanner" class="connection-banner" style="display: none;">

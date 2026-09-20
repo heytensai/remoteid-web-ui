@@ -75,6 +75,12 @@ global.MapController = {
   updateAlertState: jest.fn(),
   _applyCollectors: jest.fn(),
   setLiveMode: jest.fn(),
+  replayState: { active: false },
+  pauseReplay: jest.fn(),
+  resumeReplay: jest.fn(),
+  stopReplay: jest.fn(),
+  setReplaySpeed: jest.fn(),
+  seekReplay: jest.fn(),
 };
 
 global.Units = {
@@ -1388,6 +1394,138 @@ describe('UIController', () => {
       const rendered = UIController._updateDroneList.mock.calls[0][0];
       expect(rendered).toHaveLength(1);
       expect(rendered[0].uas_id).toBe('drone-001');
+    });
+  });
+
+  describe('keyboard shortcuts', () => {
+    let chartModal;
+    let alertLogModal;
+    let searchPanel;
+    let sidebar;
+
+    beforeEach(() => {
+      document.body.innerHTML = '';
+      chartModal = document.createElement('div');
+      chartModal.style.display = 'none';
+      alertLogModal = document.createElement('div');
+      alertLogModal.style.display = 'none';
+      searchPanel = document.createElement('div');
+      sidebar = document.createElement('div');
+      UIController.elements = { chartModal, alertLogModal, searchPanel, sidebar };
+      UIController.alertLogModalOpen = false;
+      UIController.replayActive = false;
+      UIController._replayDisplayTime = 0;
+      UIController._replayTotalDuration = 0;
+      MapController.replayState.active = false;
+      MapController.seekReplay.mockClear();
+      UIController._closeSearchPanel = jest.fn();
+    });
+
+    const keyEvent = (key, overrides = {}) => {
+      const event = {
+        key,
+        target: document.body,
+        ctrlKey: false,
+        metaKey: false,
+        altKey: false,
+        defaultPrevented: false,
+        preventDefault: jest.fn(),
+        ...overrides,
+      };
+      UIController._handleGlobalKeydown(event);
+      return event;
+    };
+
+    test('`r` triggers refreshData like the refresh button', () => {
+      UIController.refreshData = jest.fn();
+      keyEvent('r');
+      expect(UIController.refreshData).toHaveBeenCalledTimes(1);
+      UIController.refreshData = realRefreshData;
+    });
+
+    test('`r` does not fire while typing in an input', () => {
+      UIController.refreshData = jest.fn();
+      const input = document.createElement('input');
+      keyEvent('r', { target: input });
+      expect(UIController.refreshData).not.toHaveBeenCalled();
+      UIController.refreshData = realRefreshData;
+    });
+
+    test('`r` does not fire with Ctrl or Meta modifiers', () => {
+      UIController.refreshData = jest.fn();
+      keyEvent('r', { ctrlKey: true });
+      keyEvent('r', { metaKey: true });
+      expect(UIController.refreshData).not.toHaveBeenCalled();
+      UIController.refreshData = realRefreshData;
+    });
+
+    test('`,` and `.` scrub the replay timeline when replay is active', () => {
+      UIController.replayActive = true;
+      MapController.replayState.active = true;
+      UIController._replayDisplayTime = 5000;
+      UIController._replayTotalDuration = 10000;
+
+      const comma = keyEvent(',');
+      expect(MapController.seekReplay).toHaveBeenCalledWith(4800);
+      expect(comma.preventDefault).toHaveBeenCalled();
+
+      keyEvent('.');
+      expect(MapController.seekReplay).toHaveBeenCalledWith(5200);
+    });
+
+    test('`,` and `.` are no-ops when no replay is active', () => {
+      keyEvent(',');
+      keyEvent('.');
+      expect(MapController.seekReplay).not.toHaveBeenCalled();
+    });
+
+    test('`,` and `.` are no-ops when the map replay is inactive', () => {
+      UIController.replayActive = true;
+      MapController.replayState.active = false;
+      keyEvent('.');
+      expect(MapController.seekReplay).not.toHaveBeenCalled();
+    });
+
+    test('Escape closes the chart modal', () => {
+      chartModal.style.display = 'flex';
+      keyEvent('Escape');
+      expect(chartModal.style.display).toBe('none');
+    });
+
+    test('Escape closes the alert log modal when open', () => {
+      alertLogModal.style.display = 'flex';
+      UIController.alertLogModalOpen = true;
+      keyEvent('Escape');
+      expect(UIController.alertLogModalOpen).toBe(false);
+      expect(alertLogModal.style.display).toBe('none');
+    });
+
+    test('Escape closes the chart modal before the search panel', () => {
+      chartModal.style.display = 'flex';
+      searchPanel.classList.add('open');
+      keyEvent('Escape');
+      expect(chartModal.style.display).toBe('none');
+      expect(UIController._closeSearchPanel).not.toHaveBeenCalled();
+    });
+
+    test('Escape closes the search panel when no modal is open', () => {
+      searchPanel.classList.add('open');
+      keyEvent('Escape');
+      expect(UIController._closeSearchPanel).toHaveBeenCalled();
+    });
+
+    test('Escape closes the mobile sidebar drawer on narrow screens', () => {
+      Object.defineProperty(window, 'innerWidth', { value: 500, configurable: true });
+      sidebar.classList.add('open');
+      keyEvent('Escape');
+      expect(sidebar.classList.contains('open')).toBe(false);
+      Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true });
+    });
+
+    test('Escape does not close the sidebar on desktop widths', () => {
+      sidebar.classList.add('open');
+      keyEvent('Escape');
+      expect(sidebar.classList.contains('open')).toBe(true);
     });
   });
 });

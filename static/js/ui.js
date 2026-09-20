@@ -16,6 +16,8 @@ const UIController = {
     replayActive: false,
     replayPlaying: false,
     replaySpeed: 4,
+    _replayDisplayTime: 0,
+    _replayTotalDuration: 0,
     selectedDrone: null,
     selectedDroneTrack: null,
     visibleSessions: new Set(), // Track which sessions are checked/visible
@@ -607,11 +609,7 @@ const UIController = {
                 this._closeChartModal();
             }
         });
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && this.elements.chartModal.style.display === 'flex') {
-                this._closeChartModal();
-            }
-        });
+        document.addEventListener('keydown', (e) => this._handleGlobalKeydown(e));
 
         // Replay play button (sidebar header)
         this.elements.replayPlayBtn.addEventListener('click', () => {
@@ -2979,6 +2977,72 @@ const UIController = {
     },
 
     /**
+     * Global keyboard shortcuts.
+     * - Escape closes the topmost overlay: alert log, chart, search panel,
+     *   then the mobile sidebar drawer.
+     * - `r` refreshes data, matching the refresh button (spinner included).
+     * - `,` / `.` scrub the replay timeline backward/forward while a replay is
+     *   active (YouTube-style single-frame stepping). Arrow keys are left
+     *   untouched so they keep panning the Leaflet map.
+     * Shortcuts never fire while typing in a form control or with modifiers.
+     */
+    _handleGlobalKeydown(e) {
+        if (e.defaultPrevented) return;
+        const target = e.target;
+        const typing = target && target.tagName &&
+            (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' ||
+             target.tagName === 'SELECT' || target.isContentEditable);
+
+        // Escape works even while typing: dismiss the overlay on top.
+        if (e.key === 'Escape') {
+            if (this.alertLogModalOpen) {
+                this.alertLogModalOpen = false;
+                this.elements.alertLogModal.style.display = 'none';
+            } else if (this.elements.chartModal && this.elements.chartModal.style.display === 'flex') {
+                this._closeChartModal();
+            } else if (this.elements.searchPanel && this.elements.searchPanel.classList.contains('open')) {
+                this._closeSearchPanel();
+            } else if (this.elements.sidebar && window.innerWidth < 768 &&
+                       this.elements.sidebar.classList.contains('open')) {
+                this.elements.sidebar.classList.remove('open');
+            }
+            return;
+        }
+
+        if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+
+        switch (e.key) {
+            case 'r':
+            case 'R':
+                this.refreshData();
+                break;
+            case ',':
+                e.preventDefault();
+                this._scrubReplay(-1);
+                break;
+            case '.':
+                e.preventDefault();
+                this._scrubReplay(1);
+                break;
+            default:
+                break;
+        }
+    },
+
+    /**
+     * Step the replay timeline forward (dir=1) or backward (dir=-1) by 2% of
+     * the total window duration, matching the timeline slider. No-op unless a
+     * replay is active.
+     */
+    _scrubReplay(dir) {
+        if (!this.replayActive) return;
+        if (!MapController.replayState || !MapController.replayState.active) return;
+        const step = (this._replayTotalDuration || 0) / 50;
+        if (!step) return;
+        MapController.seekReplay((this._replayDisplayTime || 0) + (step * dir));
+    },
+
+    /**
      * Update detail stats from track data (session-specific)
      */
     _updateDetailStats(track, maxHeight = null) {
@@ -3570,6 +3634,8 @@ const UIController = {
     },
 
     _onReplayTime(realTimeMs, displayTimeMs, totalDurationMs) {
+        this._replayDisplayTime = displayTimeMs;
+        this._replayTotalDuration = totalDurationMs;
         // Update time display
         const d = new Date(realTimeMs);
         const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });

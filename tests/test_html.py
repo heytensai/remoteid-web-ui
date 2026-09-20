@@ -69,6 +69,51 @@ class TestIndexTemplate:
         assert soup.find(id="showKnownDrones") is not None
         assert soup.find(id="showUnknownDrones") is not None
 
+    def test_aria_attributes(self, client):
+        """Modals, icon-only buttons, and key regions carry ARIA semantics."""
+        resp = client.get("/")
+        soup = BeautifulSoup(resp.data, "html.parser")
+
+        # Modals expose dialog semantics and are labelled by their headings
+        alert_log = soup.find(id="alertLogModal")
+        assert alert_log.get("role") == "dialog"
+        assert alert_log.get("aria-modal") == "true"
+        assert alert_log.get("aria-labelledby") == "alertLogTitle"
+        assert soup.find(id="alertLogTitle") is not None
+
+        chart = soup.find(id="chartModal")
+        assert chart.get("role") == "dialog"
+        assert chart.get("aria-modal") == "true"
+        assert chart.get("aria-labelledby") == "chartModalTitle"
+        assert soup.find(id="chartModalTitle") is not None
+
+        # Icon-only buttons carry accessible labels
+        labelled = [
+            "refreshBtn", "closeSidebar", "closeAlertLog", "closeChartModal",
+            "closeDetail", "replayPlayBtn", "replayPlayPauseBtn", "replayStopBtn",
+            "searchSubmitBtn", "openSidebar", "openSettings",
+        ]
+        for button_id in labelled:
+            button = soup.find(id=button_id)
+            assert button is not None, f"Missing button: {button_id}"
+            assert button.get("aria-label"), f"Missing aria-label on {button_id}"
+
+        # Replay controls group + timeline
+        controls = soup.find(id="replayControls")
+        assert controls.get("role") == "group"
+        assert controls.get("aria-label") == "Replay controls"
+        assert soup.find(id="replayTimeline").get("aria-label") == "Replay timeline"
+
+        # Map and sidebar are labelled regions
+        assert soup.find(id="map").get("aria-label") == "Drone map"
+        assert soup.find(id="map").get("role") == "region"
+        assert soup.find(id="sidebar").get("role") == "region"
+        assert soup.find(id="sidebar").get("aria-label") == "Recorded flights"
+
+        # Live regions announce updates
+        assert soup.find(id="lastUpdate").get("aria-live") == "polite"
+        assert soup.find(id="toastContainer").get("aria-live") == "polite"
+
     def test_vendor_assets_local(self, client):
         """Leaflet, Flatpickr, and Font Awesome are served from local /vendor/ paths."""
         resp = client.get("/")
