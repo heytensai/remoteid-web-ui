@@ -1757,25 +1757,33 @@ class WebDatabase:
             self._put_conn(conn)
 
     def get_track_session_positions(
-        self, uas_id: str, session_id: str
+        self, uas_id: str, session_id: str, since: Optional[datetime] = None
     ) -> List[Dict]:
-        """Get positions for a specific session using indexed lookup."""
+        """Get positions for a specific session using indexed lookup.
+
+        When ``since`` is given (naive UTC), only positions strictly newer than
+        it are returned. This lets live-mode refreshes fetch just the tail of a
+        track so the frontend can append instead of redrawing.
+        """
         conn = self._get_conn()
         try:
             cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
-            cur.execute(
-                """
+            sql = """
                 SELECT latitude, longitude, altitude, height, height_type, timestamp,
                        operator_id, operator_latitude, operator_longitude,
                        computed_session_id, collector_latitude, collector_longitude,
                        source
                 FROM remoteid
                 WHERE uas_id = %s AND computed_session_id = %s
-                ORDER BY timestamp ASC
-            """,
-                (uas_id, session_id),
-            )
+            """
+            params: list = [uas_id, session_id]
+            if since is not None:
+                sql += " AND timestamp > %s"
+                params.append(since)
+            sql += " ORDER BY timestamp ASC"
+
+            cur.execute(sql, params)
 
             positions = [self._sanitize_record(dict(row)) for row in cur.fetchall()]
             return self._collapse_multi_source_positions(positions)

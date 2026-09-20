@@ -324,6 +324,59 @@ def test_get_track_session_positions_nonexistent(db):
     assert positions == []
 
 
+def test_get_track_session_positions_since(db):
+    """Optional `since` limits results to positions strictly newer than it."""
+    now = datetime.now(timezone.utc)
+    records = [
+        {
+            "timestamp": (now - timedelta(minutes=5)).isoformat(),
+            "uas_id": "drone-since",
+            "latitude": 40.0,
+            "longitude": -74.0,
+            "altitude": 100.0,
+            "mac_address": "aa:bb:cc:11:22:33",
+        },
+        {
+            "timestamp": now.isoformat(),
+            "uas_id": "drone-since",
+            "latitude": 40.1,
+            "longitude": -74.1,
+            "altitude": 200.0,
+            "mac_address": "aa:bb:cc:11:22:33",
+        },
+    ]
+    inserted, _, _ = db.insert_remoteid_records("test-source", records)
+    assert inserted == 2
+
+    start = now - timedelta(days=1)
+    end = now + timedelta(days=1)
+    sessions = db.get_track_sessions("drone-since", start, end)
+    assert len(sessions) >= 1
+    target = sessions[0]
+
+    all_positions = db.get_track_session_positions(
+        "drone-since", target["session_id"]
+    )
+    assert len(all_positions) >= 2
+
+    cutoff = datetime.fromisoformat(
+        all_positions[0]["timestamp"].replace("Z", "+00:00")
+    )
+    tail = db.get_track_session_positions(
+        "drone-since", target["session_id"], since=cutoff
+    )
+    assert 0 < len(tail) < len(all_positions)
+    assert all(p["timestamp"] > all_positions[0]["timestamp"] for p in tail)
+
+    future = datetime.fromisoformat(
+        all_positions[-1]["timestamp"].replace("Z", "+00:00")
+    )
+    empty = db.get_track_session_positions(
+        "drone-since", target["session_id"], since=future
+    )
+    assert empty == []
+
+
 # ---------------------------------------------------------------------------
 # Multi-collector track dedup (#181)
 # ---------------------------------------------------------------------------

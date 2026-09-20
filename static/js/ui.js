@@ -2203,9 +2203,10 @@ const UIController = {
                 this.loadedTracks.set(sessionKey, drone.timestamp);
                 pending.push({ uas_id: drone.uas_id, session_id: sessionId });
             } else if (drone.timestamp && drone.timestamp > lastLoaded) {
-                MapController.removeTrack(drone.uas_id, sessionKey);
+                // Track is already drawn — fetch only the new tail and append
+                // it instead of erasing and redrawing the whole flight.
                 this.loadedTracks.set(sessionKey, drone.timestamp);
-                refreshPending.push({ uas_id: drone.uas_id, session_id: sessionId });
+                refreshPending.push({ uas_id: drone.uas_id, session_id: sessionId, since: lastLoaded });
             }
         }
         const allPending = [...pending, ...refreshPending];

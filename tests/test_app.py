@@ -360,6 +360,103 @@ class TestApiTracks:
             "collector-5.8ghz",
         ]
 
+    def test_tracks_batch_with_since(self, client, db):
+        """A per-entry `since` timestamp limits that entry to the newer tail."""
+        now = datetime.now()
+        start = (now - timedelta(days=1)).isoformat()
+        end = (now + timedelta(days=1)).isoformat()
+        early = (now - timedelta(minutes=5)).isoformat()
+        for ts in (early, now.isoformat()):
+            record = {
+                "timestamp": ts,
+                "uas_id": "drone-333",
+                "latitude": 40.7128,
+                "longitude": -74.0060,
+                "altitude": 300.0,
+                "mac_address": "aa:bb:cc:dd:ee:33",
+            }
+            inserted, _, _ = db.insert_remoteid_records("collector-2.4ghz", [record])
+            assert inserted == 1
+
+        resp = client.get(
+            f"/api/tracks/drone-333?sessions=true&start={start}&end={end}"
+        )
+        sessions = resp.get_json()["sessions"]
+        assert len(sessions) == 1
+        target_id = sessions[0]["session_id"]
+        key = f"drone-333:{target_id}"
+
+        # No since: both positions returned.
+        resp_full = client.post(
+            "/api/tracks/batch",
+            data=json.dumps(
+                {"sessions": [{"uas_id": "drone-333", "session_id": target_id}]}
+            ),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        full = resp_full.get_json()["tracks"][key]
+        assert len(full["positions"]) == 2
+
+        # With since: only the position strictly newer than the cutoff.
+        resp_tail = client.post(
+            "/api/tracks/batch",
+            data=json.dumps(
+                {
+                    "sessions": [
+                        {"uas_id": "drone-333", "session_id": target_id, "since": early}
+                    ]
+                }
+            ),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        tail = resp_tail.get_json()["tracks"][key]
+        assert len(tail["positions"]) == 1
+        assert tail["positions"][0]["timestamp"] > full["positions"][0]["timestamp"]
+
+    def test_tracks_batch_with_malformed_since(self, client, db):
+        """A malformed `since` is ignored and the full track is returned."""
+        now = datetime.now()
+        start = (now - timedelta(days=1)).isoformat()
+        end = (now + timedelta(days=1)).isoformat()
+        record = {
+            "timestamp": now.isoformat(),
+            "uas_id": "drone-334",
+            "latitude": 40.7128,
+            "longitude": -74.0060,
+            "altitude": 300.0,
+            "mac_address": "aa:bb:cc:dd:ee:34",
+        }
+        inserted, _, _ = db.insert_remoteid_records("collector-2.4ghz", [record])
+        assert inserted == 1
+        resp = client.get(
+            f"/api/tracks/drone-334?sessions=true&start={start}&end={end}"
+        )
+        sessions = resp.get_json()["sessions"]
+        assert len(sessions) == 1
+        target_id = sessions[0]["session_id"]
+
+        resp2 = client.post(
+            "/api/tracks/batch",
+            data=json.dumps(
+                {
+                    "sessions": [
+                        {
+                            "uas_id": "drone-334",
+                            "session_id": target_id,
+                            "since": "not-a-timestamp",
+                        }
+                    ]
+                }
+            ),
+            content_type="application/json",
+            headers={"X-CSRFToken": "test"},
+        )
+        assert resp2.status_code == 200
+        track = resp2.get_json()["tracks"][f"drone-334:{target_id}"]
+        assert len(track["positions"]) == 1
+
 
 class TestApiOperators:
     def test_get_operators(self, client, db):

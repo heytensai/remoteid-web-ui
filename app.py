@@ -901,7 +901,9 @@ def search():
 def get_tracks_batch():
     """Batch fetch tracks for multiple sessions in one request.
 
-    Request body: {"sessions": [{"uas_id": "...", "session_id": "..."}, ...]}
+    Request body: {"sessions": [{"uas_id": "...", "session_id": "...", "since": "ISO..."}, ...]}
+    The optional per-entry ``since`` (ISO timestamp) restricts that entry to
+    positions strictly newer than it, so live refreshes only fetch the tail.
     Response: {"tracks": {"uas_id:session_id": {"uas_id": "...", "session_id": "...", "positions": [...]}, ...}}
     """
     try:
@@ -917,8 +919,19 @@ def get_tracks_batch():
             session_id = entry.get("session_id", "")
             if not uas_id or not session_id:
                 continue
+            since = None
+            since_raw = entry.get("since")
+            if since_raw:
+                try:
+                    since = _to_naive_utc(
+                        datetime.fromisoformat(since_raw.replace("Z", "+00:00"))
+                    )
+                except (ValueError, TypeError):
+                    since = None
             key = f"{uas_id}:{session_id}"
-            positions = DATABASE.get_track_session_positions(uas_id, session_id)
+            positions = DATABASE.get_track_session_positions(
+                uas_id, session_id, since=since
+            )
             results[key] = {
                 "uas_id": uas_id,
                 "session_id": session_id,

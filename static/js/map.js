@@ -912,16 +912,19 @@ const MapController = {
 
     /**
      * Load and draw tracks for multiple sessions in a single batch request
-     * @param {Array<{uas_id: string, session_id: string}>} sessions - Array of session descriptors
+     * @param {Array<{uas_id: string, session_id: string, since?: string}>} sessions - Array of session descriptors.
+     *   Entries with a ``since`` timestamp are live-mode refreshes of already-drawn sessions;
+     *   they are appended incrementally instead of being erased and redrawn.
      * @returns {Promise<Array<string>>} Array of session keys that were successfully loaded
      */
     async loadTracksBatch(sessions) {
         if (!this.ready || !sessions || sessions.length === 0) return [];
 
-        // Filter out already-loaded sessions
+        // Filter out already-loaded sessions, except refresh entries that carry
+        // a `since` timestamp (those sessions are already drawn and get appended).
         const pending = sessions.filter(s => {
             const key = `${s.uas_id}:${s.session_id}`;
-            return s.session_id && !this.loadedTrackSessions.has(key);
+            return s.session_id && (s.since || !this.loadedTrackSessions.has(key));
         });
 
         if (pending.length === 0) return [];
@@ -934,6 +937,19 @@ const MapController = {
             for (const entry of pending) {
                 const key = `${entry.uas_id}:${entry.session_id}`;
                 const data = trackData[key];
+
+                // Refresh entry for a session already on the map: append the tail.
+                if (entry.since && this.sessionPositions[key]) {
+                    if (data && data.positions) {
+                        this._appendTrackPositions(
+                            entry.uas_id, entry.session_id, data.positions,
+                            this.getDroneColor(entry.uas_id)
+                        );
+                    }
+                    loaded.push(key);
+                    continue;
+                }
+
                 if (data && data.positions && data.positions.length > 0) {
                     const color = this.getDroneColor(entry.uas_id);
                     this._drawTrackSegment(entry.uas_id, entry.session_id, data.positions, color);
@@ -951,6 +967,82 @@ const MapController = {
             }
             return [];
         }
+    },
+
+    /**
+     * Append new positions to an already-drawn session track without erasing
+     * it. New segments continue from the last drawn vertex (extending the
+     * existing polyline when the color band matches), the end marker moves to
+     * the new final position, and the start marker is untouched.
+     * @returns {boolean} True when the session is drawn/updated, false when nothing was drawn.
+     */
+    _appendTrackPositions(uasId, sessionId, positions, color) {
+        const sessionKey = `${uasId}:${sessionId}`;
+        const existing = this.sessionPositions[sessionKey];
+        if (!existing || existing.length === 0) return false;
+
+        const lastTs = new Date(existing[existing.length - 1].timestamp).getTime();
+        const fresh = (positions || []).filter(
+            p => new Date(p.timestamp).getTime() > lastTs
+        );
+        if (fresh.length === 0) return true;
+
+        if (!this.tracks[sessionKey]) this.tracks[sessionKey] = [];
+
+        // Build the tail segments starting from the last drawn vertex so the
+        // new geometry connects seamlessly. Colors follow the same band rules.
+        const tail = this._buildTrackSegments(
+            [existing[existing.length - 1], ...fresh], color
+        );
+        for (const seg of tail) {
+            const lastSeg = this.tracks[sessionKey][this.tracks[sessionKey].length - 1];
+            if (lastSeg && lastSeg._heightColor === seg._heightColor && typeof lastSeg.addLatLng === 'function') {
+                // Same band continues: extend the existing polyline (skipping
+                // the shared vertex) instead of adding a new segment.
+                for (const pt of seg._pts.slice(1)) {
+                    lastSeg.addLatLng(pt);
+                }
+            } else {
+                seg.addTo(this.layers.tracks);
+                this.tracks[sessionKey].push(seg);
+            }
+        }
+
+        // Merge the full position list so replay and later appends stay correct.
+        this.sessionPositions[sessionKey] = existing.concat(fresh);
+
+        // Move the end marker forward; start/operator markers stay put.
+        this._updateEndMarker(uasId, sessionId, this.sessionPositions[sessionKey], color, sessionKey);
+        return true;
+    },
+
+    /**
+     * Reposition the end marker of a session after its track has grown. Keeps
+     * the start marker; handles the 1-position -> multi-position transition.
+     */
+    _updateEndMarker(uasId, sessionId, positions, color, trackKey) {
+        const markers = this.tracks[trackKey] && this.tracks[trackKey].markers;
+        const collectorNames = this._collectorNamesForPositions(positions);
+        const endPos = positions[positions.length - 1];
+
+        if (!markers || markers.length === 0) {
+            this._addSessionMarkers(uasId, sessionId, positions, color, trackKey);
+            return;
+        }
+
+        // Single live drone marker (1-position session) grew into a real track:
+        // rebuild the markers entirely.
+        if (markers.length === 1 && markers[0]._markerType === 'drone') {
+            this.layers.tracks.removeLayer(markers[0]);
+            markers.length = 0;
+            this._addSessionMarkers(uasId, sessionId, positions, color, trackKey);
+            return;
+        }
+
+        // Multi-position session: drop only the old end marker, place a new one.
+        const oldEnd = markers[markers.length - 1];
+        if (oldEnd) this.layers.tracks.removeLayer(oldEnd);
+        markers[markers.length - 1] = this._createEndMarker(uasId, sessionId, endPos, color, collectorNames);
     },
 
     /**
@@ -1044,6 +1136,7 @@ const MapController = {
         });
         seg._droneColor = droneColor;
         seg._heightColor = heightColor;
+        seg._pts = points;
         return seg;
     },
 
@@ -1208,6 +1301,17 @@ const MapController = {
 
         // Add end marker — use a height/in-flight drone icon if the position is recent.
         // The in-flight marker follows the height band; the stop (end) icon always keeps the drone color.
+        const endMarker = this._createEndMarker(uasId, sessionId, endPos, color, collectorNames);
+        this.tracks[trackKey].markers.push(endMarker);
+    },
+
+    /**
+     * Create the end marker for a session at the given (final) position.
+     * Uses a height/in-flight drone icon when the position is recent, otherwise
+     * the stop icon. Shared by full draws and incremental track appends.
+     * @returns {L.Marker}
+     */
+    _createEndMarker(uasId, sessionId, endPos, color, collectorNames) {
         const isActive = this._isPositionActive(endPos.timestamp);
         const hasAlert = isActive && this.alertUasIds.has(uasId);
         const endIcon = isActive
@@ -1224,7 +1328,7 @@ const MapController = {
         if (isActive) {
             this._bindDroneAnnotation(endMarker, uasId, endPos);
         }
-        this.tracks[trackKey].markers.push(endMarker);
+        return endMarker;
     },
 
     /**

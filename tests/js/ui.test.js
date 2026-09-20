@@ -626,6 +626,44 @@ describe('UIController', () => {
       expect(UIController.visibleSessions.has('uas-123:session_past')).toBe(true);
     });
 
+    test('refreshes a drawn live track incrementally with a since timestamp', async () => {
+      const liveKey = 'uas-999:session_live';
+      UIController.droneMap = {
+        [liveKey]: {
+          uas_id: 'uas-999',
+          computed_session_id: 'session_live',
+          timestamp: '2024-01-01T01:00:00Z',
+          latitude: 3,
+          longitude: 4,
+          altitude: 10,
+        },
+      };
+      UIController.visibleSessions = new Set([liveKey]);
+      UIController.loadedTracks = new Map([[liveKey, '2024-01-01T01:00:00Z']]);
+      MapController.loadTracksBatch = jest
+        .fn()
+        .mockResolvedValue([liveKey]);
+
+      API.getRefresh.mockResolvedValue({
+        drones: [{
+          uas_id: 'uas-999',
+          computed_session_id: 'session_live',
+          timestamp: '2024-01-01T02:00:00Z',
+        }],
+        sources: [],
+        alerts: { active: [] },
+        stats: {},
+      });
+
+      await UIController.refreshData();
+
+      expect(MapController.removeTrack).not.toHaveBeenCalledWith('uas-999', liveKey);
+      expect(MapController.loadTracksBatch).toHaveBeenCalledWith([
+        { uas_id: 'uas-999', session_id: 'session_live', since: '2024-01-01T01:00:00Z' },
+      ]);
+      expect(UIController.loadedTracks.get(liveKey)).toBe('2024-01-01T02:00:00Z');
+    });
+
     test('removes expired live sessions during a live refresh', async () => {
       UIController.droneMap = {
         'uas-456:session_expired': {

@@ -22,13 +22,22 @@ global.L = {
     fitBounds: jest.fn(),
   }),
   tileLayer: jest.fn().mockReturnValue({ addTo: jest.fn() }),
-  marker: jest
-    .fn()
-    .mockReturnValue({ addTo: jest.fn(), bindPopup: jest.fn(), getLatLng: jest.fn().mockReturnValue({ lat: 0, lng: 0 }), setZIndexOffset: jest.fn(), openPopup: jest.fn() }),
+  marker: jest.fn().mockImplementation(() => {
+    const m = {
+      addTo: jest.fn(),
+      bindPopup: jest.fn(),
+      getLatLng: jest.fn().mockReturnValue({ lat: 0, lng: 0 }),
+      setZIndexOffset: jest.fn(),
+      openPopup: jest.fn(),
+    };
+    m.addTo.mockReturnValue(m);
+    return m;
+  }),
   polyline: jest.fn().mockImplementation((points) => ({
     addTo: jest.fn(),
     setStyle: jest.fn(),
     setLatLngs: jest.fn(),
+    addLatLng: jest.fn(),
     _latlngs: points,
   })),
   divIcon: jest.fn().mockReturnValue({}),
@@ -382,6 +391,134 @@ describe('MapController', () => {
       for (const seg of segs) {
         expect(seg._latlngs.length).toBeGreaterThanOrEqual(2);
       }
+    });
+  });
+
+  describe('_appendTrackPositions', () => {
+    beforeEach(() => {
+      MapController.ready = true;
+      MapController.isLiveMode = false;
+      MapController.colorMode = 'drone';
+      MapController.layers.tracks = { removeLayer: jest.fn() };
+      MapController.collectorConfigs = [];
+      MapController.alertUasIds = new Set();
+      MapController.staleTimeout = 300;
+      MapController.droneAliases = {};
+      MapController.tracks = {};
+      MapController.sessionPositions = {};
+    });
+
+    test('returns false when the session was never drawn', () => {
+      const result = MapController._appendTrackPositions(
+        'd1', 's1',
+        [{ latitude: 2, longitude: 2, height: 20, timestamp: '2024-01-01T00:00:01Z' }],
+        '#ff0000'
+      );
+      expect(result).toBe(false);
+    });
+
+    test('extends the existing polyline in place when the color band continues', () => {
+      const existing = [
+        { latitude: 1, longitude: 1, height: 10, timestamp: '2024-01-01T00:00:00Z' },
+      ];
+      const seg = L.polyline([[1, 1]], {});
+      seg._heightColor = '#ff0000';
+      seg._droneColor = '#ff0000';
+      const startMarker = { _markerType: undefined };
+      const endMarker = { _markerType: 'stop', addTo: jest.fn(), bindPopup: jest.fn() };
+      const track = [seg];
+      track.markers = [startMarker, endMarker];
+      MapController.sessionPositions = { 'd1:s1': existing };
+      MapController.tracks = { 'd1:s1': track };
+
+      const result = MapController._appendTrackPositions(
+        'd1', 's1',
+        [{ latitude: 2, longitude: 2, height: 20, timestamp: '2024-01-01T00:00:01Z' }],
+        '#ff0000'
+      );
+
+      expect(result).toBe(true);
+      expect(seg.addLatLng).toHaveBeenCalledWith([2, 2]);
+      expect(track.length).toBe(1);
+      expect(track[0]).toBe(seg);
+      expect(MapController.sessionPositions['d1:s1'].length).toBe(2);
+      // Start marker kept; old end marker removed and replaced with a new one.
+      expect(MapController.layers.tracks.removeLayer).toHaveBeenCalledWith(endMarker);
+      expect(track.markers[0]).toBe(startMarker);
+      expect(track.markers.length).toBe(2);
+      expect(track.markers[1]).not.toBe(endMarker);
+    });
+
+    test('adds a new segment when the height band changes', () => {
+      MapController.colorMode = 'height';
+      const existing = [
+        { latitude: 1, longitude: 1, height: 150 * 0.3048, timestamp: '2024-01-01T00:00:00Z' },
+      ];
+      const seg = L.polyline([[1, 1]], {});
+      seg._heightColor = '#eab308';
+      seg._droneColor = '#ff0000';
+      const track = [seg];
+      track.markers = [];
+      MapController.sessionPositions = { 'd1:s1': existing };
+      MapController.tracks = { 'd1:s1': track };
+
+      MapController._appendTrackPositions(
+        'd1', 's1',
+        [{ latitude: 2, longitude: 2, height: 250 * 0.3048, timestamp: '2024-01-01T00:00:01Z' }],
+        '#ff0000'
+      );
+
+      expect(track.length).toBe(2);
+      expect(track[1]._heightColor).toBe('#ec4899');
+      expect(track[1].addTo).toHaveBeenCalledWith(MapController.layers.tracks);
+      expect(seg.addLatLng).not.toHaveBeenCalled();
+    });
+
+    test('ignores positions no newer than the last drawn point', () => {
+      const existing = [
+        { latitude: 1, longitude: 1, height: 10, timestamp: '2024-01-01T00:00:00Z' },
+      ];
+      const seg = L.polyline([[1, 1]], {});
+      seg._heightColor = '#ff0000';
+      seg._droneColor = '#ff0000';
+      const endMarker = { _markerType: 'stop', addTo: jest.fn(), bindPopup: jest.fn() };
+      const track = [seg];
+      track.markers = [{ _markerType: undefined }, endMarker];
+      MapController.sessionPositions = { 'd1:s1': existing };
+      MapController.tracks = { 'd1:s1': track };
+
+      const result = MapController._appendTrackPositions(
+        'd1', 's1',
+        [{ latitude: 2, longitude: 2, height: 20, timestamp: '2024-01-01T00:00:00Z' }],
+        '#ff0000'
+      );
+
+      expect(result).toBe(true);
+      expect(seg.addLatLng).not.toHaveBeenCalled();
+      expect(MapController.sessionPositions['d1:s1'].length).toBe(1);
+      expect(MapController.layers.tracks.removeLayer).not.toHaveBeenCalledWith(endMarker);
+    });
+
+    test('upgrades a single-position live marker into start+end markers', () => {
+      const existing = [
+        { latitude: 1, longitude: 1, height: 10, timestamp: '2024-01-01T00:00:00Z' },
+      ];
+      const single = { _markerType: 'drone', addTo: jest.fn(), bindPopup: jest.fn() };
+      const track = [];
+      track.markers = [single];
+      MapController.sessionPositions = { 'd1:s1': existing };
+      MapController.tracks = { 'd1:s1': track };
+
+      MapController._appendTrackPositions(
+        'd1', 's1',
+        [{ latitude: 2, longitude: 2, height: 20, timestamp: '2024-01-01T00:00:01Z' }],
+        '#ff0000'
+      );
+
+      expect(MapController.layers.tracks.removeLayer).toHaveBeenCalledWith(single);
+      expect(track.markers.length).toBe(2);
+      expect(track.markers[0]._markerType).toBe(undefined);
+      expect(track.markers[1]._markerType).toBe('stop');
     });
   });
 
