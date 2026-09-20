@@ -3,6 +3,7 @@
 
 import hashlib
 import secrets as _secrets
+import time
 import uuid
 import logging
 from datetime import datetime, timedelta, timezone
@@ -16,13 +17,26 @@ from psycopg2 import pool
 logger = logging.getLogger(__name__)
 
 # Current schema version — bump this and add a migration in _migrate()
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # Multi-collector track dedup parameters (read-path only, see #181). Storage
 # keeps one row per (uas_id, source, timestamp) for attribution; these only
 # collapse near-simultaneous duplicate observations at query time.
 TRACK_DEDUP_TIME_WINDOW_S = 2.0
 TRACK_DEDUP_COORD_EPS = 1e-5
+
+# How long to wait for a Postgres *connection* before giving up (seconds).
+# The postgres healthcheck (pg_isready) only proves the server accepts a TCP
+# connection — it stays green while the server is stuck in crash recovery or
+# replaying WAL, during which real connections/queries block. Without a
+# timeout the web container hung forever at "Initializing database" and the
+# only recovery was restarting the db container. Failing fast lets the
+# container restart (restart: unless-stopped) and logs the DB state snapshot.
+DB_CONNECT_TIMEOUT_S = 20
+
+# Shorter timeout for the best-effort diagnostic snapshot connection so
+# startup is never delayed by the diagnostics themselves.
+DB_DIAG_CONNECT_TIMEOUT_S = 5
 
 
 class WebDatabase:
@@ -32,8 +46,17 @@ class WebDatabase:
     def __init__(self, database_url: str):
         """Initialize the web database, creating schema if needed."""
         self.database_url = database_url
-        self._pool = pool.ThreadedConnectionPool(0, 10, dsn=database_url)
-        self._init_db()
+        self._pool = pool.ThreadedConnectionPool(
+            0, 10, dsn=database_url, connect_timeout=DB_CONNECT_TIMEOUT_S
+        )
+        try:
+            start = time.monotonic()
+            self._init_db()
+            logger.info("Database initialized in %.1fs", time.monotonic() - start)
+        except psycopg2.Error:
+            logger.exception("Database initialization failed")
+            self._log_db_diagnostics()
+            raise
 
     def reset_pool(self):
         """Replace the connection pool with a fresh one forked workers can use.
@@ -55,7 +78,62 @@ class WebDatabase:
 
         Safe to call multiple times.
         """
-        self._pool = pool.ThreadedConnectionPool(0, 10, dsn=self.database_url)
+        self._pool = pool.ThreadedConnectionPool(
+            0, 10, dsn=self.database_url, connect_timeout=DB_CONNECT_TIMEOUT_S
+        )
+
+    def _log_db_diagnostics(self):
+        """Best-effort snapshot of the database state to explain a startup hang.
+
+        Called right after ``_init_db`` fails. Uses its own short-timeout
+        connection so a hard-unreachable server never delays startup further.
+        Logs whether the server is still recovering, and every backend on the
+        current database (state, wait event, age, query) so a hung query or a
+        lock-holder stuck in ``idle in transaction`` is immediately visible.
+        """
+        try:
+            conn = psycopg2.connect(
+                self.database_url, connect_timeout=DB_DIAG_CONNECT_TIMEOUT_S
+            )
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT version(), pg_is_in_recovery(), "
+                    "current_setting('max_connections')"
+                )
+                version, in_recovery, max_conns = cur.fetchone()
+                logger.error(
+                    "DB diagnostics: pg_is_in_recovery=%s max_connections=%s (%s)",
+                    in_recovery, max_conns, version,
+                )
+                cur.execute(
+                    """
+                    SELECT pid, backend_type, state, wait_event_type, wait_event,
+                           NOW() - COALESCE(query_start, state_change) AS age,
+                           LEFT(regexp_replace(
+                                regexp_replace(query, '\\n', ' ', 'g'),
+                                '\\s+', ' ', 'g'), 120) AS query
+                    FROM pg_stat_activity
+                    WHERE datname = current_database()
+                    ORDER BY (state IS NULL) DESC, COALESCE(query_start, state_change)
+                    """
+                )
+                rows = cur.fetchall()
+                if not rows:
+                    logger.error("DB diagnostics: no backends on this database")
+                for pid, bt, state, wt_type, wt, age, qry in rows:
+                    logger.error(
+                        "DB diagnostics: pid=%s backend=%s state=%s "
+                        "wait=%s/%s age=%s query=%s",
+                        pid, bt, state, wt_type, wt, age, qry,
+                    )
+            finally:
+                conn.close()
+        except psycopg2.Error:
+            logger.error(
+                "DB diagnostics unavailable (short-timeout connect failed)",
+                exc_info=True,
+            )
 
     def _get_conn(self):
         """Get a connection from the pool.
@@ -80,6 +158,8 @@ class WebDatabase:
         try:
             conn.autocommit = True
             cur = conn.cursor()
+
+            logger.info("Preparing local schema (autocommit session connected)")
 
             # Create remoteid table
             cur.execute(
@@ -217,6 +297,7 @@ class WebDatabase:
             )
 
             # Create indexes
+            logger.info("Creating schema indexes")
             cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_uas_time ON remoteid(uas_id, timestamp)"
             )
@@ -230,6 +311,13 @@ class WebDatabase:
             )
             cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_computed_session ON remoteid(computed_session_id)"
+            )
+            # Makes the session scheduler's startup scan
+            # (MIN(timestamp) WHERE computed_session_id IS NULL) an O(1) index
+            # read instead of a full table scan on every web boot.
+            cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_remoteid_null_sess_ts "
+            "ON remoteid(timestamp) WHERE computed_session_id IS NULL"
             )
             cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_geozone_events_active "
@@ -308,10 +396,12 @@ class WebDatabase:
             )
 
             conn.autocommit = False
+            logger.info("Verifying schema version")
             self._ensure_schema_version(conn)
+            logger.info("Backfilling latest_positions if needed")
             self._ensure_latest_positions_backfilled(conn)
             self._commit(conn)
-            logger.debug("Database initialized")
+            logger.info("Database schema ready")
         finally:
             self._put_conn(conn)
 
@@ -484,6 +574,17 @@ class WebDatabase:
                 "ON remoteid(uas_id, source, timestamp)"
             )
             from_version = 9
+
+        if from_version == 9:
+            # v10: partial index on remoteid so the session scheduler's
+            # boot-time MIN(timestamp) WHERE computed_session_id IS NULL
+            # lookup is an index read instead of a full table scan (which
+            # looked like a web-container hang on a large, cold cache).
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_remoteid_null_sess_ts "
+                "ON remoteid(timestamp) WHERE computed_session_id IS NULL"
+            )
+            from_version = 10
 
     @staticmethod
     def _ensure_latest_positions_table(cur):

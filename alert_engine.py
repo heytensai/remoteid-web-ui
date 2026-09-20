@@ -121,10 +121,13 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
 
     def _load_known_sessions(self):
         """Pre-populate known sessions from DB to avoid false "new" notifications on startup."""
+        start = time.monotonic()
+        logger.info("Loading known sessions for alert engine")
         try:
             self._known_sessions = self._db.get_all_current_sessions()
-            logger.debug(
-                "AlertEngine: loaded %d existing sessions", len(self._known_sessions)
+            logger.info(
+                "Loaded %d existing sessions in %.2fs",
+                len(self._known_sessions), time.monotonic() - start,
             )
         except Exception:  # pylint: disable=broad-exception-caught
             logger.exception("AlertEngine: failed to load known sessions")

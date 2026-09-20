@@ -137,6 +137,14 @@ The `_schema_version` table records each migration step so any gap between the c
   drops the old unique index and recreates it with the expanded key; the live
   `INSERT ... ON CONFLICT (uas_id, source, timestamp)` clauses were updated to
   match.
+- **v10**: adds the partial index `idx_remoteid_null_sess_ts` on
+  `remoteid(timestamp) WHERE computed_session_id IS NULL`. This turns the
+  session scheduler's every-boot `MIN(timestamp) WHERE computed_session_id IS
+  NULL` lookup (session_scheduler.py) from a full table scan into an O(1)
+  index read — a cold-cache scan of a large `remoteid` table looked like a
+  hung web container at "Initializing database". Idempotent; a fresh database
+  gets it from the base `_init_db()` block, an existing v9 database gets it
+  from the migration.
 
 
 ### Multi-Collector Track Dedup (Read-Path Only)

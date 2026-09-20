@@ -1639,6 +1639,7 @@ def _init_app(config_path: str):
     logger.info("Initializing database")
     DATABASE = WebDatabase(db_url)
 
+    logger.info("Creating alert engine")
     ALERT_ENGINE = AlertEngine(DATABASE, CONFIG)
 
     # Build notifier service from config (dispatches to all targets)
@@ -1653,7 +1654,9 @@ def _init_app(config_path: str):
         ALERT_ENGINE.on_unrecognized_drone = _on_unrecognized_drone
         ALERT_ENGINE.on_drone_proximity = _on_drone_proximity
 
+    logger.info("Creating session scheduler")
     SESSION_SCHEDULER = SessionScheduler(CONFIG, db_url, alert_engine=ALERT_ENGINE, database=DATABASE)
+    logger.info("Creating maintenance scheduler")
     MAINTENANCE_SCHEDULER = MaintenanceScheduler(CONFIG, DATABASE)
 
     global _config_snapshot  # noqa: PLW0603  # pylint: disable=global-statement

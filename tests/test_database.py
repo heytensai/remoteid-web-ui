@@ -73,6 +73,23 @@ def test_schema_version_created(db):
     assert version == SCHEMA_VERSION
 
 
+def test_null_session_timestamp_index_created(db):
+    """v10 partial index exists so the scheduler's boot-time MIN lookup is an
+    index read, not a full table scan."""
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT indexdef FROM pg_indexes "
+            "WHERE indexname = 'idx_remoteid_null_sess_ts'"
+        )
+        indexdef = cur.fetchone()
+    finally:
+        db._put_conn(conn)
+    assert indexdef is not None
+    assert "computed_session_id IS NULL" in indexdef[0]
+
+
 def test_claim_alert_first_wins(db):
     """Only the first claim for a key returns True."""
     assert db.claim_alert("new_session", "uas-001:session_abc") is True

@@ -8,6 +8,7 @@ from typing import Optional
 
 import psycopg2
 
+from database import DB_CONNECT_TIMEOUT_S
 from session_detect import process_database
 
 logger = logging.getLogger(__name__)
@@ -19,18 +20,41 @@ def _oldest_undetected_timestamp(database_url: str) -> Optional[datetime]:
     Returns None when the database has no NULL computed_session_id
     (all sessions already detected) or when the database/column doesn't
     exist yet.
+
+    Runs synchronously during startup (SessionScheduler.__init__), so the
+    connect is bounded by ``DB_CONNECT_TIMEOUT_S`` and the query itself is
+    bounded by a generous ``statement_timeout`` — a DB or table that is slow to
+    answer (e.g. a cold-cache full scan of a large ``remoteid`` table) must not
+    block the web server from booting. On any error we return None and the
+    scheduler instead starts from "right now".
     """
+    start = time.monotonic()
+    logger.info("Resolving oldest undetected timestamp")
     try:
-        conn = psycopg2.connect(database_url)
+        conn = psycopg2.connect(
+            database_url, connect_timeout=DB_CONNECT_TIMEOUT_S
+        )
         try:
             cur = conn.cursor()
+            cur.execute("SET statement_timeout = '60s'")
             cur.execute(
-                "SELECT MIN(timestamp) FROM remoteid WHERE computed_session_id IS NULL"
+                "SELECT MIN(timestamp) FROM remoteid "
+                "WHERE computed_session_id IS NULL"
             )
-            return cur.fetchone()[0]
+            result = cur.fetchone()[0]
+            logger.info(
+                "Oldest undetected timestamp resolved in %.2fs",
+                time.monotonic() - start,
+            )
+            return result
         finally:
             conn.close()
-    except psycopg2.Error:
+    except psycopg2.Error as exc:
+        logger.warning(
+            "Could not resolve oldest undetected timestamp after %.2fs "
+            "(starting session detection from now): %s",
+            time.monotonic() - start, exc,
+        )
         return None
 
 
@@ -93,7 +117,9 @@ class SessionScheduler:
             if sd.enabled:
                 conn = None
                 try:
-                    conn = psycopg2.connect(self._database_url)
+                    conn = psycopg2.connect(
+                        self._database_url, connect_timeout=DB_CONNECT_TIMEOUT_S
+                    )
                     summary, affected_uas = process_database(
                         conn,
                         sd.gap_threshold,
