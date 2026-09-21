@@ -145,6 +145,21 @@ The `_schema_version` table records each migration step so any gap between the c
   hung web container at "Initializing database". Idempotent; a fresh database
   gets it from the base `_init_db()` block, an existing v9 database gets it
   from the migration.
+- **v11**: `sync_log` becomes **one row per source** instead of an append-only
+  history. `_update_sync_log()`/`log_submission()` now UPSERT on `source`, so
+  `last_sync` records only *when* the source last sync'd (the last-data time
+  stays in `remoteid`). `records_imported` is the most recent submission's
+  count and is **preserved** when a heartbeat check-in (count 0) arrives.
+  Migration v11 collapses any existing duplicate rows (keeping the latest
+  `last_sync` per source) and replaces the old `idx_sync_log_source
+  (source, last_sync)` composite index with the unique
+  `idx_sync_log_source_unique ON sync_log(source)`. The maintenance cleanup
+  option (`cleanup_sync_log` / `sync_log_retention_days`) and
+  `cleanup_old_sync_log()` were removed — with one row per source the table is
+  bounded by the number of sources. Fresh databases get the unique index from
+  the base `_init_db()` block directly, which also collapses any leftover
+  duplicates before creating it (same idempotent cleanup runs in `_migrate()`;
+  the geozone active-events unique index follows the same pattern).
 
 
 ### Multi-Collector Track Dedup (Read-Path Only)

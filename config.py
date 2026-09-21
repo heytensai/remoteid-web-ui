@@ -176,8 +176,7 @@ class AlertsConfig:
 class MaintenanceConfig:
     """Background maintenance task configuration.
 
-    Runs periodic cleanup of stale auth data (expired tokens, orphaned users)
-    and sync_log history.
+    Runs periodic cleanup of stale auth data (expired tokens, orphaned users).
     """
 
     enabled: bool = False
@@ -185,8 +184,6 @@ class MaintenanceConfig:
     delete_expired_tokens: bool = True
     delete_expired_login_tokens: bool = True
     delete_orphaned_ephemeral_users: bool = True
-    cleanup_sync_log: bool = True
-    sync_log_retention_days: int = 7
 
     def __init__(self, data: dict = None):
         if data:
@@ -195,8 +192,6 @@ class MaintenanceConfig:
             self.delete_expired_tokens = data.get("delete_expired_tokens", True)
             self.delete_expired_login_tokens = data.get("delete_expired_login_tokens", True)
             self.delete_orphaned_ephemeral_users = data.get("delete_orphaned_ephemeral_users", True)
-            self.cleanup_sync_log = data.get("cleanup_sync_log", True)
-            self.sync_log_retention_days = data.get("sync_log_retention_days", 7)
 
 
 @dataclass
@@ -622,17 +617,6 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 new_m.delete_expired_tokens,
                 new_m.delete_expired_login_tokens,
                 new_m.delete_orphaned_ephemeral_users,
-            )
-            changed = True
-
-        if (new_m.cleanup_sync_log != old_m.cleanup_sync_log
-                or new_m.sync_log_retention_days
-                != old_m.sync_log_retention_days):
-            logger.info(
-                "Reloaded maintenance sync_log from %s "
-                "(cleanup_sync_log=%s, sync_log_retention_days=%s)",
-                self.config_path, new_m.cleanup_sync_log,
-                new_m.sync_log_retention_days,
             )
             changed = True
 

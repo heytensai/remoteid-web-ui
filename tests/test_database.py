@@ -1227,75 +1227,134 @@ def test_cleanup_orphaned_ephemeral_no_tokens(db):
         db._put_conn(conn)
 
 
-def test_cleanup_old_sync_log(db):
-    """cleanup_old_sync_log removes old rows but keeps at least 1 per source."""
+def test_sync_log_upsert_single_row_per_source(db):
+    """log_submission upserts: multiple calls keep one row per source."""
+    db.log_submission("test-source", 5)
+    first_last_sync = db._get_last_sync("test-source")
+    db.log_submission("test-source", 7)
+    assert db._get_last_sync("test-source") >= first_last_sync
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*), MAX(records_imported) FROM sync_log "
+            "WHERE source = 'test-source'"
+        )
+        count, records = cur.fetchone()
+    finally:
+        db._put_conn(conn)
+    assert count == 1
+    assert records == 7
+
+
+def test_sync_log_heartbeat_preserves_records_imported(db):
+    """A count=0 check-in updates last_sync but keeps the last real count."""
+    db.log_submission("test-source", 9)
+    db.log_submission("test-source", 0)
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT records_imported FROM sync_log WHERE source = 'test-source'"
+        )
+        assert cur.fetchone()[0] == 9
+    finally:
+        db._put_conn(conn)
+
+
+def test_log_submission_updates_records_imported_on_positive(db):
+    """A positive count overwrites the previous records_imported."""
+    db.log_submission("test-source", 3)
+    db.log_submission("test-source", 42)
+    for s in db.get_all_sources():
+        if s["source"] == "test-source":
+            assert s["total_records"] == 42
+            return
+    assert False, "test-source not found in sources"
+
+
+def test_sync_log_source_unique_index_created(db):
+    """v11 sync_log has a unique index on source (one row per source)."""
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT indexdef FROM pg_indexes "
+            "WHERE indexname = 'idx_sync_log_source_unique'"
+        )
+        indexdef = cur.fetchone()
+    finally:
+        db._put_conn(conn)
+    assert indexdef is not None
+    assert "UNIQUE" in indexdef[0]
+
+
+def test_sync_log_unique_index_rejects_duplicates(db):
+    """The unique source index prevents duplicate rows at the DB level."""
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO sync_log (source, last_sync, records_imported) "
+            "VALUES (%s, %s, %s)",
+            ("dup-source", datetime.now(timezone.utc), 1),
+        )
+        conn.commit()
+        with pytest.raises(psycopg2.IntegrityError):
+            cur.execute(
+                "INSERT INTO sync_log (source, last_sync, records_imported) "
+                "VALUES (%s, %s, %s)",
+                ("dup-source", datetime.now(timezone.utc), 2),
+            )
+            conn.commit()
+        conn.rollback()
+    finally:
+        db._put_conn(conn)
+
+
+def test_sync_log_init_dedupes_legacy_duplicates(db):
+    """Re-running _init_db (upgrade path) collapses pre-existing duplicate rows
+    and (re)creates the unique source index without failing."""
     now = datetime.now(timezone.utc)
     conn = db._get_conn()
     try:
         cur = conn.cursor()
-        # Source A: 1 old row + 1 recent row
+        cur.execute("DROP INDEX IF EXISTS idx_sync_log_source_unique")
+        conn.commit()
         cur.execute(
-            "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (%s, %s, %s)",
-            ("A", now - timedelta(days=10), 100),
+            "INSERT INTO sync_log (source, last_sync, records_imported) "
+            "VALUES (%s, %s, %s)",
+            ("legacy", now - timedelta(days=10), 5),
         )
         cur.execute(
-            "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (%s, %s, %s)",
-            ("A", now - timedelta(hours=1), 200),
-        )
-        # Source B: only 1 old row (must be preserved)
-        cur.execute(
-            "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (%s, %s, %s)",
-            ("B", now - timedelta(days=20), 50),
-        )
-        # Source C: all recent rows
-        cur.execute(
-            "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (%s, %s, %s)",
-            ("C", now - timedelta(hours=2), 75),
+            "INSERT INTO sync_log (source, last_sync, records_imported) "
+            "VALUES (%s, %s, %s)",
+            ("legacy", now - timedelta(days=1), 9),
         )
         conn.commit()
     finally:
         db._put_conn(conn)
 
-    deleted = db.cleanup_old_sync_log(retention_days=7)
-    assert deleted == 1
+    db._init_db()
 
-    conn = db._get_conn()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT source, records_imported FROM sync_log ORDER BY source")
-        rows = cur.fetchall()
-    finally:
-        db._put_conn(conn)
-
-    assert len(rows) == 3
-    assert ("A", 200) in rows
-    assert ("B", 50) in rows
-    assert ("C", 75) in rows
-
-
-def test_cleanup_old_sync_log_none(db):
-    """cleanup_old_sync_log returns 0 when all rows are within retention."""
-    now = datetime.now(timezone.utc)
     conn = db._get_conn()
     try:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (%s, %s, %s)",
-            ("X", now - timedelta(hours=1), 10),
+            "SELECT COUNT(*), MAX(records_imported) FROM sync_log "
+            "WHERE source = 'legacy'"
         )
-        conn.commit()
+        count, records = cur.fetchone()
+        cur.execute(
+            "SELECT 1 FROM pg_indexes "
+            "WHERE indexname = 'idx_sync_log_source_unique'"
+        )
+        index_exists = cur.fetchone() is not None
     finally:
         db._put_conn(conn)
-
-    assert db.cleanup_old_sync_log(retention_days=7) == 0
-
-    conn = db._get_conn()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM sync_log")
-        assert cur.fetchone()[0] == 1
-    finally:
-        db._put_conn(conn)
+    assert count == 1
+    assert records == 9
+    assert index_exists
 
 
 def test_get_live_drones(db):

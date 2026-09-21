@@ -248,6 +248,12 @@ CREATE INDEX idx_timestamp ON remoteid(timestamp);
 
 ### Sync Log Table
 
+`sync_log` holds **one row per source** (UPSERT on `source` via
+`idx_sync_log_source_unique`), not an append-only history. `last_sync` is
+when the source last submitted or pinged; `records_imported` is the most
+recent submission's count (preserved across count-0 heartbeat check-ins).
+The last-data timestamp lives in `remoteid`.
+
 ```sql
 CREATE TABLE sync_log(
     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -172,7 +172,7 @@ PG_INDEXES = [
     "ON geozone_events(uas_id, geozone_name) WHERE exited_at IS NULL",
     "CREATE INDEX IF NOT EXISTS idx_auth_tokens_hash ON auth_tokens(token_hash)",
     "CREATE INDEX IF NOT EXISTS idx_auth_tokens_user ON auth_tokens(user_id)",
-    "CREATE INDEX IF NOT EXISTS idx_sync_log_source ON sync_log(source, last_sync)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_log_source_unique ON sync_log(source)",
     "CREATE INDEX IF NOT EXISTS idx_lp_max_ts ON latest_positions(max_ts)",
 ]
 

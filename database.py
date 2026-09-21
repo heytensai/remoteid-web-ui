@@ -17,7 +17,7 @@ from psycopg2 import pool
 logger = logging.getLogger(__name__)
 
 # Current schema version — bump this and add a migration in _migrate()
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # Multi-collector track dedup parameters (read-path only, see #181). Storage
 # keeps one row per (uas_id, source, timestamp) for attribution; these only
@@ -361,9 +361,19 @@ class WebDatabase:
             "CREATE INDEX IF NOT EXISTS idx_auth_tokens_user "
             "ON auth_tokens(user_id)"
             )
+            # sync_log holds one row per source (UPSERT). Collapse any leftover
+            # duplicate rows from the append-era history before creating the
+            # unique index — otherwise the CREATE fails on upgrade (same
+            # idempotent cleanup runs in the v11 migration).
             cur.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sync_log_source "
-            "ON sync_log(source, last_sync)"
+                "DELETE FROM sync_log a USING sync_log b "
+                "WHERE a.source = b.source "
+                "AND (b.last_sync > a.last_sync "
+                "OR (b.last_sync = a.last_sync AND b.id > a.id))"
+            )
+            cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_log_source_unique "
+            "ON sync_log(source)"
             )
 
             # Materialized latest_positions table — O(sessions) instead of O(rows)
@@ -585,6 +595,25 @@ class WebDatabase:
                 "ON remoteid(timestamp) WHERE computed_session_id IS NULL"
             )
             from_version = 10
+
+        if from_version == 10:
+            # v11: sync_log becomes one row per source (UPSERT), so it no
+            # longer records sync history — just the last sync per source.
+            # First collapse any existing duplicate rows (keep the latest
+            # last_sync, tie-broken by id), then replace the old composite
+            # index with a unique one on source alone.
+            cur.execute(
+                "DELETE FROM sync_log a USING sync_log b "
+                "WHERE a.source = b.source "
+                "AND (b.last_sync > a.last_sync "
+                "OR (b.last_sync = a.last_sync AND b.id > a.id))"
+            )
+            cur.execute("DROP INDEX IF EXISTS idx_sync_log_source")
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_log_source_unique "
+                "ON sync_log(source)"
+            )
+            from_version = 11
 
     @staticmethod
     def _ensure_latest_positions_table(cur):
@@ -1203,12 +1232,12 @@ class WebDatabase:
         return abs(value - reference) <= eps
 
     def _get_last_sync(self, source_name: str) -> Optional[datetime]:
-        """Get the last sync time for a source"""
+        """Get the last sync time for a source (single row per source)."""
         conn = self._get_conn()
         try:
             cur = conn.cursor()
             cur.execute(
-                "SELECT last_sync FROM sync_log WHERE source = %s ORDER BY last_sync DESC LIMIT 1",
+                "SELECT last_sync FROM sync_log WHERE source = %s",
                 (source_name,),
             )
             row = cur.fetchone()
@@ -1217,12 +1246,24 @@ class WebDatabase:
             self._put_conn(conn)
 
     def _update_sync_log(self, source_name: str, count: int):
-        """Update the sync log for a source"""
+        """Upsert the sync status for a source: one row per source.
+
+        ``last_sync`` always advances to now. ``records_imported`` is only
+        overwritten when the new count is positive, so heartbeat check-ins
+        (count=0) don't zero out the last real submission's count.
+        """
         conn = self._get_conn()
         try:
             cur = conn.cursor()
             cur.execute(
-                "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (%s, %s, %s)",
+                "INSERT INTO sync_log (source, last_sync, records_imported) "
+                "VALUES (%s, %s, %s) "
+                "ON CONFLICT (source) DO UPDATE SET "
+                "last_sync = EXCLUDED.last_sync, "
+                "records_imported = CASE "
+                "  WHEN EXCLUDED.records_imported > 0 "
+                "  THEN EXCLUDED.records_imported "
+                "  ELSE sync_log.records_imported END",
                 (source_name, datetime.now(timezone.utc), count),
             )
             self._commit(conn)
@@ -1230,17 +1271,8 @@ class WebDatabase:
             self._put_conn(conn)
 
     def log_submission(self, source_name: str, records_count: int):
-        """Log an HTTP data submission to the sync log"""
-        conn = self._get_conn()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                "INSERT INTO sync_log (source, last_sync, records_imported) VALUES (%s, %s, %s)",
-                (source_name, datetime.now(timezone.utc), records_count),
-            )
-            self._commit(conn)
-        finally:
-            self._put_conn(conn)
+        """Log an HTTP data submission / heartbeat to the sync log."""
+        self._update_sync_log(source_name, records_count)
 
     def cleanup_expired_auth_tokens(self) -> int:
         """Delete session tokens whose expiry has passed."""
@@ -1316,43 +1348,20 @@ class WebDatabase:
         finally:
             self._put_conn(conn)
 
-    def cleanup_old_sync_log(self, retention_days: int) -> int:
-        """Delete sync_log rows older than *retention_days*."""
-        conn = self._get_conn()
-        try:
-            cur = conn.cursor()
-            cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
-            cur.execute(
-                """
-                DELETE FROM sync_log
-                WHERE id NOT IN (
-                    SELECT id FROM (
-                        SELECT id FROM sync_log
-                        WHERE last_sync >= %s
-                        UNION
-                        SELECT MAX(id) FROM sync_log GROUP BY source
-                    )
-                    sub
-                )
-                AND last_sync < %s
-                """,
-                (cutoff, cutoff),
-            )
-            count = cur.rowcount
-            self._commit(conn)
-            return count
-        finally:
-            self._put_conn(conn)
-
     def get_all_sources(self) -> List[Dict]:
-        """Get all unique data sources from sync_log and remoteid tables."""
+        """Get all data sources from sync_log and remoteid tables.
+
+        sync_log holds one row per source (see _update_sync_log), so
+        ``total_records`` is that row's records_imported — the most recent
+        submission count for the source.
+        """
         conn = self._get_conn()
         try:
             cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
             cur.execute(
-                "SELECT source, MAX(last_sync) as last_sync, "
-                "SUM(records_imported) as total_records "
-                "FROM sync_log GROUP BY source ORDER BY source"
+                "SELECT source, last_sync, "
+                "records_imported AS total_records "
+                "FROM sync_log ORDER BY source"
             )
             sync_rows = cur.fetchall()
 
