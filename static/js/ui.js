@@ -431,6 +431,8 @@ const UIController = {
             detailTimeSpan: document.getElementById('detailTimeSpan'),
             detailSeenByRow: document.getElementById('detailSeenByRow'),
             detailSeenBy: document.getElementById('detailSeenBy'),
+            detailBandsRow: document.getElementById('detailBandsRow'),
+            detailBands: document.getElementById('detailBands'),
             detailChart: document.getElementById('detailChart'),
             chartModal: document.getElementById('chartModal'),
             closeChartModalBtn: document.getElementById('closeChartModal'),
@@ -1586,6 +1588,9 @@ const UIController = {
             const iconHtml = isActive
                 ? '<i class="fas fa-check-circle remote-icon active" title="Active"></i>'
                 : '<i class="fas fa-clock remote-icon stale" title="No recent activity"></i>';
+            const freqHtml = (Array.isArray(r.frequencies) && r.frequencies.length > 0)
+                ? r.frequencies.map(f => `<span class="remote-freq-badge">${esc(Units.formatFrequency(f))}</span>`).join('')
+                : null;
             html += `<div class="remote-row">
                 <div class="remote-row-left">
                     ${iconHtml}
@@ -1594,6 +1599,7 @@ const UIController = {
                 <div class="remote-row-right">
                     <div class="remote-time"><span class="remote-time-label">Data:</span> ${esc(fmt(r.last_data))}</div>
                     <div class="remote-time"><span class="remote-time-label">Last Seen:</span> ${esc(fmt(r.last_sync))}</div>
+                    ${freqHtml ? `<div class="remote-freq-badges">${freqHtml}</div>` : ''}
                 </div>
             </div>`;
         }
@@ -1842,7 +1848,7 @@ const UIController = {
         const cacheKey = JSON.stringify({
             mode: this.viewMode,
             drones: drones.map(d =>
-                `${d.uas_id}:${d.computed_session_id || 'unknown'}:${d.timestamp}:${d.latitude}:${d.longitude}:${d.altitude}`
+                `${d.uas_id}:${d.computed_session_id || 'unknown'}:${d.timestamp}:${d.latitude}:${d.longitude}:${d.altitude}:${(d.frequencies || []).join(',')}`
             )
         });
         if (cacheKey === this._droneListCacheKey) {
@@ -1895,6 +1901,11 @@ const UIController = {
         const isSelected = this.selectedDrones.has(rawSessionKey);
         const isVisible = this.visibleSessions.has(rawSessionKey);
 
+        const freqLabels = (Array.isArray(drone.frequencies) && drone.frequencies.length > 0
+            ? drone.frequencies
+            : (drone.frequency ? [drone.frequency] : []))
+            .map(b => Units.formatFrequency(b));
+
         const hasAlert = alertedUasIds.has(drone.uas_id);
 
         let durationStr = 'N/A';
@@ -1913,6 +1924,7 @@ const UIController = {
                     <div class="drone-id">${hasAlert ? '<i class="fas fa-exclamation-triangle alert-icon"></i> ' : ''}${esc(this.getDroneName(drone.uas_id))}</div>
                     <div class="drone-meta-row">
                         ${this._getManufacturerBadgeHtml(drone.uas_id)}
+                        ${freqLabels.length > 0 ? `<div class="freq-badges">${freqLabels.map(f => `<span class="freq-badge">${f}</span>`).join('')}</div>` : ''}
                         <div class="session-id">${esc(sessionId)}</div>
                         <div class="drone-meta">Alt: ${altitude}${height ? ` Ht: ${height}` : ''} | ${timeStr} | ${durationStr}</div>
                     </div>
@@ -3124,6 +3136,42 @@ const UIController = {
         } else {
             this.elements.detailSeenByRow.style.display = 'none';
         }
+
+        // Frequency bands seen across the track
+        const frequencies = this._frequencyLabelsForPositions(track);
+        if (frequencies.length > 0) {
+            this.elements.detailBandsRow.style.display = '';
+            this.elements.detailBands.textContent = frequencies.join(', ');
+        } else {
+            this.elements.detailBandsRow.style.display = 'none';
+        }
+    },
+
+    /**
+     * Collect the distinct frequency bands seen across positions.
+     * Reads `frequencies` (array) with a `frequency` (single band) fallback,
+     * formatting each band via Units.formatFrequency.
+     * @param {Array} positions
+     * @returns {Array<string>} Display labels, e.g. ["2.4 GHz", "BLE"]
+     */
+    _frequencyLabelsForPositions(positions) {
+        const labels = [];
+        for (const pos of positions || []) {
+            let bands;
+            if (Array.isArray(pos.frequencies) && pos.frequencies.length > 0) {
+                bands = pos.frequencies;
+            } else if (pos.frequency) {
+                bands = [pos.frequency];
+            } else {
+                continue;
+            }
+            for (const band of bands) {
+                if (band === 'unknown') continue;
+                const label = Units.formatFrequency(band);
+                if (labels.indexOf(label) === -1) labels.push(label);
+            }
+        }
+        return labels;
     },
 
     /**
@@ -3160,6 +3208,8 @@ const UIController = {
         this.elements.detailOperator.style.display = 'none';
         this.elements.detailSeenByRow.style.display = 'none';
         this.elements.detailSeenBy.textContent = '-';
+        this.elements.detailBandsRow.style.display = 'none';
+        this.elements.detailBands.textContent = '-';
     },
 
     /**

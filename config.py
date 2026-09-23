@@ -58,6 +58,44 @@ class MapConfig:
 FEET_PER_METER = 3.28084
 M_PER_DEG_LAT = 111320  # meters per degree latitude at equator
 
+# Frequency/band labels reported by collectors. Stored as canonical strings
+# (never numeric codes) so the DB stays self-documenting and new bands can be
+# added without a shared client enum. ``unknown`` marks legacy submissions that
+# carried no frequency.
+UNKNOWN_FREQUENCY = "unknown"
+FREQUENCY_CANONICAL = ("ble", "2.4ghz", "5.8ghz", "unknown")
+
+# Slang / numeric spellings a collector might send; normalized to canonical.
+FREQUENCY_ALIASES = {
+    "2.4": "2.4ghz",
+    "2400": "2.4ghz",
+    "2400mhz": "2.4ghz",
+    "5.8": "5.8ghz",
+    "5800": "5.8ghz",
+    "5800mhz": "5.8ghz",
+    "bluetooth": "ble",
+    "bt": "ble",
+}
+
+
+def normalize_frequency(value: Optional[str]) -> Optional[str]:
+    """Normalize a collector-reported frequency/band label.
+
+    Returns the canonical label for recognized input, ``UNKNOWN_FREQUENCY``
+    when ``value`` is absent/empty, or ``None`` when the value is present but
+    not a recognized band (callers report that as a validation error).
+    """
+    if value is None:
+        return UNKNOWN_FREQUENCY
+    if not isinstance(value, str):
+        return None
+    label = value.strip().lower()
+    if not label:
+        return UNKNOWN_FREQUENCY
+    if label in FREQUENCY_CANONICAL:
+        return label
+    return FREQUENCY_ALIASES.get(label)
+
 
 @dataclass
 class WaypointConfig: # pylint: disable=too-many-instance-attributes

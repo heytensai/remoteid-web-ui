@@ -14,10 +14,12 @@ import psycopg2
 import psycopg2.extras
 from psycopg2 import pool
 
+from config import UNKNOWN_FREQUENCY, normalize_frequency
+
 logger = logging.getLogger(__name__)
 
 # Current schema version — bump this and add a migration in _migrate()
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # Multi-collector track dedup parameters (read-path only, see #181). Storage
 # keeps one row per (uas_id, source, timestamp) for attribution; these only
@@ -176,6 +178,7 @@ class WebDatabase:
                 altitude DOUBLE PRECISION,
                 height DOUBLE PRECISION,
                 height_type TEXT,
+                frequency TEXT NOT NULL DEFAULT 'unknown',
                 operator_id TEXT,
                 operator_latitude DOUBLE PRECISION,
                 operator_longitude DOUBLE PRECISION,
@@ -203,7 +206,8 @@ class WebDatabase:
                 id SERIAL PRIMARY KEY,
                 source TEXT,
                 last_sync TIMESTAMPTZ,
-                records_imported INTEGER
+                records_imported INTEGER,
+                frequencies TEXT[] NOT NULL DEFAULT '{}'
             )
             """
             )
@@ -302,10 +306,15 @@ class WebDatabase:
             "CREATE INDEX IF NOT EXISTS idx_uas_time ON remoteid(uas_id, timestamp)"
             )
             cur.execute("CREATE INDEX IF NOT EXISTS idx_source ON remoteid(source)")
-            cur.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_uas_time_unique "
-            "ON remoteid(uas_id, source, timestamp)"
-            )
+            # The v12 dedup index references `frequency`, which only exists on
+            # upgraded databases once the v12 migration runs (after this block,
+            # via _ensure_schema_version). On a stale DB defer the index to the
+            # migration; a fresh DB already has the column from CREATE TABLE.
+            if WebDatabase._column_exists(cur, "remoteid", "frequency"):
+                cur.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_uas_time_unique "
+                    "ON remoteid(uas_id, source, frequency, timestamp)"
+                )
             cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_timestamp ON remoteid(timestamp)"
             )
@@ -447,7 +456,7 @@ class WebDatabase:
         return cur.fetchone() is not None
 
     @staticmethod
-    def _migrate(  # pylint: disable=unused-argument
+    def _migrate(  # pylint: disable=unused-argument,too-many-branches
         conn, from_version: int, to_version: int
     ):
         """Apply schema migrations between *from_version* and *to_version*.
@@ -614,6 +623,33 @@ class WebDatabase:
                 "ON sync_log(source)"
             )
             from_version = 11
+
+        if from_version == 11:
+            # v12: multi-frequency + Bluetooth collector reporting.
+            #   - remoteid gets a per-packet `frequency` column (canonical band
+            #     label; 'unknown' for legacy submissions that carried none).
+            #   - The dedup unique index gains `frequency` so one collector can
+            #     keep distinct rows for the same packet heard simultaneously on
+            #     2.4 GHz / 5.8 GHz / BLE. Existing rows backfill to 'unknown'
+            #     via the column default, preserving legacy dedup semantics.
+            #   - sync_log gets a `frequencies` array holding the band labels a
+            #     collector reports it monitors (via /api/submit/ping).
+            if not WebDatabase._column_exists(cur, "remoteid", "frequency"):
+                cur.execute(
+                    "ALTER TABLE remoteid ADD COLUMN "
+                    "frequency TEXT NOT NULL DEFAULT 'unknown'"
+                )
+            cur.execute("DROP INDEX IF EXISTS idx_uas_time_unique")
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_uas_time_unique "
+                "ON remoteid(uas_id, source, frequency, timestamp)"
+            )
+            if not WebDatabase._column_exists(cur, "sync_log", "frequencies"):
+                cur.execute(
+                    "ALTER TABLE sync_log ADD COLUMN "
+                    "frequencies TEXT[] NOT NULL DEFAULT '{}'"
+                )
+            from_version = 12
 
     @staticmethod
     def _ensure_latest_positions_table(cur):
@@ -967,17 +1003,17 @@ class WebDatabase:
                         INSERT INTO remoteid
                         (source, timestamp, mac_address, uas_id, session_id,
                          latitude, longitude, altitude, height, height_type,
-                         operator_id,
+                         frequency, operator_id,
                          operator_latitude, operator_longitude,
                          computed_session_id, session_detected_at,
                          collector_latitude, collector_longitude)
                         VALUES (%(source)s, %(timestamp)s, %(mac_address)s, %(uas_id)s, %(session_id)s,
                                 %(latitude)s, %(longitude)s, %(altitude)s, %(height)s, %(height_type)s,
-                                %(operator_id)s,
+                                %(frequency)s, %(operator_id)s,
                                 %(operator_latitude)s, %(operator_longitude)s,
                                 %(computed_session_id)s, %(session_detected_at)s,
                                 %(collector_latitude)s, %(collector_longitude)s)
-                        ON CONFLICT (uas_id, source, timestamp) DO NOTHING
+                        ON CONFLICT (uas_id, source, frequency, timestamp) DO NOTHING
                     """,
                         {
                             "source": source_name,
@@ -990,6 +1026,7 @@ class WebDatabase:
                             "altitude": validated[6],
                             "height": validated[10],
                             "height_type": validated[11],
+                            "frequency": UNKNOWN_FREQUENCY,
                             "operator_id": validated[7],
                             "operator_latitude": validated[8],
                             "operator_longitude": validated[9],
@@ -1101,6 +1138,8 @@ class WebDatabase:
                 sanitized[key] = WebDatabase._sanitize_float(value, key)
             elif key in ("timestamp", "session_start"):
                 sanitized[key] = WebDatabase._sanitize_timestamp(value)
+            elif key == "frequencies":
+                sanitized[key] = value or []
             else:
                 sanitized[key] = value
         return sanitized
@@ -1164,19 +1203,22 @@ class WebDatabase:
 
     @staticmethod
     def _collapse_multi_source_positions(positions: List[Dict]) -> List[Dict]:
-        """Collapse near-simultaneous, near-identical positions observed by
-        multiple collectors into a single point (read-path dedup, #181).
+        """Collapse near-simultaneous, near-identical positions into a single
+        point (read-path dedup, #181).
 
         Input must be ordered by timestamp ascending. Consecutive rows are
         grouped while each stays within ``TRACK_DEDUP_TIME_WINDOW_S`` of the
         run start and within ``TRACK_DEDUP_COORD_EPS`` degrees of the run's
         first coordinate. A group is collapsed only when it spans at least two
-        distinct sources, so single-collector hover/loiter cadence is
-        preserved untouched.
+        distinct ``(source, frequency)`` pairs — so a single collector that
+        hears the same broadcast on 2.4 GHz AND 5.8 GHz AND BLE at once (or
+        two collectors seeing one packet) yields a single point, while plain
+        single-collector hover/loiter cadence is preserved untouched.
 
         The kept point retains the first row's fields, keeps ``source`` for
-        backward compatibility, and gains a ``sources`` list holding every
-        distinct collector in the group (in order of first appearance).
+        backward compatibility, and gains a ``sources`` list of every distinct
+        collector and a ``frequencies`` list of every distinct (non-unknown)
+        band in the group, each in order of first appearance.
         """
         if not positions:
             return []
@@ -1187,19 +1229,26 @@ class WebDatabase:
 
         def flush():
             nonlocal run, collapsed
-            srcs = {p.get('source') for p in run}
-            if len(run) == 1 or len(srcs) < 2:
+            keys = {(p.get('source'), p.get('frequency')) for p in run}
+            if len(run) == 1 or len(keys) < 2:
                 collapsed.extend(run)
             else:
                 kept = dict(run[0])
                 sources = []
-                seen = set()
+                seen_src = set()
+                frequencies = []
+                seen_freq = set()
                 for p in run:
                     src = p.get('source')
-                    if src is not None and src not in seen:
-                        seen.add(src)
+                    if src is not None and src not in seen_src:
+                        seen_src.add(src)
                         sources.append(src)
+                    freq = p.get('frequency')
+                    if freq and freq != UNKNOWN_FREQUENCY and freq not in seen_freq:
+                        seen_freq.add(freq)
+                        frequencies.append(freq)
                 kept['sources'] = sources
+                kept['frequencies'] = frequencies
                 collapsed.append(kept)
             run = []
 
@@ -1245,34 +1294,57 @@ class WebDatabase:
         finally:
             self._put_conn(conn)
 
-    def _update_sync_log(self, source_name: str, count: int):
+    def _update_sync_log(
+        self,
+        source_name: str,
+        count: int,
+        frequencies: Optional[List[str]] = None,
+    ):
         """Upsert the sync status for a source: one row per source.
 
         ``last_sync`` always advances to now. ``records_imported`` is only
         overwritten when the new count is positive, so heartbeat check-ins
         (count=0) don't zero out the last real submission's count.
+
+        ``frequencies`` (the band labels the collector reports it monitors):
+        when ``None`` the stored set is left untouched; when provided (even an
+        empty list) it replaces the stored set.
         """
         conn = self._get_conn()
         try:
             cur = conn.cursor()
             cur.execute(
-                "INSERT INTO sync_log (source, last_sync, records_imported) "
-                "VALUES (%s, %s, %s) "
+                "INSERT INTO sync_log (source, last_sync, records_imported, frequencies) "
+                "VALUES (%s, %s, %s, %s) "
                 "ON CONFLICT (source) DO UPDATE SET "
                 "last_sync = EXCLUDED.last_sync, "
                 "records_imported = CASE "
                 "  WHEN EXCLUDED.records_imported > 0 "
                 "  THEN EXCLUDED.records_imported "
-                "  ELSE sync_log.records_imported END",
-                (source_name, datetime.now(timezone.utc), count),
+                "  ELSE sync_log.records_imported END, "
+                "frequencies = CASE "
+                "  WHEN %s IS NULL THEN sync_log.frequencies "
+                "  ELSE EXCLUDED.frequencies END",
+                (
+                    source_name,
+                    datetime.now(timezone.utc),
+                    count,
+                    frequencies if frequencies is not None else [],
+                    frequencies,
+                ),
             )
             self._commit(conn)
         finally:
             self._put_conn(conn)
 
-    def log_submission(self, source_name: str, records_count: int):
+    def log_submission(
+        self,
+        source_name: str,
+        records_count: int,
+        frequencies: Optional[List[str]] = None,
+    ):
         """Log an HTTP data submission / heartbeat to the sync log."""
-        self._update_sync_log(source_name, records_count)
+        self._update_sync_log(source_name, records_count, frequencies)
 
     def cleanup_expired_auth_tokens(self) -> int:
         """Delete session tokens whose expiry has passed."""
@@ -1360,7 +1432,8 @@ class WebDatabase:
             cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
             cur.execute(
                 "SELECT source, last_sync, "
-                "records_imported AS total_records "
+                "records_imported AS total_records, "
+                "frequencies "
                 "FROM sync_log ORDER BY source"
             )
             sync_rows = cur.fetchall()
@@ -1394,6 +1467,7 @@ class WebDatabase:
                     "last_sync": _parse_ts(row["last_sync"]),
                     "total_records": row["total_records"],
                     "last_data": data_lookup.get(name),
+                    "frequencies": list(row["frequencies"] or []),
                 }
 
             for row in data_rows:
@@ -1404,6 +1478,7 @@ class WebDatabase:
                         "last_sync": _parse_ts(row["last_ts"]),
                         "total_records": None,
                         "last_data": _parse_ts(row["last_ts"]),
+                        "frequencies": [],
                     }
 
             return sorted(source_map.values(), key=lambda s: s["source"])
@@ -1420,19 +1495,35 @@ class WebDatabase:
             cur.execute(
                 """
                 SELECT
-                    uas_id,
-                    NULLIF(computed_session_id, '') as computed_session_id,
-                    max_ts as timestamp,
-                    min_ts as session_start,
-                    latitude, longitude, altitude, height, height_type, max_height,
-                    operator_id,
-                    operator_latitude, operator_longitude, source,
-                    collector_latitude, collector_longitude
-                FROM latest_positions
-                WHERE max_ts BETWEEN %s AND %s
-                ORDER BY uas_id, computed_session_id
+                    l.uas_id,
+                    NULLIF(l.computed_session_id, '') as computed_session_id,
+                    l.max_ts as timestamp,
+                    l.min_ts as session_start,
+                    l.latitude, l.longitude, l.altitude, l.height, l.height_type,
+                    l.max_height,
+                    l.operator_id,
+                    l.operator_latitude, l.operator_longitude, l.source,
+                    l.collector_latitude, l.collector_longitude,
+                    f.frequencies
+                FROM latest_positions l
+                LEFT JOIN LATERAL (
+                    SELECT array_agg(DISTINCT frequency ORDER BY frequency)
+                           FILTER (WHERE frequency IS DISTINCT FROM %s)
+                           AS frequencies
+                    FROM remoteid r
+                    WHERE r.uas_id = l.uas_id
+                      AND COALESCE(r.computed_session_id, '') = l.computed_session_id
+                      AND r.timestamp >= %s
+                ) f ON true
+                WHERE l.max_ts BETWEEN %s AND %s
+                ORDER BY l.uas_id, l.computed_session_id
             """,
-                (start_time, end_time),
+                (
+                    UNKNOWN_FREQUENCY,
+                    start_time,
+                    start_time,
+                    end_time,
+                ),
             )
             return [self._sanitize_record(dict(row)) for row in cur.fetchall()]
         finally:
@@ -1447,19 +1538,30 @@ class WebDatabase:
             cur.execute(
                 """
                 SELECT
-                    uas_id,
-                    NULLIF(computed_session_id, '') as computed_session_id,
-                    max_ts as timestamp,
-                    min_ts as session_start,
-                    latitude, longitude, altitude, height, height_type, max_height,
-                    operator_id,
-                    operator_latitude, operator_longitude, source,
-                    collector_latitude, collector_longitude
-                FROM latest_positions
-                WHERE max_ts > %s
-                ORDER BY uas_id, computed_session_id
+                    l.uas_id,
+                    NULLIF(l.computed_session_id, '') as computed_session_id,
+                    l.max_ts as timestamp,
+                    l.min_ts as session_start,
+                    l.latitude, l.longitude, l.altitude, l.height, l.height_type,
+                    l.max_height,
+                    l.operator_id,
+                    l.operator_latitude, l.operator_longitude, l.source,
+                    l.collector_latitude, l.collector_longitude,
+                    f.frequencies
+                FROM latest_positions l
+                LEFT JOIN LATERAL (
+                    SELECT array_agg(DISTINCT frequency ORDER BY frequency)
+                           FILTER (WHERE frequency IS DISTINCT FROM %s)
+                           AS frequencies
+                    FROM remoteid r
+                    WHERE r.uas_id = l.uas_id
+                      AND COALESCE(r.computed_session_id, '') = l.computed_session_id
+                      AND r.timestamp >= %s
+                ) f ON true
+                WHERE l.max_ts > %s
+                ORDER BY l.uas_id, l.computed_session_id
             """,
-                (cutoff,),
+                (UNKNOWN_FREQUENCY, cutoff, cutoff),
             )
             return [self._sanitize_record(dict(row)) for row in cur.fetchall()]
         finally:
@@ -1483,19 +1585,30 @@ class WebDatabase:
                 cur.execute(
                     """
                     SELECT
-                        uas_id,
-                        NULLIF(computed_session_id, '') as computed_session_id,
-                        max_ts as timestamp,
-                        min_ts as session_start,
-                        latitude, longitude, altitude, height, height_type, max_height,
-                        operator_id,
-                        operator_latitude, operator_longitude, source,
-                        collector_latitude, collector_longitude
-                    FROM latest_positions
-                    WHERE max_ts > %s
-                    ORDER BY uas_id, computed_session_id
+                        l.uas_id,
+                        NULLIF(l.computed_session_id, '') as computed_session_id,
+                        l.max_ts as timestamp,
+                        l.min_ts as session_start,
+                        l.latitude, l.longitude, l.altitude, l.height, l.height_type,
+                        l.max_height,
+                        l.operator_id,
+                        l.operator_latitude, l.operator_longitude, l.source,
+                        l.collector_latitude, l.collector_longitude,
+                        f.frequencies
+                    FROM latest_positions l
+                    LEFT JOIN LATERAL (
+                        SELECT array_agg(DISTINCT frequency ORDER BY frequency)
+                               FILTER (WHERE frequency IS DISTINCT FROM %s)
+                               AS frequencies
+                        FROM remoteid r
+                        WHERE r.uas_id = l.uas_id
+                          AND COALESCE(r.computed_session_id, '') = l.computed_session_id
+                          AND r.timestamp >= %s
+                    ) f ON true
+                    WHERE l.max_ts > %s
+                    ORDER BY l.uas_id, l.computed_session_id
                     """,
-                    (cutoff,),
+                    (UNKNOWN_FREQUENCY, cutoff, cutoff),
                 )
                 return [self._sanitize_record(dict(row)) for row in cur.fetchall()]
 
@@ -1528,18 +1641,29 @@ class WebDatabase:
                 cur.execute(
                     f"""
                     SELECT
-                        uas_id,
-                        NULLIF(computed_session_id, '') as computed_session_id,
-                        max_ts as timestamp, min_ts as session_start,
-                        latitude, longitude, altitude, height, height_type, max_height,
-                        operator_id,
-                        operator_latitude, operator_longitude, source,
-                        collector_latitude, collector_longitude
-                    FROM latest_positions
-                    WHERE ({where_clause}) AND max_ts > %s
-                    ORDER BY uas_id, computed_session_id
+                        l.uas_id,
+                        NULLIF(l.computed_session_id, '') as computed_session_id,
+                        l.max_ts as timestamp, l.min_ts as session_start,
+                        l.latitude, l.longitude, l.altitude, l.height, l.height_type,
+                        l.max_height,
+                        l.operator_id,
+                        l.operator_latitude, l.operator_longitude, l.source,
+                        l.collector_latitude, l.collector_longitude,
+                        f.frequencies
+                    FROM latest_positions l
+                    LEFT JOIN LATERAL (
+                        SELECT array_agg(DISTINCT frequency ORDER BY frequency)
+                               FILTER (WHERE frequency IS DISTINCT FROM %s)
+                               AS frequencies
+                        FROM remoteid r
+                        WHERE r.uas_id = l.uas_id
+                          AND COALESCE(r.computed_session_id, '') = l.computed_session_id
+                          AND r.timestamp >= %s
+                    ) f ON true
+                    WHERE ({where_clause}) AND l.max_ts > %s
+                    ORDER BY l.uas_id, l.computed_session_id
                     """,
-                    params + [cutoff],
+                    [UNKNOWN_FREQUENCY, cutoff] + params + [cutoff],
                 )
                 results.extend(cur.fetchall())
 
@@ -1548,18 +1672,29 @@ class WebDatabase:
             cur.execute(
                 """
                 SELECT
-                    uas_id,
-                    NULLIF(computed_session_id, '') as computed_session_id,
-                    max_ts as timestamp, min_ts as session_start,
-                    latitude, longitude, altitude, height, height_type, max_height,
-                    operator_id,
-                    operator_latitude, operator_longitude, source,
-                    collector_latitude, collector_longitude
-                FROM latest_positions
-                WHERE max_ts > %s
-                ORDER BY uas_id, computed_session_id
+                    l.uas_id,
+                    NULLIF(l.computed_session_id, '') as computed_session_id,
+                    l.max_ts as timestamp, l.min_ts as session_start,
+                    l.latitude, l.longitude, l.altitude, l.height, l.height_type,
+                    l.max_height,
+                    l.operator_id,
+                    l.operator_latitude, l.operator_longitude, l.source,
+                    l.collector_latitude, l.collector_longitude,
+                    f.frequencies
+                FROM latest_positions l
+                LEFT JOIN LATERAL (
+                    SELECT array_agg(DISTINCT frequency ORDER BY frequency)
+                           FILTER (WHERE frequency IS DISTINCT FROM %s)
+                           AS frequencies
+                    FROM remoteid r
+                    WHERE r.uas_id = l.uas_id
+                      AND COALESCE(r.computed_session_id, '') = l.computed_session_id
+                      AND r.timestamp >= %s
+                ) f ON true
+                WHERE l.max_ts > %s
+                ORDER BY l.uas_id, l.computed_session_id
                 """,
-                (cutoff,),
+                (UNKNOWN_FREQUENCY, cutoff, cutoff),
             )
             for row in cur.fetchall():
                 sid = row['computed_session_id'] or 'unknown'
@@ -1761,18 +1896,29 @@ class WebDatabase:
                 cur.execute(
                     f"""
                     SELECT
-                        uas_id,
-                        NULLIF(computed_session_id, '') as computed_session_id,
-                        max_ts as timestamp, min_ts as session_start,
-                        latitude, longitude, altitude, height, height_type, max_height,
-                        operator_id,
-                        operator_latitude, operator_longitude, source,
-                        collector_latitude, collector_longitude
-                    FROM latest_positions
+                        l.uas_id,
+                        NULLIF(l.computed_session_id, '') as computed_session_id,
+                        l.max_ts as timestamp, l.min_ts as session_start,
+                        l.latitude, l.longitude, l.altitude, l.height, l.height_type,
+                        l.max_height,
+                        l.operator_id,
+                        l.operator_latitude, l.operator_longitude, l.source,
+                        l.collector_latitude, l.collector_longitude,
+                        f.frequencies
+                    FROM latest_positions l
+                    LEFT JOIN LATERAL (
+                        SELECT array_agg(DISTINCT frequency ORDER BY frequency)
+                               FILTER (WHERE frequency IS DISTINCT FROM %s)
+                               AS frequencies
+                        FROM remoteid r
+                        WHERE r.uas_id = l.uas_id
+                          AND COALESCE(r.computed_session_id, '') = l.computed_session_id
+                          AND r.timestamp >= %s
+                    ) f ON true
                     WHERE ({where_clause})
-                    ORDER BY uas_id, computed_session_id
+                    ORDER BY l.uas_id, l.computed_session_id
                 """,
-                    params,
+                    [UNKNOWN_FREQUENCY, start_time] + params,
                 )
                 results.extend(cur.fetchall())
 
@@ -1780,19 +1926,30 @@ class WebDatabase:
             cur.execute(
                 """
                 SELECT
-                    uas_id,
-                    NULLIF(computed_session_id, '') as computed_session_id,
-                    max_ts as timestamp, min_ts as session_start,
-                    latitude, longitude, altitude, height, height_type, max_height,
-                    operator_id,
-                    operator_latitude, operator_longitude, source,
-                    collector_latitude, collector_longitude
-                FROM latest_positions
-                WHERE max_ts BETWEEN %s AND %s
-                  AND max_ts > %s
-                ORDER BY uas_id, computed_session_id
+                    l.uas_id,
+                    NULLIF(l.computed_session_id, '') as computed_session_id,
+                    l.max_ts as timestamp, l.min_ts as session_start,
+                    l.latitude, l.longitude, l.altitude, l.height, l.height_type,
+                    l.max_height,
+                    l.operator_id,
+                    l.operator_latitude, l.operator_longitude, l.source,
+                    l.collector_latitude, l.collector_longitude,
+                    f.frequencies
+                FROM latest_positions l
+                LEFT JOIN LATERAL (
+                    SELECT array_agg(DISTINCT frequency ORDER BY frequency)
+                           FILTER (WHERE frequency IS DISTINCT FROM %s)
+                           AS frequencies
+                    FROM remoteid r
+                    WHERE r.uas_id = l.uas_id
+                      AND COALESCE(r.computed_session_id, '') = l.computed_session_id
+                      AND r.timestamp >= %s
+                ) f ON true
+                WHERE l.max_ts BETWEEN %s AND %s
+                  AND l.max_ts > %s
+                ORDER BY l.uas_id, l.computed_session_id
             """,
-                (start_time, end_time, oldest_known),
+                (UNKNOWN_FREQUENCY, start_time, start_time, end_time, oldest_known),
             )
             for row in cur.fetchall():
                 sid = row['computed_session_id'] or 'unknown'
@@ -1853,7 +2010,7 @@ class WebDatabase:
                 """
                 SELECT latitude, longitude, altitude, height, height_type, timestamp,
                        operator_id, operator_latitude, operator_longitude,
-                       computed_session_id, source
+                       computed_session_id, source, frequency
                 FROM remoteid
                 WHERE uas_id = %s AND timestamp BETWEEN %s AND %s
                 ORDER BY timestamp ASC
@@ -1883,7 +2040,7 @@ class WebDatabase:
                 SELECT latitude, longitude, altitude, height, height_type, timestamp,
                        operator_id, operator_latitude, operator_longitude,
                        computed_session_id, collector_latitude, collector_longitude,
-                       source
+                       source, frequency
                 FROM remoteid
                 WHERE uas_id = %s AND computed_session_id = %s
             """
@@ -1913,7 +2070,7 @@ class WebDatabase:
                 SELECT latitude, longitude, altitude, height, height_type, timestamp,
                        operator_id, operator_latitude, operator_longitude,
                        computed_session_id, collector_latitude, collector_longitude,
-                       source
+                       source, frequency
                 FROM remoteid
                 WHERE uas_id = %s AND timestamp BETWEEN %s AND %s
                 ORDER BY timestamp ASC
@@ -2065,6 +2222,16 @@ class WebDatabase:
                 op_lon = self._sanitize_float(
                     record.get("operator_longitude"), "operator_longitude"
                 )
+                freq_raw = record.get("frequency")
+                frequency = normalize_frequency(freq_raw)
+                if freq_raw is not None and frequency is None:
+                    errors.append(
+                        {
+                            "index": idx,
+                            "reason": f"Invalid frequency: {freq_raw}",
+                        }
+                    )
+                    continue
 
                 batch_params.append({
                     "source": source,
@@ -2077,6 +2244,7 @@ class WebDatabase:
                     "altitude": alt,
                     "height": height,
                     "height_type": height_type,
+                    "frequency": frequency,
                     "operator_id": record.get("operator_id"),
                     "operator_latitude": op_lat,
                     "operator_longitude": op_lon,
@@ -2111,7 +2279,7 @@ class WebDatabase:
                     rec["source"], rec["timestamp"], rec["mac_address"],
                     rec["uas_id"], rec["session_id"], rec["latitude"],
                     rec["longitude"], rec["altitude"], rec["height"],
-                    rec["height_type"], rec["operator_id"],
+                    rec["height_type"], rec["frequency"], rec["operator_id"],
                     rec["operator_latitude"], rec["operator_longitude"],
                     rec["computed_session_id"], rec["session_detected_at"],
                     rec["collector_latitude"], rec["collector_longitude"],
@@ -2130,11 +2298,11 @@ class WebDatabase:
                 INSERT INTO remoteid
                 (source, timestamp, mac_address, uas_id, session_id,
                  latitude, longitude, altitude, height, height_type,
-                 operator_id, operator_latitude, operator_longitude,
+                 frequency, operator_id, operator_latitude, operator_longitude,
                  computed_session_id, session_detected_at,
                  collector_latitude, collector_longitude)
                 VALUES %s
-                ON CONFLICT (uas_id, source, timestamp) DO NOTHING
+                ON CONFLICT (uas_id, source, frequency, timestamp) DO NOTHING
                 RETURNING id
                 """,
                 rows,

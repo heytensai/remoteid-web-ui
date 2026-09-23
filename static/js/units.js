@@ -125,6 +125,21 @@ const Units = {
     },
 
     /**
+     * Format a collector-reported frequency band for display.
+     * The label is already normalized server-side to a canonical band string
+     * ('2.4ghz', '5.8ghz', 'ble', 'unknown'); this only maps it to a
+     * user-friendly string.
+     * @param {string} band - Canonical band label (or null/undefined)
+     * @returns {string} Display label e.g. "2.4 GHz"
+     */
+    formatFrequency(band) {
+        if (band === 'ble') return 'BLE';
+        if (band === '2.4ghz') return '2.4 GHz';
+        if (band === '5.8ghz') return '5.8 GHz';
+        return 'Unknown';
+    },
+
+    /**
      * Haversine distance between two coordinates in meters
      * @param {number} lat1 - Latitude of point 1 in degrees
      * @param {number} lon1 - Longitude of point 1 in degrees

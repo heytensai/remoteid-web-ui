@@ -90,6 +90,105 @@ def test_null_session_timestamp_index_created(db):
     assert "computed_session_id IS NULL" in indexdef[0]
 
 
+def test_remoteid_frequency_column_exists(db):
+    """v12 remoteid.frequency exists, is NOT NULL, and defaults to 'unknown'."""
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT column_default, is_nullable FROM information_schema.columns "
+            "WHERE table_name = 'remoteid' AND column_name = 'frequency'"
+        )
+        row = cur.fetchone()
+    finally:
+        db._put_conn(conn)
+    assert row is not None
+    column_default, is_nullable = row
+    assert "unknown" in column_default
+    assert is_nullable == "NO"
+
+
+def test_uas_time_unique_index_includes_frequency(db):
+    """v12 dedup index is on (uas_id, source, frequency, timestamp)."""
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT indexdef FROM pg_indexes "
+            "WHERE indexname = 'idx_uas_time_unique'"
+        )
+        indexdef = cur.fetchone()
+    finally:
+        db._put_conn(conn)
+    assert indexdef is not None
+    assert "frequency" in indexdef[0]
+    assert "timestamp" in indexdef[0]
+
+
+def test_sync_log_frequencies_column_exists(db):
+    """v12 sync_log.frequencies is a text-array column defaulting to empty."""
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT data_type, column_default FROM information_schema.columns "
+            "WHERE table_name = 'sync_log' AND column_name = 'frequencies'"
+        )
+        row = cur.fetchone()
+    finally:
+        db._put_conn(conn)
+    assert row is not None
+    data_type, column_default = row
+    assert data_type == "ARRAY"
+    assert "{}" in column_default
+
+
+def test_init_db_upgrades_v11_database_without_frequency(db):
+    """Regression: initializing against an existing v11 database must not
+    crash on the v12 dedup index.
+
+    ``_init_db()`` runs its base ``CREATE INDEX`` block *before*
+    ``_ensure_schema_version()`` migrates the schema, so the base block must
+    not reference the ``frequency`` column on a stale database — the v12
+    migration (which runs right after) adds the column and the index.
+    """
+    conn = db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("DROP INDEX IF EXISTS idx_uas_time_unique")
+        cur.execute("ALTER TABLE remoteid DROP COLUMN IF EXISTS frequency")
+        cur.execute("ALTER TABLE sync_log DROP COLUMN IF EXISTS frequencies")
+        cur.execute("UPDATE _schema_version SET version = 11")
+        db._commit(conn)
+    finally:
+        db._put_conn(conn)
+
+    from database import SCHEMA_VERSION
+    fresh = WebDatabase(TEST_DATABASE_URL)
+    try:
+        conn = fresh._get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT MAX(version) FROM _schema_version")
+            assert cur.fetchone()[0] == SCHEMA_VERSION
+            cur.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'remoteid' AND column_name = 'frequency'"
+            )
+            assert cur.fetchone() is not None
+            cur.execute(
+                "SELECT indexdef FROM pg_indexes "
+                "WHERE indexname = 'idx_uas_time_unique'"
+            )
+            indexdef = cur.fetchone()
+            assert indexdef is not None
+            assert "frequency" in indexdef[0]
+        finally:
+            fresh._put_conn(conn)
+    finally:
+        fresh._pool.closeall()
+
+
 def test_claim_alert_first_wins(db):
     """Only the first claim for a key returns True."""
     assert db.claim_alert("new_session", "uas-001:session_abc") is True
@@ -228,6 +327,99 @@ def test_insert_same_packet_two_collectors_both_kept(db, sample_records):
     )
     sources = {r["source"] for r in rows if r["timestamp"] == first["timestamp"]}
     assert sources == {"collector-2.4ghz", "collector-5.8ghz"}
+
+
+def test_insert_same_uas_and_timestamp_both_bands_kept(db):
+    """v12: a single collector reporting one packet on two bands at the same
+    timestamp stores one row per (source, frequency, timestamp) — the old
+    (source, timestamp) dedup would have dropped the second band."""
+    now = datetime.now(timezone.utc)
+    record = {
+        "timestamp": now.isoformat(),
+        "uas_id": "drone-freq-01",
+        "latitude": 40.0,
+        "longitude": -74.0,
+        "altitude": 300.0,
+    }
+    inserted, errors, _ = db.insert_remoteid_records(
+        "collector-freq", [{**record, "frequency": "2.4ghz"}]
+    )
+    assert inserted == 1
+    assert errors == []
+    inserted, errors, _ = db.insert_remoteid_records(
+        "collector-freq", [{**record, "frequency": "5.8ghz"}]
+    )
+    assert inserted == 1
+    assert errors == []
+    # Re-submitting an identical (source, frequency, timestamp) dedups
+    inserted, _, _ = db.insert_remoteid_records(
+        "collector-freq", [{**record, "frequency": "5.8ghz"}]
+    )
+    assert inserted == 0
+
+    rows = db.get_positions(
+        now - timedelta(days=1), now + timedelta(days=1), uas_id="drone-freq-01"
+    )
+    assert {r["frequency"] for r in rows} == {"2.4ghz", "5.8ghz"}
+
+
+def test_insert_normalizes_frequency_alias(db):
+    now = datetime.now(timezone.utc)
+    inserted, errors, _ = db.insert_remoteid_records("test-source", [{
+        "timestamp": now.isoformat(),
+        "uas_id": "drone-freq-02",
+        "latitude": 40.0,
+        "longitude": -74.0,
+        "frequency": "5.8",
+    }])
+    assert inserted == 1
+    assert errors == []
+    rows = db.get_positions(
+        now - timedelta(days=1), now + timedelta(days=1), uas_id="drone-freq-02"
+    )
+    assert rows[0]["frequency"] == "5.8ghz"
+
+
+def test_insert_frequency_defaults_to_unknown(db):
+    """Legacy records without a frequency field store 'unknown'."""
+    now = datetime.now(timezone.utc)
+    inserted, _, _ = db.insert_remoteid_records("test-source", [{
+        "timestamp": now.isoformat(),
+        "uas_id": "drone-freq-03",
+        "latitude": 40.0,
+        "longitude": -74.0,
+    }])
+    assert inserted == 1
+    rows = db.get_positions(
+        now - timedelta(days=1), now + timedelta(days=1), uas_id="drone-freq-03"
+    )
+    assert rows[0]["frequency"] == "unknown"
+
+
+def test_insert_invalid_frequency_per_record_error(db):
+    """An invalid band fails only that record; valid ones still insert."""
+    now = datetime.now(timezone.utc)
+    records = [
+        {
+            "timestamp": now.isoformat(),
+            "uas_id": "drone-freq-04",
+            "latitude": 40.0,
+            "longitude": -74.0,
+            "frequency": "900mhz",
+        },
+        {
+            "timestamp": now.isoformat(),
+            "uas_id": "drone-freq-05",
+            "latitude": 40.0,
+            "longitude": -74.0,
+            "frequency": "ble",
+        },
+    ]
+    inserted, errors, _ = db.insert_remoteid_records("test-source", records)
+    assert inserted == 1
+    assert len(errors) == 1
+    assert errors[0]["index"] == 0
+    assert errors[0]["reason"] == "Invalid frequency: 900mhz"
 
 
 def test_insert_missing_uas_id(db):
@@ -399,7 +591,7 @@ def test_get_track_session_positions_since(db):
 # ---------------------------------------------------------------------------
 
 
-def _mk_pos(timestamp, source, lat=40.0, lon=-74.0):
+def _mk_pos(timestamp, source, lat=40.0, lon=-74.0, frequency="unknown"):
     """Build a sanitized track position dict for collapse tests."""
     return {
         "uas_id": "drone-181",
@@ -409,6 +601,7 @@ def _mk_pos(timestamp, source, lat=40.0, lon=-74.0):
         "altitude": 100.0,
         "computed_session_id": "session_test",
         "source": source,
+        "frequency": frequency,
     }
 
 
@@ -489,6 +682,35 @@ def test_collapse_normalizes_naive_timestamps(db):
     out = db._collapse_multi_source_positions(rows)
     assert len(out) == 1
     assert out[0]["sources"] == ["collector-a", "collector-b"]
+
+
+def test_collapse_single_collector_multi_band_same_packet(db):
+    """One collector hearing the same broadcast on 2.4 GHz, 5.8 GHz, and BLE
+    at once collapses to a single point carrying all three bands (v12)."""
+    t0 = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    rows = [
+        _mk_pos(t0, "collector-a", frequency="2.4ghz"),
+        _mk_pos(t0 + timedelta(milliseconds=1), "collector-a", frequency="5.8ghz"),
+        _mk_pos(t0 + timedelta(milliseconds=2), "collector-a", frequency="ble"),
+    ]
+    out = db._collapse_multi_source_positions(rows)
+    assert len(out) == 1
+    assert out[0]["sources"] == ["collector-a"]
+    assert out[0]["frequencies"] == ["2.4ghz", "5.8ghz", "ble"]
+
+
+def test_collapse_unknown_bands_not_listed(db):
+    """Legacy rows (frequency 'unknown') collapse as before but the 'unknown'
+    band is not listed in the `frequencies` array."""
+    t0 = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    rows = [
+        _mk_pos(t0, "collector-a"),
+        _mk_pos(t0 + timedelta(milliseconds=50), "collector-b"),
+    ]
+    out = db._collapse_multi_source_positions(rows)
+    assert len(out) == 1
+    assert out[0]["sources"] == ["collector-a", "collector-b"]
+    assert out[0]["frequencies"] == []
 
 
 def test_track_session_positions_collapses_two_sources(db):
@@ -787,6 +1009,8 @@ def test_get_all_sources_structure(db):
         assert "source" in s
         assert "last_sync" in s
         assert "total_records" in s
+        assert "frequencies" in s
+        assert isinstance(s["frequencies"], list)
 
 
 # --- get_drones_incremental tests ---
@@ -1262,6 +1486,38 @@ def test_sync_log_heartbeat_preserves_records_imported(db):
         db._put_conn(conn)
 
 
+def test_log_submission_records_frequencies(db):
+    """A ping with freqs= stores the band list on the source."""
+    db.log_submission("freq-source", 0, ["2.4ghz", "5.8ghz"])
+    source = next(
+        (s for s in db.get_all_sources() if s["source"] == "freq-source"), None
+    )
+    assert source is not None
+    assert source["frequencies"] == ["2.4ghz", "5.8ghz"]
+
+
+def test_log_submission_heartbeat_preserves_frequencies(db):
+    """frequencies=None (plain heartbeat) leaves the stored set untouched."""
+    db.log_submission("freq-source", 0, ["2.4ghz"])
+    db.log_submission("freq-source", 0, None)
+    source = next(
+        (s for s in db.get_all_sources() if s["source"] == "freq-source"), None
+    )
+    assert source is not None
+    assert source["frequencies"] == ["2.4ghz"]
+
+
+def test_log_submission_empty_list_clears_frequencies(db):
+    """frequencies=[] (explicit freqs= replacement) clears the stored set."""
+    db.log_submission("freq-source", 0, ["2.4ghz"])
+    db.log_submission("freq-source", 0, [])
+    source = next(
+        (s for s in db.get_all_sources() if s["source"] == "freq-source"), None
+    )
+    assert source is not None
+    assert source["frequencies"] == []
+
+
 def test_log_submission_updates_records_imported_on_positive(db):
     """A positive count overwrites the previous records_imported."""
     db.log_submission("test-source", 3)
@@ -1393,6 +1649,42 @@ def test_get_live_drones(db):
     uas_ids = [r["uas_id"] for r in result]
     assert "drone-recent" in uas_ids
     assert "drone-old" not in uas_ids
+
+
+def test_get_live_drones_includes_frequencies(db):
+    """get_live_drones aggregates the bands seen per session via the LATERAL
+    join against remoteid (unknown bands excluded)."""
+    now = datetime.now(timezone.utc)
+    ts = (now - timedelta(minutes=1)).isoformat()
+    for band in ("2.4ghz", "5.8ghz"):
+        inserted, errors, _ = db.insert_remoteid_records("test-source", [{
+            "timestamp": ts,
+            "uas_id": "freq-live-001",
+            "latitude": 37.7,
+            "longitude": -122.4,
+            "frequency": band,
+        }])
+        assert inserted == 1
+        assert errors == []
+
+    result = db.get_live_drones(stale_minutes=30)
+    row = next(
+        (r for r in result if r["uas_id"] == "freq-live-001"), None
+    )
+    assert row is not None
+    assert row["frequencies"] == ["2.4ghz", "5.8ghz"]
+
+
+def test_get_live_drones_no_frequencies_when_none_seen(db):
+    """A session with no remoteid rows (or only unknown bands) reports []."""
+    now = datetime.now(timezone.utc)
+    _insert_latest_position(db, "freq-live-002", "session_1", now - timedelta(minutes=1))
+    result = db.get_live_drones(stale_minutes=30)
+    row = next(
+        (r for r in result if r["uas_id"] == "freq-live-002"), None
+    )
+    assert row is not None
+    assert row["frequencies"] == []
 
 
 def test_get_live_drones_empty(db):

@@ -136,6 +136,7 @@ web_interface/
 | `/api/bounds` | GET | Get bounding box of all positions |
 | `/api/last-timestamp` | GET | Get most recent timestamp (for bootstrapping clients) |
 | `/api/submit` | POST | Submit data from remote nodes (requires API key) |
+| `/api/submit/ping` | GET | Collector/heartbeat checker (requires API key) |
 
 ### Query Parameters
 - `start`: ISO 8601 datetime
@@ -191,6 +192,7 @@ Submit one or more Remote ID events.
     "latitude": 43.51746,
     "longitude": -112.01449,
     "altitude": 100.5,
+    "frequency": "2.4ghz",
     "operator_id": "op-789",
     "operator_latitude": 43.51800,
     "operator_longitude": -112.01500
@@ -210,9 +212,10 @@ Submit one or more Remote ID events.
 
 ### Behavior
 
-- **Duplicate Detection**: Records with matching `uas_id` + `timestamp` are silently skipped
+- **Duplicate Detection**: Records with matching `uas_id` + `source` + `frequency` + `timestamp` are silently skipped (one row per collector per band — see the v12 dedup key below)
 - **Partial Success**: Valid events are processed even if some events have validation errors
 - **Source Assignment**: The `source` field is automatically set based on the API key; clients should not include it
+- **Frequency Bands**: An optional `frequency` field (`2.4ghz`, `5.8ghz`, `ble`, or aliases like `5800`) records which band the packet was heard on; legacy records store `'unknown'`
 - **Resume Capability**: The `last_timestamp` returned can be used by clients to track sync progress
 
 ### Client Implementation
@@ -236,6 +239,7 @@ CREATE TABLE remoteid(
     latitude REAL,
     longitude REAL,
     altitude REAL,
+    frequency TEXT,           -- band heard on: "2.4ghz", "5.8ghz", "ble" (default "unknown")
     operator_id TEXT,
     operator_latitude REAL,
     operator_longitude REAL
@@ -245,6 +249,13 @@ CREATE INDEX idx_uas_time ON remoteid(uas_id, timestamp);
 CREATE INDEX idx_source ON remoteid(source);
 CREATE INDEX idx_timestamp ON remoteid(timestamp);
 ```
+
+Storage keeps **one row per `(uas_id, source, frequency, timestamp)`** — the
+unique index `idx_uas_time_unique` locks that key so a single collector hearing
+one packet on 2.4 GHz *and* 5.8 GHz at the same instant keeps both rows. Track
+queries collapse near-simultaneous multi-band duplicates at read time; the UI
+shows the distinct bands seen (track popups, detail pane, sidebar, Remote
+Sources footer).
 
 ### Sync Log Table
 
@@ -259,7 +270,8 @@ CREATE TABLE sync_log(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT,
     last_sync DATETIME,
-    records_imported INTEGER
+    records_imported INTEGER,
+    frequencies TEXT[],       -- band labels a collector monitors (ping freqs=)
 );
 ```
 

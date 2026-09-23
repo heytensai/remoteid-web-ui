@@ -84,6 +84,7 @@ Authorization: Bearer <api_key>
     "latitude": 43.51746,
     "longitude": -112.01449,
     "altitude": 100.5,
+    "frequency": "2.4ghz",
     "operator_id": "op-789",
     "operator_latitude": 43.51800,
     "operator_longitude": -112.01500
@@ -102,11 +103,20 @@ Authorization: Bearer <api_key>
 | `latitude` | number | No | Drone latitude (-90 to 90) |
 | `longitude` | number | No | Drone longitude (-180 to 180) |
 | `altitude` | number | No | Drone altitude in meters |
+| `frequency` | string | No | Frequency **band** the packet was heard on. Accepts `2.4ghz`, `5.8ghz`, `ble` (plus aliases `2.4`/`2400`/`2400mhz`, `5.8`/`5800`/`5800mhz`, `bluetooth`/`bt`). Omit for legacy packets (stored as `unknown`). |
 | `operator_id` | string | No | Operator identifier |
 | `operator_latitude` | number | No | Operator latitude |
 | `operator_longitude` | number | No | Operator longitude |
 
 **Note:** The `source` field is automatically set based on the API key and should NOT be included in the payload.
+
+A single source may submit the **same packet on multiple bands** (e.g. one
+record with `frequency: "2.4ghz"` and another with `frequency: "5.8ghz"` at
+the same timestamp). Both records are kept — storage keys on
+`(uas_id, source, frequency, timestamp)` — so per-band attribution is never
+lost. The UI collapses near-simultaneous multi-band duplicates at read time
+and shows the distinct bands seen (e.g. in track popups, the detail pane, and
+the session sidebar).
 
 #### Response
 
@@ -137,9 +147,9 @@ Authorization: Bearer <api_key>
 
 #### Behavior
 
-- **Duplicate Detection**: Records with matching `uas_id` + `timestamp` are silently skipped (not counted as errors)
+- **Duplicate Detection**: Records with matching `uas_id` + `source` + `frequency` + `timestamp` are silently skipped (not counted as errors). Two sources observing the same packet — or one source hearing it on two bands — each keep their own row.
 - **Partial Success**: Valid events are processed even if some events have errors
-- **Validation**: Invalid coordinates are sanitized (set to null), invalid timestamps or missing required fields generate errors
+- **Validation**: Invalid coordinates are sanitized (set to null), invalid timestamps or missing required fields generate errors; an invalid `frequency` generates a per-record error like `"Invalid frequency: 900mhz"` without affecting other records
 - **All-or-Nothing Per Record**: Each record is validated and inserted independently
 
 ## Client Implementation Guide
@@ -241,6 +251,7 @@ if __name__ == "__main__":
             "latitude": 43.51746,
             "longitude": -112.01449,
             "altitude": 50.0,
+            "frequency": "5.8ghz",   # optional band the packet was heard on
         }
     ]
     

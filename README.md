@@ -114,7 +114,7 @@ collectors:
     color: "#3498db"
 ```
 
-The collector calls `GET /api/submit/ping?lat=...&lon=...` with a Bearer token. See [COLLECTOR_API.md](COLLECTOR_API.md) for details.
+The collector calls `GET /api/submit/ping?lat=...&lon=...` with a Bearer token, and can report the frequency bands it monitors via `&freqs=` (e.g. `freqs=2.4ghz,5.8ghz,ble`), which appear as badges in the Remote Sources footer. See [COLLECTOR_API.md](COLLECTOR_API.md) for details.
 
 ### Notifications
 
@@ -409,7 +409,7 @@ make lint-py          # Pylint only
 make lint-js          # ESLint only
 ```
 
-146 tests total (78 Python, 68 JavaScript). See [TESTING.md](TESTING.md) for details.
+759 tests total (543 Python, 216 JavaScript). See [TESTING.md](TESTING.md) for details.
 
 ## API Reference
 

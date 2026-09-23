@@ -61,6 +61,12 @@ global.API = {
 global.Units = {
   formatDistance: jest.fn().mockReturnValue('100 m'),
   formatAltitude: jest.fn().mockReturnValue('100m'),
+  formatFrequency: jest.fn((band) => {
+    if (band === 'ble') return 'BLE';
+    if (band === '2.4ghz') return '2.4 GHz';
+    if (band === '5.8ghz') return '5.8 GHz';
+    return 'Unknown';
+  }),
   haversineDistance: jest.fn().mockReturnValue(0),
 };
 
@@ -575,6 +581,33 @@ describe('MapController', () => {
     test('falls back to source when sources array is empty', () => {
       const positions = [{ source: 'Node1', sources: [] }];
       expect(MapController._collectorNamesForPositions(positions)).toEqual(['Node1']);
+    });
+  });
+
+  describe('_frequencyLabelsForPositions', () => {
+    test('formats frequencies array, distinct and in order', () => {
+      const positions = [
+        { source: 'Node1', frequencies: ['2.4ghz', 'ble'] },
+        { source: 'Node2', frequencies: ['2.4ghz', '5.8ghz'] },
+      ];
+      expect(MapController._frequencyLabelsForPositions(positions)).toEqual([
+        '2.4 GHz',
+        'BLE',
+        '5.8 GHz',
+      ]);
+    });
+
+    test('falls back to single frequency field', () => {
+      const positions = [{ source: 'Node1', frequency: '5.8ghz' }];
+      expect(MapController._frequencyLabelsForPositions(positions)).toEqual([
+        '5.8 GHz',
+      ]);
+    });
+
+    test('returns empty when no band data', () => {
+      expect(MapController._frequencyLabelsForPositions([])).toEqual([]);
+      expect(MapController._frequencyLabelsForPositions([{ source: 'Node1' }])).toEqual([]);
+      expect(MapController._frequencyLabelsForPositions([{ source: 'Node1', frequency: 'unknown' }])).toEqual([]);
     });
   });
 

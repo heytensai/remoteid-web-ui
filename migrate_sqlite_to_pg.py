@@ -56,6 +56,7 @@ PG_TABLES = {
             altitude DOUBLE PRECISION,
             height DOUBLE PRECISION,
             height_type TEXT,
+            frequency TEXT NOT NULL DEFAULT 'unknown',
             operator_id TEXT,
             operator_latitude DOUBLE PRECISION,
             operator_longitude DOUBLE PRECISION,
@@ -70,7 +71,8 @@ PG_TABLES = {
             id SERIAL PRIMARY KEY,
             source TEXT,
             last_sync TIMESTAMPTZ,
-            records_imported INTEGER
+            records_imported INTEGER,
+            frequencies TEXT[] NOT NULL DEFAULT '{}'
         )
     """,
     "session_tracking": """
@@ -163,7 +165,7 @@ PG_TABLES = {
 PG_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_uas_time ON remoteid(uas_id, timestamp)",
     "CREATE INDEX IF NOT EXISTS idx_source ON remoteid(source)",
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_uas_time_unique ON remoteid(uas_id, timestamp)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_uas_time_unique ON remoteid(uas_id, source, frequency, timestamp)",
     "CREATE INDEX IF NOT EXISTS idx_timestamp ON remoteid(timestamp)",
     "CREATE INDEX IF NOT EXISTS idx_computed_session ON remoteid(computed_session_id)",
     "CREATE INDEX IF NOT EXISTS idx_geozone_events_active ON geozone_events(uas_id, geozone_name, exited_at)",

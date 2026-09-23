@@ -344,6 +344,30 @@ body.dark-mode .search-focus-clear:hover {
     font-family: 'Courier New', monospace;
 }
 
+.freq-badges {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    flex-wrap: wrap;
+}
+
+.freq-badge {
+    display: inline-block;
+    padding: 1px 5px;
+    border-radius: 8px;
+    font-size: 0.6rem;
+    font-weight: 600;
+    line-height: 1.4;
+    background: rgba(0, 123, 255, 0.12);
+    color: #007bff;
+    white-space: nowrap;
+}
+
+body.dark-mode .freq-badge {
+    background: rgba(0, 123, 255, 0.25);
+    color: #6ab0ff;
+}
+
 .drone-actions {
     display: flex;
     gap: 8px;
@@ -1289,6 +1313,30 @@ body.dark-mode .height-legend {
 .remote-name {
     font-weight: 500;
     color: #2c3e50;
+}
+
+.remote-freq-badges {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex-wrap: wrap;
+}
+
+.remote-freq-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-size: 0.6rem;
+    font-weight: 600;
+    line-height: 1.4;
+    background: rgba(0, 123, 255, 0.12);
+    color: #007bff;
+    white-space: nowrap;
+}
+
+body.dark-mode .remote-freq-badge {
+    background: rgba(100, 160, 255, 0.2);
+    color: #8cb7ff;
 }
 
 body.dark-mode .remote-bar {

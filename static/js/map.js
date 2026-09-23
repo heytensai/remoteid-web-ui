@@ -1042,7 +1042,10 @@ const MapController = {
         // Multi-position session: drop only the old end marker, place a new one.
         const oldEnd = markers[markers.length - 1];
         if (oldEnd) this.layers.tracks.removeLayer(oldEnd);
-        markers[markers.length - 1] = this._createEndMarker(uasId, sessionId, endPos, color, collectorNames);
+        markers[markers.length - 1] = this._createEndMarker(
+            uasId, sessionId, endPos, color, collectorNames,
+            this._frequencyLabelsForPositions(positions),
+        );
     },
 
     /**
@@ -1256,12 +1259,40 @@ const MapController = {
     },
 
     /**
+     * Collect the distinct frequency bands seen across positions.
+     * Reads `frequencies` (array) with a `frequency` (single band) fallback,
+     * formatting each band via Units.formatFrequency.
+     * @param {Array} positions
+     * @returns {Array<string>} Display labels, e.g. ["2.4 GHz", "BLE"]
+     */
+    _frequencyLabelsForPositions(positions) {
+        const labels = [];
+        for (const pos of positions || []) {
+            let bands;
+            if (Array.isArray(pos.frequencies) && pos.frequencies.length > 0) {
+                bands = pos.frequencies;
+            } else if (pos.frequency) {
+                bands = [pos.frequency];
+            } else {
+                continue;
+            }
+            for (const band of bands) {
+                if (band === 'unknown') continue;
+                const label = Units.formatFrequency(band);
+                if (labels.indexOf(label) === -1) labels.push(label);
+            }
+        }
+        return labels;
+    },
+
+    /**
      * Add start and end markers for a session
      */
     _addSessionMarkers(uasId, sessionId, positions, color, sessionKey) {
         if (!positions || positions.length === 0) return;
 
         const collectorNames = this._collectorNamesForPositions(positions);
+        const frequencies = this._frequencyLabelsForPositions(positions);
         const trackKey = sessionKey || `${uasId}:${sessionId}`;
         if (!this.tracks[trackKey]) {
             this.tracks[trackKey] = [];
@@ -1281,7 +1312,7 @@ const MapController = {
             marker._markerType = 'drone';
             marker._uasId = uasId;
             marker._height = pos.height != null ? pos.height : pos.altitude;
-            marker.bindPopup(this._createSessionPointPopup(uasId, sessionId, pos, 'Position', color, collectorNames));
+            marker.bindPopup(this._createSessionPointPopup(uasId, sessionId, pos, 'Position', color, collectorNames, frequencies));
             this._bindDroneAnnotation(marker, uasId, pos);
             this.tracks[trackKey].markers.push(marker);
             return;
@@ -1296,12 +1327,12 @@ const MapController = {
             opacity: 0.9
         }).addTo(this.layers.tracks);
 
-        startMarker.bindPopup(this._createSessionPointPopup(uasId, sessionId, startPos, 'Start', color, collectorNames));
+        startMarker.bindPopup(this._createSessionPointPopup(uasId, sessionId, startPos, 'Start', color, collectorNames, frequencies));
         this.tracks[trackKey].markers.push(startMarker);
 
         // Add end marker — use a height/in-flight drone icon if the position is recent.
         // The in-flight marker follows the height band; the stop (end) icon always keeps the drone color.
-        const endMarker = this._createEndMarker(uasId, sessionId, endPos, color, collectorNames);
+        const endMarker = this._createEndMarker(uasId, sessionId, endPos, color, collectorNames, frequencies);
         this.tracks[trackKey].markers.push(endMarker);
     },
 
@@ -1311,7 +1342,7 @@ const MapController = {
      * the stop icon. Shared by full draws and incremental track appends.
      * @returns {L.Marker}
      */
-    _createEndMarker(uasId, sessionId, endPos, color, collectorNames) {
+    _createEndMarker(uasId, sessionId, endPos, color, collectorNames, frequencies) {
         const isActive = this._isPositionActive(endPos.timestamp);
         const hasAlert = isActive && this.alertUasIds.has(uasId);
         const endIcon = isActive
@@ -1324,7 +1355,7 @@ const MapController = {
         endMarker._markerType = isActive ? 'drone' : 'stop';
         endMarker._uasId = uasId;
         endMarker._height = endPos.height != null ? endPos.height : endPos.altitude;
-        endMarker.bindPopup(this._createSessionPointPopup(uasId, sessionId, endPos, 'End', color, collectorNames));
+        endMarker.bindPopup(this._createSessionPointPopup(uasId, sessionId, endPos, 'End', color, collectorNames, frequencies));
         if (isActive) {
             this._bindDroneAnnotation(endMarker, uasId, endPos);
         }
@@ -1334,7 +1365,7 @@ const MapController = {
     /**
      * Create popup content for session start/end point
      */
-    _createSessionPointPopup(uasId, sessionId, pos, pointType, color, collectorNames) {
+    _createSessionPointPopup(uasId, sessionId, pos, pointType, color, collectorNames, frequencies) {
         const shortSession = sessionId ? sessionId.replace('session_', '') : 'Unknown';
         const altitude = pos.altitude !== null && pos.altitude !== undefined
             ? Units.formatAltitude(pos.altitude, true, 1)
@@ -1381,6 +1412,10 @@ const MapController = {
             ${seenBy ? `<div class="popup-row">
                 <span class="popup-label">Seen By:</span>
                 <span class="popup-value">${seenBy}</span>
+            </div>` : ''}
+            ${frequencies && frequencies.length > 0 ? `<div class="popup-row">
+                <span class="popup-label">Bands:</span>
+                <span class="popup-value">${frequencies.join(', ')}</span>
             </div>` : ''}
         `;
     },

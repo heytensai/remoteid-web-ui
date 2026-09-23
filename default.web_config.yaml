@@ -202,7 +202,9 @@ web_interface:
   #   type: "fixed"  — static position from config (lat/lon required, api_key optional)
   # The remote device authenticates with "Authorization: Bearer <api_key>"
   # and calls GET /api/submit/ping?lat=...&lon=...
-  # See COLLECTOR_API.md for the remote implementation docs.
+  # Frequency bands monitored by the collector can be reported with &freqs=
+  # (e.g. freqs=2.4ghz,5.8ghz,ble); they appear as badges in the Remote Sources
+  # footer. See COLLECTOR_API.md for the remote implementation docs.
   collectors:
     # - name: "Car 1"           # Display name
     #   type: "mobile"           # "mobile" or "fixed"

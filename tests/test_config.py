@@ -9,7 +9,45 @@ import yaml
 from config import (
     WebConfig, MapConfig, WaypointConfig, RoleConfig, MaintenanceConfig,
     NotificationTargetConfig, VALID_NOTIFIER_TYPES, _normalize_color,
+    normalize_frequency, UNKNOWN_FREQUENCY,
 )
+
+
+# --- frequency band normalization ---
+
+def test_normalize_frequency_canonical_labels():
+    assert normalize_frequency("2.4ghz") == "2.4ghz"
+    assert normalize_frequency("5.8ghz") == "5.8ghz"
+    assert normalize_frequency("ble") == "ble"
+    assert normalize_frequency("unknown") == "unknown"
+
+
+def test_normalize_frequency_case_and_whitespace():
+    assert normalize_frequency(" 2.4GHZ ") == "2.4ghz"
+    assert normalize_frequency("BLE") == "ble"
+
+
+def test_normalize_frequency_aliases():
+    assert normalize_frequency("2.4") == "2.4ghz"
+    assert normalize_frequency("2400") == "2.4ghz"
+    assert normalize_frequency("2400mhz") == "2.4ghz"
+    assert normalize_frequency("5.8") == "5.8ghz"
+    assert normalize_frequency("5800") == "5.8ghz"
+    assert normalize_frequency("5800mhz") == "5.8ghz"
+    assert normalize_frequency("bluetooth") == "ble"
+    assert normalize_frequency("bt") == "ble"
+
+
+def test_normalize_frequency_missing_is_unknown():
+    assert normalize_frequency(None) == UNKNOWN_FREQUENCY
+    assert normalize_frequency("") == UNKNOWN_FREQUENCY
+    assert normalize_frequency("   ") == UNKNOWN_FREQUENCY
+
+
+def test_normalize_frequency_invalid_returns_none():
+    assert normalize_frequency("900mhz") is None
+    assert normalize_frequency("loRa") is None
+    assert normalize_frequency(2.4) is None
 
 
 def test_map_config_defaults():

@@ -66,6 +66,7 @@ Authorization: Bearer <api_key>
 |------------|------|----------|-------------|
 | `lat` | number | No | Latitude (-90 to 90). Mobile collectors should always send this. |
 | `lon` | number | No | Longitude (-180 to 180). Mobile collectors should always send this. |
+| `freqs` | string | No | Comma-separated frequency **bands** this collector monitors, e.g. `2.4ghz,5.8ghz,ble`. Invalid labels are dropped with a warning. When `freqs` is **absent** the previously reported set is preserved; when present (even empty, i.e. `freqs=`) it **replaces** the stored set. |
 
 Omitting `lat`/`lon` is a simple heartbeat (updates Last Seen only).
 
@@ -79,6 +80,16 @@ Omitting `lat`/`lon` is a simple heartbeat (updates Last Seen only).
 }
 ```
 
+When `freqs` was provided in the request, the response also echoes the stored
+(normalized) band list:
+```json
+{
+  "success": true,
+  "source": "Car 1",
+  "frequencies": ["2.4ghz", "5.8ghz", "ble"]
+}
+```
+
 **Unauthorized (401):**
 ```json
 {
@@ -87,6 +98,18 @@ Omitting `lat`/`lon` is a simple heartbeat (updates Last Seen only).
 }
 ```
 
+### Frequency bands
+
+Valid band labels, compatible with the `frequency` field on `/api/submit`
+(see `CLIENT_API.md`):
+
+| Canonical | Aliases accepted |
+|-----------|------------------|
+| `2.4ghz` | `2.4`, `2400`, `2400mhz` |
+| `5.8ghz` | `5.8`, `5800`, `5800mhz` |
+| `ble` | `bluetooth`, `bt` |
+| `unknown` | (legacy / absent) |
+
 ### Example (curl)
 
 ```bash
@@ -94,15 +117,17 @@ Omitting `lat`/`lon` is a simple heartbeat (updates Last Seen only).
 curl -H "Authorization: Bearer collector-car-1-key" \
   https://drone.example.com/ddgv/api/submit/ping
 
-# Heartbeat with position
-curl "https://drone.example.com/ddgv/api/submit/ping?lat=37.7749&lon=-122.4194" \
+# Heartbeat with position + monitored bands
+curl "https://drone.example.com/ddgv/api/submit/ping?lat=37.7749&lon=-122.4194&freqs=2.4ghz,5.8ghz,ble" \
   -H "Authorization: Bearer collector-car-1-key"
 ```
 
 ## Footer Detail Panel
 
 All collectors appear in the "Remote Sources" footer detail panel alongside
-API data sources, each showing its name, Last Seen time, and Data time.
+API data sources, each showing its name, Last Seen time, Data time, and the
+frequency **bands** it reported via `freqs` (shown as small badges, e.g.
+`2.4 GHz`, `5.8 GHz`, `BLE`).
 Collectors are tagged with a **Collector** badge (vs **API** for data
 submitters).
 

@@ -28,7 +28,7 @@ from flask_wtf.csrf import CSRFProtect, generate_csrf
 from werkzeug.exceptions import BadRequest
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from config import CollectorConfig, WebConfig, M_PER_DEG_LAT, FEET_PER_METER
+from config import CollectorConfig, WebConfig, M_PER_DEG_LAT, FEET_PER_METER, normalize_frequency
 from database import WebDatabase
 from session_detect import process_database as redetect_sessions
 from session_scheduler import SessionScheduler
@@ -593,6 +593,7 @@ def get_sources():
                 "online": _source_is_online(
                     source_info["last_sync"], source_info["last_data"], window, now
                 ),
+                "frequencies": source_info.get("frequencies") or [],
             }
             if collector:
                 _attach_collector_fields(item, collector, pos_by_name.get(name, {}))
@@ -611,6 +612,7 @@ def get_sources():
                 "last_data": "Never",
                 "total_records": None,
                 "online": False,
+                "frequencies": [],
             }
             _attach_collector_fields(item, collector, pos_by_name.get(collector.name, {}))
             items.append(item)
@@ -1184,7 +1186,7 @@ def _api_key_rate_key() -> str:
 
 @app.route("/api/submit", methods=["POST"])
 @csrf.exempt
-@limiter.limit("30/minute", key_func=_api_key_rate_key)
+@limiter.limit("60/minute", key_func=_api_key_rate_key)
 def submit_data():
     """Submit remote ID data from remote nodes.
 
@@ -1293,7 +1295,7 @@ def submit_data():
 
 @app.route("/api/submit/ping", methods=["GET"])
 @csrf.exempt
-@limiter.limit("30/minute", key_func=_api_key_rate_key)
+@limiter.limit("60/minute", key_func=_api_key_rate_key)
 def submit_ping():
     """Heartbeat endpoint for API key submitters and collectors.
 
@@ -1302,14 +1304,35 @@ def submit_ping():
     shows the source as recently connected.
 
     For collectors: optional lat= & lon= query params update
-    the collector's position on the map.
+    the collector's position on the map, and the optional freqs=
+    param (comma-separated band labels, e.g. ``2.4ghz,5.8ghz,ble``)
+    records which frequencies the collector monitors. When freqs is
+    absent the previously reported set is preserved; when present
+    (even empty) it replaces the stored set.
     """
     source = _get_api_key_source()
     if source is None:
         return jsonify({"success": False, "error": "Unauthorized"}), 401
 
     try:
-        DATABASE.log_submission(source, 0)
+        frequencies = None
+        freqs_arg = request.args.get("freqs")
+        if freqs_arg is not None:
+            frequencies = []
+            for raw in freqs_arg.split(","):
+                label = raw.strip()
+                if not label:
+                    continue
+                band = normalize_frequency(label)
+                if band is None:
+                    logger.warning(
+                        "Ignoring invalid frequency %r from source %s",
+                        label, source,
+                    )
+                    continue
+                if band not in frequencies:
+                    frequencies.append(band)
+        DATABASE.log_submission(source, 0, frequencies)
         lat = request.args.get("lat")
         lon = request.args.get("lon")
         if lat is not None and lon is not None:
@@ -1321,7 +1344,10 @@ def submit_ping():
             except (ValueError, TypeError):
                 pass
         logger.info("Heartbeat from %s (IP=%s)", source, request.remote_addr)
-        return jsonify({"success": True, "source": source})
+        response = {"success": True, "source": source}
+        if frequencies is not None:
+            response["frequencies"] = frequencies
+        return jsonify(response)
     except psycopg2.Error:
         logger.exception("Error logging heartbeat from %s", source)
         return jsonify({"success": False, "error": "Internal server error"}), 500

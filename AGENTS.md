@@ -48,7 +48,7 @@ This file is the user's personal, gitignored configuration. Even if it contains 
 - `session_detection` - Background session detection settings (enabled, interval, gap_threshold, log_level)
 - `proximity_distance` - Distance for drone proximity alerts (meters if use_metric true, feet if false; default: 100)
 - `maintenance` - Background maintenance settings (enabled, interval, delete_expired_tokens, delete_expired_login_tokens, delete_orphaned_ephemeral_users)
-- `collectors` - Collector positions (name, api_key, color, type, lat, lon, timezone); use GET /api/submit/ping?lat=&lon= for position reporting
+- `collectors` - Collector positions (name, api_key, color, type, lat, lon, timezone); use GET /api/submit/ping?lat=&lon= for position reporting and `&freqs=` to report monitored frequency bands (e.g. `freqs=2.4ghz,5.8ghz,ble`)
 - `timezone` (per-collector) - IANA timezone name (e.g. "America/Denver"). If set, naive timestamps from that collector are converted from this timezone to UTC before storing. (default: None — naive assumed UTC)
 - `position_stale_minutes` - Minutes without ping before collector marker turns gray (hot-reloadable)
 - `server_url` - Public base URL for notification embeds (hot-reloadable)
@@ -58,7 +58,7 @@ This file is the user's personal, gitignored configuration. Even if it contains 
 
 ## Database Schema Versioning
 
-The PostgreSQL database uses a lightweight integer-based versioning system tracked in the `_schema_version` table. Current schema version: **9**.
+The PostgreSQL database uses a lightweight integer-based versioning system tracked in the `_schema_version` table. Current schema version: **12**.
 
 ### How It Works
 
@@ -160,11 +160,66 @@ The `_schema_version` table records each migration step so any gap between the c
   the base `_init_db()` block directly, which also collapses any leftover
   duplicates before creating it (same idempotent cleanup runs in `_migrate()`;
   the geozone active-events unique index follows the same pattern).
+- **v12**: **frequency band attribution**. `remoteid` gains
+  `frequency TEXT NOT NULL DEFAULT 'unknown'` and `sync_log` gains
+  `frequencies TEXT[] NOT NULL DEFAULT '{}'`. Backend concepts —
+  - **Bands** (`config.py`): `FREQUENCY_CANONICAL = ('ble', '2.4ghz', '5.8ghz',
+    'unknown')`, `FREQUENCY_ALIASES` (e.g. `2.4`/`2400`/`2400mhz` → `2.4ghz`,
+    `bluetooth`/`bt` → `ble`), `normalize_frequency()` returns the canonical
+    label, `UNKNOWN_FREQUENCY` for absent/empty input, or `None` for an
+    unrecognized *present* value (callers reject the record: per-record error
+    `"Invalid frequency: <value>"`). Legacy submissions without a `frequency`
+    store `'unknown'`.
+  - **Dedup key** becomes `(uas_id, source, frequency, timestamp)`, so one
+    collector hearing the same broadcast on 2.4 GHz and 5.8 GHz at the same
+    instant keeps **both** rows (the v9 `(uas_id, source, timestamp)` key would
+    have dropped the second band). The unique index `idx_uas_time_unique` is
+    recreated with the expanded key; the live
+    `INSERT ... ON CONFLICT (uas_id, source, frequency, timestamp)` clauses are
+    aligned. Migration v12 drops the old index, creates the new one, and
+    backfills the two columns (guarded, idempotent).
+
+    **Ordering gotcha (regression, see #186):** `_init_db()` runs its base
+    `CREATE INDEX` block *before* `_ensure_schema_version()`, so the base-block
+    creation of `idx_uas_time_unique` is guarded by
+    `_column_exists(cur, "remoteid", "frequency")`. On a stale (≤v11) database
+    the column is absent at that point and the index must be deferred to the
+    v12 migration; a fresh database has the column from `CREATE TABLE` and the
+    index is created in the base block. Keep the guard — an unconditional
+    reference to `frequency` in the base block crashes init with
+    `UndefinedColumn` on any pre-v12 database.
+  - **Ping reporting** (`GET /api/submit/ping?freqs=`) records the monitored
+    bands on `sync_log.frequencies`. `frequencies=None` preserves the stored
+    set (plain heartbeat); a provided list — even `[]` — replaces it. Both
+    `log_submission()` and `_update_sync_log()` accept the optional param; the
+    INSERT path passes `[]` when `None` to satisfy `NOT NULL` while the
+    ON CONFLICT `CASE WHEN %s IS NULL` check uses the raw `None`.
+  - **Live queries**: the drone/live queries (`_get_drones_query`,
+    `get_live_drones`, `get_live_drones_incremental`,
+    `get_drones_incremental`) LEFT JOIN LATERAL against `remoteid` to attach a
+    per-session `frequencies` array:
+    `array_agg(DISTINCT frequency ORDER BY frequency) FILTER (WHERE frequency
+    IS DISTINCT FROM 'unknown')` bounded by the session/`rew>` timestamp
+    cutoff. Track queries (`get_track`, `get_track_session_positions`,
+    `get_track_sessions`) expose the per-row `frequency`.
+  - **Track dedup**: `_collapse_multi_source_positions` now collapses runs that
+    span ≥2 distinct `(source, frequency)` pairs — so a single collector
+    hearing one packet on 2.4 GHz + 5.8 GHz + BLE yields one point — and the
+    kept point gains a `frequencies` array (non-`unknown` bands, first-appearance
+    order) alongside `sources`. Single-collector hover cadence on one band is
+    still untouched.
+  - **UI**: `Units.formatFrequency()` maps a band to `"2.4 GHz"` / `"5.8 GHz"` /
+    `"BLE"` / `"Unknown"`. Bands appear in track popups (`Bands:` row), the
+    detail pane, session-row badges in the sidebar, and the Remote Sources
+    footer via `_frequencyLabelsForPositions` (map.js + ui.js, `frequencies`
+    array with a `frequency` field fallback). `POST /api/submit` and
+    `GET /api/submit/ping` rate limits were raised 30→60/minute (still keyed by
+    API key).
 
 
 ### Multi-Collector Track Dedup (Read-Path Only)
 
-Storage keeps one row per `(uas_id, source, timestamp)` (v9) so each collector's observation is attributed. To avoid Nx-redundant track points when several collectors see the same broadcast, the **track query methods** (`get_track`, `get_track_session_positions`, `get_track_sessions`) collapse near-simultaneous, near-identical positions via `_collapse_multi_source_positions` (see constants `TRACK_DEDUP_TIME_WINDOW_S` / `TRACK_DEDUP_COORD_EPS` in `database.py`). A group is collapsed only when it spans at least two distinct `source`s, so single-collector hover/loiter cadence is never touched. The kept point carries `source` (backward compatible) plus a `sources` array listing every distinct collector. Frontend helpers `_collectorNamesForPositions` (map.js + ui.js) read `sources` with a `source` fallback.
+Storage keeps one row per `(uas_id, source, frequency, timestamp)` (v12) so each collector's observation — on each band — is attributed. To avoid Nx-redundant track points when several sources see the same broadcast (or one source hears it on multiple bands at once), the **track query methods** (`get_track`, `get_track_session_positions`, `get_track_sessions`) collapse near-simultaneous, near-identical positions via `_collapse_multi_source_positions` (see constants `TRACK_DEDUP_TIME_WINDOW_S` / `TRACK_DEDUP_COORD_EPS` in `database.py`). A group is collapsed only when it spans at least two distinct `(source, frequency)` pairs, so single-collector hover/loiter cadence on one band is never touched. The kept point carries `source` (backward compatible) plus a `sources` array listing every distinct collector and a `frequencies` array of the non-`unknown` bands. Frontend helpers `_collectorNamesForPositions` / `_frequencyLabelsForPositions` (map.js + ui.js) read `sources`/`frequencies` with `source`/`frequency` back-compat fallbacks.
 
 ### Frontend Polling (Two Independent Timers)
 
@@ -240,7 +295,7 @@ All POST endpoints in `app.py` are protected by `flask_wtf.csrf.CSRFProtect` (ex
 
 ### Rate Limiting of Submit Endpoints
 
-`/api/submit` and `/api/submit/ping` are rate-limited at `30/minute` **keyed by API key** (Bearer identity, hashed) rather than by IP — see `_api_key_rate_key()` in `app.py`. This lets multiple collectors behind a single public IP (NAT) each have their own bucket instead of exhaustively sharing the per-IP limit (see #185). Requests without a Bearer token fall back to the remote address key.
+`/api/submit` and `/api/submit/ping` are rate-limited at `60/minute` **keyed by API key** (Bearer identity, hashed) rather than by IP — see `_api_key_rate_key()` in `app.py`. This lets multiple collectors behind a single public IP (NAT) each have their own bucket instead of exhaustively sharing the per-IP limit (see #185). Requests without a Bearer token fall back to the remote address key.
 
 ### When Adding New POST Endpoints
 
@@ -424,7 +479,7 @@ Run `make lint` and fix all errors before committing.
 ### Running
 
 ```bash
-make test        # All tests (146 total)
+make test        # All tests (759 total)
 make test-py     # Python only
 make test-js     # JS only
 make lint        # All linters

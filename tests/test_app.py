@@ -534,6 +534,25 @@ class TestApiSources:
         assert item["last_data"] != "Never"
         # Only data is 1-4h old, outside the 20-minute API window
         assert item["online"] is False
+        # No ping yet -> no monitored bands reported
+        assert item["frequencies"] == []
+
+    def test_sources_include_reported_frequencies(self, client, app):
+        """Monitored bands reported via ping freqs= show up in /api/sources."""
+        client.get(
+            "/api/submit/ping?freqs=2.4ghz,ble",
+            headers={"Authorization": "Bearer test-api-key-123"},
+        )
+        token = self._token_for_role(client, "OpUser2", "operator")
+        resp = client.get("/api/sources", headers={"X-Auth-Token": token})
+        assert resp.status_code == 200
+        item = next(
+            (s for s in resp.get_json()["sources"]
+             if s["name"] == "test-source"),
+            None,
+        )
+        assert item is not None
+        assert item["frequencies"] == ["2.4ghz", "ble"]
 
     def test_sources_online_from_fresh_data_without_sync_log(self, db, client, app):
         """#171: a source transmitting fresh data is online even when its
@@ -725,6 +744,70 @@ class TestApiSubmit:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["inserted"] == 0
+
+    def test_submit_with_frequency(self, client):
+        """A record with a band label is stored with the normalized value."""
+        records = [
+            {
+                "uas_id": "submit-freq",
+                "timestamp": datetime.now().isoformat(),
+                "latitude": 38.0,
+                "longitude": -123.0,
+                "altitude": 200,
+                "frequency": "5.8",
+            }
+        ]
+        resp = client.post(
+            "/api/submit",
+            data=json.dumps(records),
+            content_type="application/json",
+            headers={"Authorization": "Bearer test-api-key-123"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["success"] is True
+        assert data["inserted"] == 1
+        assert data["errors"] == []
+
+        import app as _app_module
+        positions = _app_module.DATABASE.get_positions(
+            datetime.now(timezone.utc) - timedelta(days=1),
+            datetime.now(timezone.utc) + timedelta(days=1),
+            uas_id="submit-freq",
+        )
+        assert positions[0]["frequency"] == "5.8ghz"
+
+    def test_submit_invalid_frequency_per_record_error(self, client):
+        """An invalid band is rejected per-record without dropping valid ones."""
+        now = datetime.now(timezone.utc).isoformat()
+        records = [
+            {
+                "uas_id": "submit-freq-bad",
+                "timestamp": now,
+                "latitude": 38.0,
+                "longitude": -123.0,
+                "frequency": "loRa",
+            },
+            {
+                "uas_id": "submit-freq-good",
+                "timestamp": now,
+                "latitude": 38.0,
+                "longitude": -123.0,
+                "frequency": "2.4ghz",
+            },
+        ]
+        resp = client.post(
+            "/api/submit",
+            data=json.dumps(records),
+            content_type="application/json",
+            headers={"Authorization": "Bearer test-api-key-123"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["inserted"] == 1
+        assert len(data["errors"]) == 1
+        assert data["errors"][0]["index"] == 0
+        assert "Invalid frequency" in data["errors"][0]["reason"]
 
     def test_submit_invalid_api_key(self, client):
         resp = client.post(
@@ -1493,6 +1576,96 @@ class TestApiPing:
             headers={"Authorization": "Bearer test-api-key-123"},
         )
         assert resp.status_code == 200
+
+    def test_ping_with_freqs_sets_frequencies(self, client):
+        """freqs= replaces the stored monitored bands and echoes them back."""
+        resp = client.get(
+            "/api/submit/ping?freqs=2.4ghz,5.8,ble",
+            headers={"Authorization": "Bearer test-api-key-123"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["frequencies"] == ["2.4ghz", "5.8ghz", "ble"]
+
+        import app as _app_module
+        source = next(
+            (s for s in _app_module.DATABASE.get_all_sources()
+             if s["source"] == "test-source"),
+            None,
+        )
+        assert source is not None
+        assert source["frequencies"] == ["2.4ghz", "5.8ghz", "ble"]
+
+    def test_ping_heartbeat_preserves_frequencies(self, client):
+        """A ping without freqs= (plain heartbeat) keeps the stored set."""
+        client.get(
+            "/api/submit/ping?freqs=2.4ghz",
+            headers={"Authorization": "Bearer test-api-key-123"},
+        )
+        resp = client.get(
+            "/api/submit/ping",
+            headers={"Authorization": "Bearer test-api-key-123"},
+        )
+        assert resp.status_code == 200
+        assert "frequencies" not in resp.get_json()
+
+        import app as _app_module
+        source = next(
+            (s for s in _app_module.DATABASE.get_all_sources()
+             if s["source"] == "test-source"),
+            None,
+        )
+        assert source["frequencies"] == ["2.4ghz"]
+
+    def test_ping_empty_freqs_clears_frequencies(self, client):
+        """freqs= (empty) intentionally clears the stored set."""
+        client.get(
+            "/api/submit/ping?freqs=2.4ghz",
+            headers={"Authorization": "Bearer test-api-key-123"},
+        )
+        resp = client.get(
+            "/api/submit/ping?freqs=",
+            headers={"Authorization": "Bearer test-api-key-123"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["frequencies"] == []
+
+        import app as _app_module
+        source = next(
+            (s for s in _app_module.DATABASE.get_all_sources()
+             if s["source"] == "test-source"),
+            None,
+        )
+        assert source["frequencies"] == []
+
+    def test_ping_invalid_freqs_ignored(self, client):
+        """Unrecognized band labels are dropped (with a warning), not stored."""
+        resp = client.get(
+            "/api/submit/ping?freqs=2.4ghz,loRa",
+            headers={"Authorization": "Bearer test-api-key-123"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["frequencies"] == ["2.4ghz"]
+
+        import app as _app_module
+        source = next(
+            (s for s in _app_module.DATABASE.get_all_sources()
+             if s["source"] == "test-source"),
+            None,
+        )
+        assert source["frequencies"] == ["2.4ghz"]
+
+    def test_ping_freqs_deduplicated(self, client):
+        """Duplicate band labels collapse into one entry, order preserved."""
+        resp = client.get(
+            "/api/submit/ping?freqs=2.4ghz,5.8ghz,2.4ghz,ble,ble",
+            headers={"Authorization": "Bearer test-api-key-123"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["frequencies"] == ["2.4ghz", "5.8ghz", "ble"]
 
 
 class TestApiRedetect:

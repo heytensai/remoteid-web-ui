@@ -40,18 +40,23 @@ Jest runs with the `jsdom` environment to simulate browser DOM APIs.
 ```
 tests/
 ├── conftest.py          # Shared fixtures: app, client, db
-├── test_config.py       # Config loader (8 tests)
-├── test_database.py     # Database operations (24 tests)
-├── test_app.py          # Flask API endpoints (29 tests)
-├── test_html.py         # HTML template / BeautifulSoup (17 tests)
+├── test_config.py       # Config loader (84 tests)
+├── test_database.py     # Database operations (132 tests)
+├── test_app.py          # Flask API endpoints (140 tests)
+├── test_html.py         # HTML template / BeautifulSoup (15 tests)
+├── test_alert_engine.py # Alert engine (54 tests)
+├── test_notifier.py     # Notification targets (78 tests)
+├── test_session_detect.py   # Session detection (20 tests)
+├── test_session_scheduler.py  # Background session scheduler (13 tests)
+├── test_maintenance_scheduler.py  # Maintenance scheduler (7 tests)
 └── js/
-    ├── units.test.js    # Units module (24 tests)
-    ├── api.test.js      # API client (19 tests)
-    ├── map.test.js      # MapController helpers (16 tests)
-    └── ui.test.js       # UIController helpers (9 tests)
+    ├── units.test.js    # Units module (39 tests)
+    ├── api.test.js      # API client (27 tests)
+    ├── map.test.js      # MapController helpers (62 tests)
+    └── ui.test.js       # UIController helpers (88 tests)
 ```
 
-**Total: 146 tests** (78 Python, 68 JavaScript)
+**Total: 759 tests** (543 Python, 216 JavaScript)
 
 ## Python Tests
 
@@ -59,10 +64,10 @@ tests/
 
 | Module | Tests | Scope |
 |--------|-------|-------|
-| `config.py` | 8 | Loading defaults, MapConfig, CollectorConfig, `to_dict`, missing files |
-| `database.py` | 24 | Record validation, sanitize, insert, duplicates, queries (drones, positions, tracks, operators, bounds, timestamps), multi-source track dedup, session detection |
-| `app.py` | 29 | All API endpoints, auth (Bearer token, CSRF), error handling, time range parsing |
-| `index.html` | 17 | Template rendering, DOM structure, local vendored asset links, JS/CSS assets, CSP, favicon, time presets |
+| `config.py` | 84 | Loading defaults, MapConfig, CollectorConfig, `to_dict`, missing files, frequency band normalization |
+| `database.py` | 132 | Record validation, sanitize, insert, duplicates, queries (drones, positions, tracks, operators, bounds, timestamps), multi-source track dedup, frequency bands, schema migrations, session detection |
+| `app.py` | 140 | All API endpoints, auth (Bearer token, CSRF), error handling, time range parsing, submit/ping frequency handling |
+| `index.html` | 15 | Template rendering, DOM structure, local vendored asset links, JS/CSS assets, CSP, favicon, time presets |
 
 ### Running Python Tests
 

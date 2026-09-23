@@ -87,6 +87,12 @@ global.Units = {
   formatDistance: jest.fn().mockReturnValue('100 m'),
   formatAltitude: jest.fn().mockReturnValue('100m'),
   formatSpeed: jest.fn().mockReturnValue('50 km/h'),
+  formatFrequency: jest.fn((band) => {
+    if (band === 'ble') return 'BLE';
+    if (band === '2.4ghz') return '2.4 GHz';
+    if (band === '5.8ghz') return '5.8 GHz';
+    return 'Unknown';
+  }),
   useMetric: true,
   getAltitudeUnit: jest.fn().mockReturnValue('m'),
   haversineDistance: jest.fn().mockReturnValue(0),
@@ -206,6 +212,28 @@ describe('UIController', () => {
       expect(UIController._collectorNamesForPositions([{ source: 'sar', sources: [] }])).toEqual([
         'sar',
       ]);
+    });
+  });
+
+  describe('_frequencyLabelsForPositions', () => {
+    test('formats frequencies array, distinct and in order', () => {
+      const labels = UIController._frequencyLabelsForPositions([
+        { source: 'sar', frequencies: ['5.8ghz', '2.4ghz', '5.8ghz'] },
+        { source: 'detector04', frequencies: ['2.4ghz', 'ble'] },
+      ]);
+      expect(labels).toEqual(['5.8 GHz', '2.4 GHz', 'BLE']);
+    });
+
+    test('falls back to single frequency field', () => {
+      expect(UIController._frequencyLabelsForPositions([
+        { source: 'sar', frequency: 'ble' },
+      ])).toEqual(['BLE']);
+    });
+
+    test('returns empty when no band data', () => {
+      expect(UIController._frequencyLabelsForPositions([])).toEqual([]);
+      expect(UIController._frequencyLabelsForPositions([{ source: 'sar' }])).toEqual([]);
+      expect(UIController._frequencyLabelsForPositions([{ source: 'sar', frequency: 'unknown' }])).toEqual([]);
     });
   });
 

@@ -190,6 +190,25 @@ describe('Units', () => {
     });
   });
 
+  describe('formatFrequency', () => {
+    test('formats canonical bands', () => {
+      expect(Units.formatFrequency('2.4ghz')).toBe('2.4 GHz');
+      expect(Units.formatFrequency('5.8ghz')).toBe('5.8 GHz');
+      expect(Units.formatFrequency('ble')).toBe('BLE');
+    });
+
+    test('unknown and falsy values', () => {
+      expect(Units.formatFrequency('unknown')).toBe('Unknown');
+      expect(Units.formatFrequency(null)).toBe('Unknown');
+      expect(Units.formatFrequency(undefined)).toBe('Unknown');
+    });
+
+    test('does not depend on metric setting', () => {
+      Units.useMetric = false;
+      expect(Units.formatFrequency('2.4ghz')).toBe('2.4 GHz');
+    });
+  });
+
   describe('haversineDistance', () => {
     test('same point returns 0', () => {
       expect(Units.haversineDistance(0, 0, 0, 0)).toBe(0);
