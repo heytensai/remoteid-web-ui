@@ -67,6 +67,7 @@ global.Units = {
     if (band === '5.8ghz') return '5.8 GHz';
     return 'Unknown';
   }),
+  frequencyBadgeClass: jest.fn((band) => 'freq-band-' + String(band).replace('.', '-')),
   haversineDistance: jest.fn().mockReturnValue(0),
 };
 

@@ -140,6 +140,19 @@ const Units = {
     },
 
     /**
+     * CSS band modifier class for a canonical frequency label, used to
+     * give each band a subtly different badge color.
+     * @param {string} band - Canonical band label (or null/undefined)
+     * @returns {string} CSS class such as "freq-band-2-4ghz"
+     */
+    frequencyBadgeClass(band) {
+        if (band === '2.4ghz') return 'freq-band-2-4ghz';
+        if (band === '5.8ghz') return 'freq-band-5-8ghz';
+        if (band === 'ble') return 'freq-band-ble';
+        return 'freq-band-unknown';
+    },
+
+    /**
      * Haversine distance between two coordinates in meters
      * @param {number} lat1 - Latitude of point 1 in degrees
      * @param {number} lon1 - Longitude of point 1 in degrees

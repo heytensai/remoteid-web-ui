@@ -368,6 +368,42 @@ body.dark-mode .freq-badge {
     color: #6ab0ff;
 }
 
+.freq-badge.freq-band-5-8ghz,
+.remote-freq-badge.freq-band-5-8ghz {
+    background: rgba(23, 162, 184, 0.12);
+    color: #17a2b8;
+}
+
+.freq-badge.freq-band-ble,
+.remote-freq-badge.freq-band-ble {
+    background: rgba(111, 66, 193, 0.13);
+    color: #6f42c1;
+}
+
+.freq-badge.freq-band-unknown,
+.remote-freq-badge.freq-band-unknown {
+    background: rgba(108, 117, 125, 0.12);
+    color: #6c757d;
+}
+
+body.dark-mode .freq-badge.freq-band-5-8ghz,
+body.dark-mode .remote-freq-badge.freq-band-5-8ghz {
+    background: rgba(23, 162, 184, 0.28);
+    color: #56d3e8;
+}
+
+body.dark-mode .freq-badge.freq-band-ble,
+body.dark-mode .remote-freq-badge.freq-band-ble {
+    background: rgba(111, 66, 193, 0.32);
+    color: #ac8cf8;
+}
+
+body.dark-mode .freq-badge.freq-band-unknown,
+body.dark-mode .remote-freq-badge.freq-band-unknown {
+    background: rgba(173, 181, 189, 0.2);
+    color: #adb5bd;
+}
+
 .drone-actions {
     display: flex;
     gap: 8px;
@@ -1313,6 +1349,13 @@ body.dark-mode .height-legend {
 .remote-name {
     font-weight: 500;
     color: #2c3e50;
+}
+
+.remote-row-heading {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
 }
 
 .remote-freq-badges {

@@ -1589,17 +1589,19 @@ const UIController = {
                 ? '<i class="fas fa-check-circle remote-icon active" title="Active"></i>'
                 : '<i class="fas fa-clock remote-icon stale" title="No recent activity"></i>';
             const freqHtml = (Array.isArray(r.frequencies) && r.frequencies.length > 0)
-                ? r.frequencies.map(f => `<span class="remote-freq-badge">${esc(Units.formatFrequency(f))}</span>`).join('')
+                ? r.frequencies.map(f => `<span class="remote-freq-badge ${Units.frequencyBadgeClass(f)}">${esc(Units.formatFrequency(f))}</span>`).join('')
                 : null;
             html += `<div class="remote-row">
                 <div class="remote-row-left">
                     ${iconHtml}
-                    <span class="remote-name">${esc(r.name)}</span>
+                    <div class="remote-row-heading">
+                        <span class="remote-name">${esc(r.name)}</span>
+                        ${freqHtml ? `<div class="remote-freq-badges">${freqHtml}</div>` : ''}
+                    </div>
                 </div>
                 <div class="remote-row-right">
                     <div class="remote-time"><span class="remote-time-label">Data:</span> ${esc(fmt(r.last_data))}</div>
                     <div class="remote-time"><span class="remote-time-label">Last Seen:</span> ${esc(fmt(r.last_sync))}</div>
-                    ${freqHtml ? `<div class="remote-freq-badges">${freqHtml}</div>` : ''}
                 </div>
             </div>`;
         }
@@ -1901,10 +1903,9 @@ const UIController = {
         const isSelected = this.selectedDrones.has(rawSessionKey);
         const isVisible = this.visibleSessions.has(rawSessionKey);
 
-        const freqLabels = (Array.isArray(drone.frequencies) && drone.frequencies.length > 0
-            ? drone.frequencies
-            : (drone.frequency ? [drone.frequency] : []))
-            .map(b => Units.formatFrequency(b));
+        const freqBands = Array.isArray(drone.frequencies) && drone.frequencies.length > 0
+            ? drone.frequencies.filter(b => b !== 'unknown')
+            : (drone.frequency && drone.frequency !== 'unknown' ? [drone.frequency] : []);
 
         const hasAlert = alertedUasIds.has(drone.uas_id);
 
@@ -1924,7 +1925,7 @@ const UIController = {
                     <div class="drone-id">${hasAlert ? '<i class="fas fa-exclamation-triangle alert-icon"></i> ' : ''}${esc(this.getDroneName(drone.uas_id))}</div>
                     <div class="drone-meta-row">
                         ${this._getManufacturerBadgeHtml(drone.uas_id)}
-                        ${freqLabels.length > 0 ? `<div class="freq-badges">${freqLabels.map(f => `<span class="freq-badge">${f}</span>`).join('')}</div>` : ''}
+                        ${freqBands.length > 0 ? `<div class="freq-badges">${freqBands.map(b => `<span class="freq-badge ${Units.frequencyBadgeClass(b)}">${esc(Units.formatFrequency(b))}</span>`).join('')}</div>` : ''}
                         <div class="session-id">${esc(sessionId)}</div>
                         <div class="drone-meta">Alt: ${altitude}${height ? ` Ht: ${height}` : ''} | ${timeStr} | ${durationStr}</div>
                     </div>

@@ -209,6 +209,20 @@ describe('Units', () => {
     });
   });
 
+  describe('frequencyBadgeClass', () => {
+    test('maps each canonical band to a distinct class', () => {
+      expect(Units.frequencyBadgeClass('2.4ghz')).toBe('freq-band-2-4ghz');
+      expect(Units.frequencyBadgeClass('5.8ghz')).toBe('freq-band-5-8ghz');
+      expect(Units.frequencyBadgeClass('ble')).toBe('freq-band-ble');
+    });
+
+    test('unknown and falsy values map to unknown class', () => {
+      expect(Units.frequencyBadgeClass('unknown')).toBe('freq-band-unknown');
+      expect(Units.frequencyBadgeClass(null)).toBe('freq-band-unknown');
+      expect(Units.frequencyBadgeClass(undefined)).toBe('freq-band-unknown');
+    });
+  });
+
   describe('haversineDistance', () => {
     test('same point returns 0', () => {
       expect(Units.haversineDistance(0, 0, 0, 0)).toBe(0);
