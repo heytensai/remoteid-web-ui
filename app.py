@@ -487,7 +487,7 @@ def api_config():
                 "tile_provider": cfg.map.tile_provider,
             },
             "default_hours": cfg.default_hours,
-            "drone_aliases": cfg.drone_aliases,
+            "drone_aliases": cfg.drone_aliases_dict(),
             "manufacturer_prefixes": cfg.manufacturer_prefixes,
             "waypoints": cfg.to_dict().get("waypoints", []),
             "use_metric": cfg.use_metric,
@@ -1767,7 +1767,7 @@ def revoke_tokens(user_id, config):
 def _on_new_alert(uas_id: str, geozone_name: str,
                   position: Optional[Dict] = None):
     """Callback fired when a new geozone alert is triggered. Dispatches to notifier."""
-    name = CONFIG.drone_aliases.get(uas_id, uas_id)
+    name = CONFIG.get_drone_name(uas_id)
     ctx = {
         "uas_id": uas_id,
         "name": name,
@@ -1786,7 +1786,7 @@ def _on_new_alert(uas_id: str, geozone_name: str,
 def _on_geozone_exit(uas_id: str, geozone_name: str,
                      position: Optional[Dict] = None):
     """Callback fired when a drone leaves a geozone. Dispatches to notifier."""
-    name = CONFIG.drone_aliases.get(uas_id, uas_id)
+    name = CONFIG.get_drone_name(uas_id)
     ctx = {
         "uas_id": uas_id,
         "name": name,
@@ -1804,7 +1804,7 @@ def _on_geozone_exit(uas_id: str, geozone_name: str,
 
 def _on_new_session(uas_id: str, session_id: str, first_position: Optional[Dict] = None):
     """Callback fired when a new drone session/flight is detected. Dispatches to notifier."""
-    name = CONFIG.drone_aliases.get(uas_id, uas_id)
+    name = CONFIG.get_drone_name(uas_id)
     ctx = {
         "uas_id": uas_id,
         "name": name,
@@ -1822,7 +1822,7 @@ def _on_new_session(uas_id: str, session_id: str, first_position: Optional[Dict]
 
 def _on_unrecognized_drone(uas_id: str, session_id: str, first_position: Optional[Dict] = None):
     """Callback fired when an unrecognized drone starts a new flight. Dispatches to notifier."""
-    name = CONFIG.drone_aliases.get(uas_id, uas_id)
+    name = CONFIG.get_drone_name(uas_id)
     ctx = {
         "uas_id": uas_id,
         "name": name,

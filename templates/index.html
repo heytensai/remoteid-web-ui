@@ -268,11 +268,15 @@
                         <h4 class="settings-section-title">Drone Visibility</h4>
                         <label class="settings-item">
                             <input type="checkbox" id="showKnownDrones" checked>
-                            Show Known Drones
+                            Known Drones
                         </label>
-                        <label class="settings-item">
+                        <label class="settings-item" title="Aliased drones marked trusted in drone_aliases (trusted: true)">
+                            <input type="checkbox" id="showTrustedDrones" checked>
+                            Trusted Drones <i class="fas fa-certificate"></i>
+                        </label>
+                        <label class="settings-item" title="Drones with no alias in drone_aliases">
                             <input type="checkbox" id="showUnknownDrones" checked>
-                            Show Unknown Drones
+                            Unknown Drones
                         </label>
                         <label class="settings-item">
                             <input type="checkbox" id="geozoneAlertFilter">

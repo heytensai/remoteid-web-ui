@@ -91,7 +91,7 @@ Copy `default.web_config.yaml` to `config/web_config.yaml` and customize. The co
 | `max_positions_per_query` | `5000` | Limit to prevent browser lag |
 | `use_metric` | `true` | `true` = meters, `false` = feet |
 | `api_keys` | — | API keys for data submission (maps key to source name) |
-| `drone_aliases` | — | Map UAS IDs to friendly names |
+| `drone_aliases` | — | Map UAS IDs to friendly names; entries may also set `trusted: true` (display-only for now) |
 | `collectors` | — | Mobile/fixed collector definitions |
 | `notifications` | — | Discord, ntfy, or Teams webhook targets |
 | `roles` | — | Role-based permission definitions |

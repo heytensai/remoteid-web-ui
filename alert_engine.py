@@ -212,7 +212,7 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
         now = time.monotonic()
         first_pos = positions[0] if positions else None
 
-        if uas_id not in self._config.drone_aliases:
+        if not self._config.is_drone_known(uas_id):
             event_type = "unrecognized_drone"
             cooldown = self._config.alerts.cooldown.get("unrecognized_drone", 300)
             cooldown_store = self._unrecognized_drone_cooldown
@@ -259,7 +259,7 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
         """Check positions against all alert-enabled geozones."""
         if not self._geozones:
             return
-        if self._config.alerts.skip_known_drones and uas_id in self._config.drone_aliases:
+        if self._config.alerts.skip_known_drones and self._config.is_drone_known(uas_id):
             return
         for pos in positions:
             lat = pos.get("latitude")
@@ -382,8 +382,8 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
                     continue
                 self._drone_proximity_cooldown[cd_key] = mono
 
-                name_a = self._config.drone_aliases.get(a["uas_id"], a["uas_id"])
-                name_b = self._config.drone_aliases.get(b["uas_id"], b["uas_id"])
+                name_a = self._config.get_drone_name(a["uas_id"])
+                name_b = self._config.get_drone_name(b["uas_id"])
 
                 logger.info(
                     "ALERT: drone proximity %s (%s) ↔ %s (%s) at %.1fm",

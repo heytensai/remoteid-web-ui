@@ -22,8 +22,9 @@ const UIController = {
     selectedDroneTrack: null,
     visibleSessions: new Set(), // Track which sessions are checked/visible
     dismissedSessionKeys: new Set(), // Sessions manually unchecked by user
-    showKnownDrones: true,
-    showUnknownDrones: true,
+    showKnownDrones: true,     // aliased, not trusted
+    showTrustedDrones: true,   // aliased with trusted: true
+    showUnknownDrones: true,   // not in drone_aliases
     showGeozoneAlerts: false,
     alertEvents: [],
     alertLogModalOpen: false,
@@ -465,6 +466,7 @@ const UIController = {
             closeSettingsBtn: document.getElementById('closeSettings'),
             opacityValue: document.getElementById('opacityValue'),
             showKnownDrones: document.getElementById('showKnownDrones'),
+            showTrustedDrones: document.getElementById('showTrustedDrones'),
             showUnknownDrones: document.getElementById('showUnknownDrones'),
             darkModeCheckbox: document.getElementById('darkMode'),
             keepScreenOnCheckbox: document.getElementById('keepScreenOn'),
@@ -732,9 +734,15 @@ const UIController = {
             });
         }
 
-        // Show known/unknown drones
+        // Show unknown/known/trusted drones
         this.elements.showKnownDrones.addEventListener('change', (e) => {
             this.showKnownDrones = e.target.checked;
+            this.refreshData();
+            this._saveSettings();
+        });
+
+        this.elements.showTrustedDrones.addEventListener('change', (e) => {
+            this.showTrustedDrones = e.target.checked;
             this.refreshData();
             this._saveSettings();
         });
@@ -1179,6 +1187,7 @@ const UIController = {
                 showMobileCollectors: this.elements.showMobileCollectorsCheckbox.checked,
                 trackOpacity: parseInt(this.elements.trackOpacitySlider.value, 10),
                 showKnownDrones: this.elements.showKnownDrones.checked,
+                showTrustedDrones: this.elements.showTrustedDrones.checked,
                 showUnknownDrones: this.elements.showUnknownDrones.checked,
                 darkMode: this.elements.darkModeCheckbox.checked,
                 colorMode: MapController.colorMode === 'height' ? 'height' : 'drone',
@@ -1216,6 +1225,10 @@ const UIController = {
             if (saved.showKnownDrones !== undefined) {
                 this.elements.showKnownDrones.checked = saved.showKnownDrones;
                 this.showKnownDrones = saved.showKnownDrones;
+            }
+            if (saved.showTrustedDrones !== undefined) {
+                this.elements.showTrustedDrones.checked = saved.showTrustedDrones;
+                this.showTrustedDrones = saved.showTrustedDrones;
             }
             if (saved.showUnknownDrones !== undefined) {
                 this.elements.showUnknownDrones.checked = saved.showUnknownDrones;
@@ -1259,10 +1272,51 @@ const UIController = {
     },
 
     /**
+     * Get the configured alias entry for a drone, or null if unlisted.
+     * Accepts the legacy string form as well as the extended
+     * {alias, trusted} object so older cached config payloads still work.
+     */
+    getDroneAliasEntry(uasId) {
+        const entry = this.droneAliases[uasId];
+        if (!entry) return null;
+        if (typeof entry === 'string') return { alias: entry, trusted: false };
+        return entry;
+    },
+
+    /**
      * Get display name for drone (alias or uas_id)
      */
     getDroneName(uasId) {
-        return this.droneAliases[uasId] || uasId;
+        const entry = this.getDroneAliasEntry(uasId);
+        return entry ? entry.alias : uasId;
+    },
+
+    /**
+     * True if the drone is aliased and marked trusted.
+     */
+    isDroneTrusted(uasId) {
+        const entry = this.getDroneAliasEntry(uasId);
+        return !!(entry && entry.trusted);
+    },
+
+    /**
+     * Trust tier for a drone: 'unknown' (not in config), 'known' (aliased but
+     * not trusted) or 'trusted' (aliased with trusted: true).
+     */
+    droneTrustLevel(uasId) {
+        const entry = this.getDroneAliasEntry(uasId);
+        if (!entry) return 'unknown';
+        return entry.trusted ? 'trusted' : 'known';
+    },
+
+    /**
+     * Apply the unknown/known/trusted drone visibility settings.
+     */
+    _isDroneVisible(drone) {
+        const level = this.droneTrustLevel(drone.uas_id);
+        if (level === 'trusted') return this.showTrustedDrones;
+        if (level === 'known') return this.showKnownDrones;
+        return this.showUnknownDrones;
     },
 
     /**
@@ -1711,13 +1765,8 @@ const UIController = {
             // Get all current drones from the merged map
             let drones = Object.values(this.droneMap);
 
-            // Filter by known/unknown drone visibility
-            drones = drones.filter(d => {
-                const isKnown = !!this.droneAliases[d.uas_id];
-                if (isKnown && !this.showKnownDrones) return false;
-                if (!isKnown && !this.showUnknownDrones) return false;
-                return true;
-            });
+            // Filter by unknown/known/trusted drone visibility
+            drones = drones.filter(d => this._isDroneVisible(d));
 
             // Filter to the active search focus (UAS or single session)
             drones = this._applySearchFilter(drones);
@@ -2187,12 +2236,7 @@ const UIController = {
 
         // Re-render the UAS view
         const allDrones = Object.values(this.droneMap);
-        let filtered = allDrones.filter(d => {
-            const isKnown = !!this.droneAliases[d.uas_id];
-            if (isKnown && !this.showKnownDrones) return false;
-            if (!isKnown && !this.showUnknownDrones) return false;
-            return true;
-        });
+        let filtered = allDrones.filter(d => this._isDroneVisible(d));
         filtered = this._applySearchFilter(filtered);
         this._droneListCacheKey = null;
         this._renderUASView(filtered);
@@ -2555,12 +2599,7 @@ const UIController = {
 
         // Re-render with current drone data
         const drones = Object.values(this.droneMap);
-        let filtered = drones.filter(d => {
-            const isKnown = !!this.droneAliases[d.uas_id];
-            if (isKnown && !this.showKnownDrones) return false;
-            if (!isKnown && !this.showUnknownDrones) return false;
-            return true;
-        });
+        let filtered = drones.filter(d => this._isDroneVisible(d));
         filtered = this._applySearchFilter(filtered);
         this._updateDroneList(filtered);
     },
@@ -2683,15 +2722,11 @@ const UIController = {
     },
 
     /**
-     * All drones in the map filtered by the known/unknown visibility settings.
+     * All drones in the map filtered by the unknown/known/trusted visibility
+     * settings.
      */
-    _filterKnownUnknownDrones() {
-        return Object.values(this.droneMap).filter(d => {
-            const isKnown = !!this.droneAliases[d.uas_id];
-            if (isKnown && !this.showKnownDrones) return false;
-            if (!isKnown && !this.showUnknownDrones) return false;
-            return true;
-        });
+    _filterVisibleDrones() {
+        return Object.values(this.droneMap).filter(d => this._isDroneVisible(d));
     },
 
     /**
@@ -2780,7 +2815,7 @@ const UIController = {
         this.loadedTracks = new Map();
 
         this._droneListCacheKey = null;
-        this._updateDroneList(this._applySearchFilter(this._filterKnownUnknownDrones()));
+        this._updateDroneList(this._applySearchFilter(this._filterVisibleDrones()));
         await this._batchLoadTracks([newest], true);
         MapController.fitToSession(newest.uas_id, newest.computed_session_id);
         this._updateReplayButtonState();
@@ -2815,7 +2850,7 @@ const UIController = {
         this.loadedTracks = new Map();
 
         this._droneListCacheKey = null;
-        this._updateDroneList(this._applySearchFilter(this._filterKnownUnknownDrones()));
+        this._updateDroneList(this._applySearchFilter(this._filterVisibleDrones()));
         await this._batchLoadTracks([session], true);
         MapController.fitToSession(session.uas_id, session.computed_session_id);
         this._updateReplayButtonState();

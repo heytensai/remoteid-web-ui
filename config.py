@@ -97,6 +97,38 @@ def normalize_frequency(value: Optional[str]) -> Optional[str]:
     return FREQUENCY_ALIASES.get(label)
 
 
+# Drone trust tiers. A drone with no ``drone_aliases`` entry is *unknown*; an
+# entry gives it an alias (*known*); ``trusted: true`` additionally marks it as
+# trusted to fly into geozones (*trusted*).
+DRONE_TRUST_UNKNOWN = "unknown"
+DRONE_TRUST_KNOWN = "known"
+DRONE_TRUST_TRUSTED = "trusted"
+DRONE_TRUST_LEVELS = (DRONE_TRUST_UNKNOWN, DRONE_TRUST_KNOWN, DRONE_TRUST_TRUSTED)
+
+# Strings accepted for the ``trusted`` boolean in the extended alias format
+# (YAML parses unquoted true/false as bool, but quoted values arrive as str).
+TRUTHY_STRINGS = {"true", "yes", "on", "1"}
+FALSY_STRINGS = {"false", "no", "off", "0"}
+
+
+@dataclass(frozen=True)
+class DroneAlias:
+    """A configured drone identity: friendly alias name plus trust flag.
+
+    Parsed from either the legacy shorthand (``uas_id: "Name"``) or the
+    extended format (``uas_id: {alias: "Name", trusted: true}``). The legacy
+    shorthand always yields ``trusted=False``.
+    """
+
+    alias: str
+    trusted: bool = False
+
+    @property
+    def trust_level(self) -> str:
+        """Return the drone trust tier for this alias."""
+        return DRONE_TRUST_TRUSTED if self.trusted else DRONE_TRUST_KNOWN
+
+
 @dataclass
 class WaypointConfig: # pylint: disable=too-many-instance-attributes
     """Custom waypoint displayed on the map"""
@@ -245,7 +277,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
     waypoints: List[WaypointConfig] = field(default_factory=list)
     api_keys: dict = field(default_factory=dict)
     url_prefix: str = ""
-    drone_aliases: dict = field(default_factory=dict)
+    drone_aliases: Dict[str, DroneAlias] = field(default_factory=dict)
     manufacturer_prefixes: dict = field(default_factory=dict)
     use_metric: bool = True
     session_detection: SessionDetectionConfig = field(default_factory=SessionDetectionConfig)
@@ -305,8 +337,8 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         # API key configuration: api_key -> source name
         self.api_keys = web_data.get("api_keys") or {}
 
-        # Drone aliases: uas_id -> friendly name
-        self.drone_aliases = web_data.get("drone_aliases") or {}
+        # Drone aliases: uas_id -> DroneAlias (friendly name + trusted flag)
+        self.drone_aliases = self._parse_drone_aliases(web_data.get("drone_aliases"))
 
         # Manufacturer prefixes: serial prefix -> manufacturer name
         self.manufacturer_prefixes = web_data.get("manufacturer_prefixes") or {}
@@ -335,6 +367,102 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         self.server_url = web_data.get("server_url", "")
         self.secure_cookies = web_data.get("secure_cookies", False)
         self.notifications = self._parse_notifications(web_data.get("notifications") or [])
+
+    @staticmethod
+    def _parse_drone_aliases(aliases_data) -> Dict[str, DroneAlias]:
+        """Parse the ``drone_aliases`` mapping into ``DroneAlias`` entries.
+
+        Two per-entry formats are accepted:
+
+        * legacy shorthand — ``uas_id: "Friendly Name"`` (always untrusted)
+        * extended mapping — ``uas_id: {alias: "Friendly Name", trusted: bool}``
+
+        Raises:
+            ValueError: if the section or an entry has an unusable shape.
+        """
+        if aliases_data is None:
+            return {}
+        if not isinstance(aliases_data, dict):
+            raise ValueError(
+                "drone_aliases must be a mapping of uas_id -> alias, got "
+                f"{type(aliases_data).__name__}"
+            )
+
+        aliases: Dict[str, DroneAlias] = {}
+        for uas_id, entry in aliases_data.items():
+            aliases[str(uas_id)] = WebConfig._parse_drone_alias(str(uas_id), entry)
+        return aliases
+
+    @staticmethod
+    def _parse_drone_alias(uas_id: str, entry) -> DroneAlias:
+        """Parse one ``drone_aliases`` entry in either supported format."""
+        if isinstance(entry, str):
+            name, trusted = entry, False
+        elif isinstance(entry, dict):
+            unknown_keys = set(entry) - {"alias", "trusted"}
+            if unknown_keys:
+                logger.warning(
+                    "drone_aliases[%s]: ignoring unknown key(s): %s",
+                    uas_id, ", ".join(sorted(unknown_keys)),
+                )
+            name = entry.get("alias")
+            trusted = WebConfig._parse_alias_trusted(uas_id, entry.get("trusted", False))
+        else:
+            raise ValueError(
+                f"drone_aliases[{uas_id!r}] must be a string alias or a mapping "
+                f"with 'alias'/'trusted', got {type(entry).__name__}"
+            )
+
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(
+                f"drone_aliases[{uas_id!r}].alias must be a non-empty string, got {name!r}"
+            )
+        return DroneAlias(alias=name.strip(), trusted=trusted)
+
+    @staticmethod
+    def _parse_alias_trusted(uas_id: str, value) -> bool:
+        """Coerce the ``trusted`` flag to a bool, rejecting unusable values."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in TRUTHY_STRINGS:
+                return True
+            if lowered in FALSY_STRINGS:
+                return False
+        raise ValueError(
+            f"drone_aliases[{uas_id!r}].trusted must be a boolean, got {value!r}"
+        )
+
+    def get_drone_alias(self, uas_id: str) -> Optional[DroneAlias]:
+        """Return the :class:`DroneAlias` for a UAS ID, or ``None`` if unknown."""
+        return self.drone_aliases.get(uas_id)
+
+    def get_drone_name(self, uas_id: str) -> str:
+        """Return the friendly alias for a UAS ID, falling back to the raw ID."""
+        entry = self.drone_aliases.get(uas_id)
+        return entry.alias if entry else uas_id
+
+    def is_drone_known(self, uas_id: str) -> bool:
+        """True if the UAS ID has a configured alias (trusted or not)."""
+        return uas_id in self.drone_aliases
+
+    def is_drone_trusted(self, uas_id: str) -> bool:
+        """True if the UAS ID has an alias marked ``trusted: true``."""
+        entry = self.drone_aliases.get(uas_id)
+        return bool(entry and entry.trusted)
+
+    def drone_trust_level(self, uas_id: str) -> str:
+        """Return the trust tier (``unknown``/``known``/``trusted``) for a UAS ID."""
+        entry = self.drone_aliases.get(uas_id)
+        return entry.trust_level if entry else DRONE_TRUST_UNKNOWN
+
+    def drone_aliases_dict(self) -> dict:
+        """Return drone aliases as JSON-safe ``{uas_id: {alias, trusted}}``."""
+        return {
+            uas_id: {"alias": entry.alias, "trusted": entry.trusted}
+            for uas_id, entry in self.drone_aliases.items()
+        }
 
     def _parse_roles(self, roles_data: dict) -> Dict[str, RoleConfig]:
         """Parse role configuration from raw data."""
@@ -550,6 +678,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 for w in self.waypoints
             ],
             "use_metric": self.use_metric,
+            "drone_aliases": self.drone_aliases_dict(),
             "alerts": {
                 "stale_timeout": self.alerts.stale_timeout,
                 "skip_known_drones": self.alerts.skip_known_drones,

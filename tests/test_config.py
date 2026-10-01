@@ -9,7 +9,7 @@ import yaml
 from config import (
     WebConfig, MapConfig, WaypointConfig, RoleConfig, MaintenanceConfig,
     NotificationTargetConfig, VALID_NOTIFIER_TYPES, _normalize_color,
-    normalize_frequency, UNKNOWN_FREQUENCY,
+    normalize_frequency, UNKNOWN_FREQUENCY, DroneAlias, DRONE_TRUST_TRUSTED,
 )
 
 
@@ -137,7 +137,10 @@ def test_web_config_full():
             assert cfg.map.center_lat == 51.5
             assert cfg.map.tile_provider == "carto-light"
             assert cfg.api_keys == {"key1": "source1"}
-            assert cfg.drone_aliases == {"abc": "Drone-ABC"}
+            assert cfg.drone_aliases == {"abc": DroneAlias(alias="Drone-ABC", trusted=False)}
+            assert cfg.get_drone_name("abc") == "Drone-ABC"
+            assert cfg.drone_trust_level("abc") == "known"
+            assert cfg.is_drone_trusted("abc") is False
             assert cfg.alerts.stale_timeout == 600
             assert cfg.alerts.skip_known_drones is True
         finally:
@@ -739,6 +742,148 @@ class TestApiKeysHotReload:
             cfg.reload_hot_config()
 
         assert not any("Reloaded api_keys" in msg for msg in caplog.messages)
+
+
+# --- Drone alias / trust tier tests ---
+
+
+def test_drone_alias_legacy_shorthand_is_untrusted():
+    cfg = WebConfig(_write_config({"drone_aliases": {"abc": "Drone-ABC"}}))
+    assert cfg.drone_aliases == {"abc": DroneAlias(alias="Drone-ABC", trusted=False)}
+    assert cfg.drone_trust_level("abc") == "known"
+    assert cfg.is_drone_known("abc") is True
+    assert cfg.is_drone_trusted("abc") is False
+
+
+def test_drone_alias_extended_trusted():
+    cfg = WebConfig(_write_config({
+        "drone_aliases": {"abc": {"alias": "Trusted One", "trusted": True}}
+    }))
+    assert cfg.get_drone_alias("abc") == DroneAlias("Trusted One", True)
+    assert cfg.get_drone_name("abc") == "Trusted One"
+    assert cfg.drone_trust_level("abc") == DRONE_TRUST_TRUSTED
+    assert cfg.is_drone_known("abc") is True
+    assert cfg.is_drone_trusted("abc") is True
+
+
+def test_drone_alias_extended_without_trusted_key():
+    cfg = WebConfig(_write_config({"drone_aliases": {"abc": {"alias": "Just Known"}}}))
+    assert cfg.get_drone_alias("abc") == DroneAlias("Just Known", False)
+    assert cfg.is_drone_trusted("abc") is False
+
+
+def test_drone_aliases_mixed_forms():
+    cfg = WebConfig(_write_config({
+        "drone_aliases": {
+            "aaa": "Legacy",
+            "bbb": {"alias": "Trusted", "trusted": True},
+        }
+    }))
+    assert cfg.drone_trust_level("aaa") == "known"
+    assert cfg.drone_trust_level("bbb") == "trusted"
+
+
+def test_drone_alias_unknown_has_no_entry():
+    cfg = WebConfig(_write_config({"drone_aliases": {"abc": "Drone-ABC"}}))
+    assert cfg.get_drone_alias("nope") is None
+    assert cfg.get_drone_name("nope") == "nope"
+    assert cfg.drone_trust_level("nope") == "unknown"
+    assert cfg.is_drone_known("nope") is False
+    assert cfg.is_drone_trusted("nope") is False
+
+
+def test_drone_aliases_dict_is_json_safe():
+    cfg = WebConfig(_write_config({
+        "drone_aliases": {
+            "aaa": "Legacy",
+            "bbb": {"alias": "Trusted", "trusted": True},
+        }
+    }))
+    assert cfg.drone_aliases_dict() == {
+        "aaa": {"alias": "Legacy", "trusted": False},
+        "bbb": {"alias": "Trusted", "trusted": True},
+    }
+
+
+def test_drone_aliases_in_to_dict():
+    cfg = WebConfig(_write_config({
+        "drone_aliases": {"abc": {"alias": "Trusted", "trusted": True}}
+    }))
+    assert cfg.to_dict()["drone_aliases"] == {
+        "abc": {"alias": "Trusted", "trusted": True}
+    }
+
+
+def test_drone_alias_trusted_accepts_bool_strings():
+    cfg = WebConfig(_write_config({
+        "drone_aliases": {
+            "yes": {"alias": "Yes", "trusted": "yes"},
+            "off": {"alias": "Off", "trusted": "off"},
+        }
+    }))
+    assert cfg.is_drone_trusted("yes") is True
+    assert cfg.is_drone_trusted("off") is False
+
+
+def test_drone_alias_blank_alias_rejected():
+    with pytest.raises(ValueError, match="non-empty string"):
+        WebConfig(_write_config({"drone_aliases": {"abc": "   "}}))
+
+
+def test_drone_alias_missing_alias_key_rejected():
+    with pytest.raises(ValueError, match="non-empty string"):
+        WebConfig(_write_config({"drone_aliases": {"abc": {"trusted": True}}}))
+
+
+def test_drone_alias_non_bool_trusted_rejected():
+    with pytest.raises(ValueError, match="must be a boolean"):
+        WebConfig(_write_config({
+            "drone_aliases": {"abc": {"alias": "A", "trusted": "maybe"}}
+        }))
+
+
+def test_drone_aliases_non_mapping_rejected():
+    with pytest.raises(ValueError, match="drone_aliases must be a mapping"):
+        WebConfig(_write_config({"drone_aliases": ["abc"]}))
+
+
+def test_drone_aliases_empty_section_is_allowed():
+    cfg = WebConfig(_write_config({"drone_aliases": {}}))
+    assert cfg.drone_aliases == {}
+
+
+def test_drone_aliases_entry_wrong_type_rejected():
+    with pytest.raises(ValueError, match="must be a string alias or a mapping"):
+        WebConfig(_write_config({"drone_aliases": {"abc": 42}}))
+
+
+def test_drone_aliases_unknown_keys_ignored(caplog):
+    with caplog.at_level("WARNING"):
+        cfg = WebConfig(_write_config({
+            "drone_aliases": {"abc": {"alias": "A", "trusted": True, "colour": "red"}}
+        }))
+    assert cfg.get_drone_name("abc") == "A"
+    assert any("colour" in msg for msg in caplog.messages)
+
+
+def test_drone_aliases_hot_reload_detects_trust_change(sample_config_yaml):
+    cfg = WebConfig(sample_config_yaml)
+    assert cfg.is_drone_trusted("drone-001") is False
+
+    with open(sample_config_yaml, "w", encoding="utf-8") as fh:
+        fh.write(
+            "web_interface:\n"
+            "  drone_aliases:\n"
+            "    drone-001:\n"
+            "      alias: Alpha\n"
+            "      trusted: true\n"
+        )
+
+    new_cfg = cfg.reload_hot_config()
+    assert new_cfg is not None
+    assert new_cfg.is_drone_trusted("drone-001") is True
+    # Original snapshot is never mutated
+    assert cfg.is_drone_trusted("drone-001") is False
 
 
 # --- Role configuration tests ---

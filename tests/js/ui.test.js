@@ -238,6 +238,81 @@ describe('UIController', () => {
     });
   });
 
+  describe('drone trust tiers', () => {
+    beforeEach(() => {
+      UIController.droneAliases = {
+        'drone-known': { alias: 'Known', trusted: false },
+        'drone-trusted': { alias: 'Trusted', trusted: true },
+      };
+      UIController.showUnknownDrones = true;
+      UIController.showKnownDrones = true;
+      UIController.showTrustedDrones = true;
+    });
+
+    test('getDroneAliasEntry returns null for unlisted drones', () => {
+      expect(UIController.getDroneAliasEntry('drone-other')).toBeNull();
+    });
+
+    test('getDroneAliasEntry tolerates the legacy string shape', () => {
+      UIController.droneAliases = { 'drone-001': 'Alpha' };
+      expect(UIController.getDroneAliasEntry('drone-001')).toEqual({
+        alias: 'Alpha',
+        trusted: false,
+      });
+    });
+
+    test('getDroneName falls back to the raw uas id', () => {
+      expect(UIController.getDroneName('drone-trusted')).toBe('Trusted');
+      expect(UIController.getDroneName('drone-other')).toBe('drone-other');
+    });
+
+    test('droneTrustLevel reports unknown / known / trusted', () => {
+      expect(UIController.droneTrustLevel('drone-other')).toBe('unknown');
+      expect(UIController.droneTrustLevel('drone-known')).toBe('known');
+      expect(UIController.droneTrustLevel('drone-trusted')).toBe('trusted');
+    });
+
+    test('isDroneTrusted is true only for trusted entries', () => {
+      expect(UIController.isDroneTrusted('drone-trusted')).toBe(true);
+      expect(UIController.isDroneTrusted('drone-known')).toBe(false);
+      expect(UIController.isDroneTrusted('drone-other')).toBe(false);
+    });
+
+    test('_isDroneVisible honors the three visibility toggles independently', () => {
+      const known = { uas_id: 'drone-known' };
+      const trusted = { uas_id: 'drone-trusted' };
+      const unknown = { uas_id: 'drone-other' };
+
+      UIController.showKnownDrones = false;
+      expect(UIController._isDroneVisible(known)).toBe(false);
+      expect(UIController._isDroneVisible(trusted)).toBe(true);
+      expect(UIController._isDroneVisible(unknown)).toBe(true);
+
+      UIController.showKnownDrones = true;
+      UIController.showTrustedDrones = false;
+      expect(UIController._isDroneVisible(known)).toBe(true);
+      expect(UIController._isDroneVisible(trusted)).toBe(false);
+
+      UIController.showTrustedDrones = true;
+      UIController.showUnknownDrones = false;
+      expect(UIController._isDroneVisible(unknown)).toBe(false);
+      expect(UIController._isDroneVisible(known)).toBe(true);
+    });
+
+    test('_filterVisibleDrones filters droneMap by trust tier', () => {
+      UIController.droneMap = {
+        a: { uas_id: 'drone-known' },
+        b: { uas_id: 'drone-trusted' },
+        c: { uas_id: 'drone-other' },
+      };
+      UIController.showUnknownDrones = false;
+      expect(UIController._filterVisibleDrones()).toEqual([
+        { uas_id: 'drone-known' },
+        { uas_id: 'drone-trusted' },
+      ]);
+    });
+  });
+
   describe('_haversineDistance', () => {
     test('same point returns 0', () => {
       Units.haversineDistance(37, -122, 37, -122);
@@ -580,6 +655,7 @@ describe('UIController', () => {
       UIController._initialized = false;
       UIController.lastActivityTime = null;
       UIController.showKnownDrones = true;
+      UIController.showTrustedDrones = true;
       UIController.showUnknownDrones = true;
       UIController.droneAliases = {};
       UIController.selectedDrones.clear();
@@ -1101,6 +1177,7 @@ describe('UIController', () => {
       UIController.uasExtraLoading = {};
       UIController.loadedTracks = new Map();
       UIController.showKnownDrones = true;
+      UIController.showTrustedDrones = true;
       UIController.showUnknownDrones = true;
       UIController._dataMode = 'archive';
       UIController.viewMode = 'date';

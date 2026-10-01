@@ -43,11 +43,20 @@ web_interface:
     # "your-secure-api-key-here": "Node-A"
 
   # Drone aliases - map UAS IDs to friendly names
-  # Format: uas_id: "Friendly Name"
+  # Two formats are accepted per entry:
+  #   Format: uas_id: "Friendly Name"                 (known, not trusted)
+  #   Format: uas_id: {alias: "Friendly Name", trusted: true}
+  # Drones without an entry here are "unknown"; aliased drones are "known";
+  # aliased drones with trusted: true are "trusted" (allowed to fly into
+  # geozones). Trust is currently display-only — alerting treats every aliased
+  # drone the same.
+  # (hot-reloadable)
   drone_aliases:
-    # Example:
+    # Examples:
     # "12345": "Skydio X10"
-    # "67890": "DJI Mavic 3"
+    # "67890":
+    #   alias: "DJI Mavic 3"
+    #   trusted: true
 
   # Manufacturer prefixes - map serial number prefixes to manufacturer names
   # The longest matching prefix is used to identify the drone manufacturer.
@@ -178,7 +187,7 @@ web_interface:
     # (hot-reloadable)
     stale_timeout: 300
     # Skip geozone alerts for drones that have an alias configured in
-    # drone_aliases (hot-reloadable)
+    # drone_aliases — trusted or not (hot-reloadable)
     skip_known_drones: false
     # Distance between two drones to trigger a proximity alert.
     # Unit depends on use_metric: meters (true) or feet (false).

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import yaml
 
-from config import WebConfig, AlertsConfig
+from config import WebConfig, AlertsConfig, DroneAlias
 from database import WebDatabase
 from alert_engine import point_in_circle, point_in_rectangle, AlertEngine
 
@@ -369,7 +369,18 @@ def test_reload_config(engine):
 def test_skip_known_drones_skips_aliased(engine):
     """Known (aliased) drones should be skipped when skip_known_drones is enabled"""
     alert_engine, db, config = engine
-    config.drone_aliases["drone-001"] = "Alpha"
+    config.drone_aliases["drone-001"] = DroneAlias("Alpha")
+    config.alerts.skip_known_drones = True
+    now = datetime.now(timezone.utc)
+    alert_engine.evaluate("drone-001", [{"latitude": 37.78, "longitude": -122.42, "timestamp": now}])
+    events = db.get_active_geozone_events()
+    assert len(events) == 0
+
+
+def test_skip_known_drones_skips_trusted(engine):
+    """Trusted drones are also skipped — trust is not yet an alerting input"""
+    alert_engine, db, config = engine
+    config.drone_aliases["drone-001"] = DroneAlias("Alpha", trusted=True)
     config.alerts.skip_known_drones = True
     now = datetime.now(timezone.utc)
     alert_engine.evaluate("drone-001", [{"latitude": 37.78, "longitude": -122.42, "timestamp": now}])
@@ -390,7 +401,7 @@ def test_skip_known_drones_allows_unknown(engine):
 def test_skip_known_drones_false_processes_all(engine):
     """When skip_known_drones is False, aliased drones still trigger alerts"""
     alert_engine, db, config = engine
-    config.drone_aliases["drone-001"] = "Alpha"
+    config.drone_aliases["drone-001"] = DroneAlias("Alpha")
     config.alerts.skip_known_drones = False
     now = datetime.now(timezone.utc)
     alert_engine.evaluate("drone-001", [{"latitude": 37.78, "longitude": -122.42, "timestamp": now}])
@@ -418,7 +429,7 @@ def test_new_session_callback_fired(engine):
     now = datetime.now(timezone.utc)
 
     # Alias the drone so on_new_session fires (not on_unrecognized_drone)
-    config.drone_aliases["drone-001"] = "Alpha"
+    config.drone_aliases["drone-001"] = DroneAlias("Alpha")
 
     # Insert a record so a session is created in the DB
     db.insert_remoteid_records("test", [{
@@ -441,6 +452,32 @@ def test_new_session_callback_fired(engine):
     assert len(calls) == 1
     assert calls[0][0] == "drone-001"
     assert calls[0][1].startswith("session_")
+
+
+def test_trusted_drone_still_uses_new_session_alert(engine):
+    """Trust does not change the new_session vs unrecognized_drone split."""
+    alert_engine, db, config = engine
+    now = datetime.now(timezone.utc)
+
+    config.drone_aliases["drone-001"] = DroneAlias("Alpha", trusted=True)
+
+    db.insert_remoteid_records("test", [{
+        "timestamp": (now - timedelta(hours=2)).isoformat(),
+        "uas_id": "drone-001",
+        "latitude": 37.78,
+        "longitude": -122.42,
+        "altitude": 100,
+    }])
+
+    calls = []
+    alert_engine.on_new_session = lambda uas_id, session_id, first_pos: calls.append(("new_session", uas_id))
+    alert_engine.on_unrecognized_drone = lambda uas_id, session_id, first_pos: calls.append(("unrecognized_drone", uas_id))
+
+    alert_engine.evaluate("drone-001", [
+        {"latitude": 37.78, "longitude": -122.42, "timestamp": now},
+    ])
+
+    assert calls == [("new_session", "drone-001")]
 
 
 def test_new_session_not_fired_for_known(engine):
@@ -476,7 +513,7 @@ def test_new_session_fired_after_gap(engine):
     now = datetime.now(timezone.utc)
 
     # Alias the drone so on_new_session fires (not on_unrecognized_drone)
-    config.drone_aliases["drone-001"] = "Alpha"
+    config.drone_aliases["drone-001"] = DroneAlias("Alpha")
 
     # Insert first flight
     db.insert_remoteid_records("test", [{
@@ -653,7 +690,7 @@ def test_proximity_cooldown_suppresses_duplicate(proximity_engine):
 def test_proximity_uses_aliases(proximity_engine):
     """Callback receives resolved alias names when configured."""
     eng, db, config = proximity_engine
-    config.drone_aliases["drone-A"] = "Alpha"
+    config.drone_aliases["drone-A"] = DroneAlias("Alpha")
     now = datetime.now(timezone.utc)
     _insert_position(db, "drone-A", 37.78, -122.42, now)
     _insert_position(db, "drone-B", 37.7805, -122.42, now)
@@ -782,7 +819,7 @@ def _make_two_engines(engine_db, engine_config_yaml):
 def test_session_alert_fires_once_across_engines(engine_db, engine_config_yaml):
     """A known drone's session alert fires once even when two workers see it."""
     engine_a, engine_b, config = _make_two_engines(engine_db, engine_config_yaml)
-    config.drone_aliases["drone-001"] = "Alpha"
+    config.drone_aliases["drone-001"] = DroneAlias("Alpha")
     now = datetime.now(timezone.utc)
 
     engine_db.insert_remoteid_records("test", [{
@@ -828,7 +865,7 @@ def test_unrecognized_drone_fires_once_across_engines(engine_db, engine_config_y
 def test_new_flight_still_fires_via_other_engine(engine_db, engine_config_yaml):
     """A genuinely new flight notifies even when handled by a different worker."""
     engine_a, engine_b, config = _make_two_engines(engine_db, engine_config_yaml)
-    config.drone_aliases["drone-001"] = "Alpha"
+    config.drone_aliases["drone-001"] = DroneAlias("Alpha")
     now = datetime.now(timezone.utc)
 
     # First flight, seen by engine A

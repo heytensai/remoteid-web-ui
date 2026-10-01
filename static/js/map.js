@@ -306,10 +306,31 @@ const MapController = {
     },
 
     /**
+     * Get the configured alias entry for a drone, or null if unlisted.
+     * Accepts the legacy string form as well as the extended
+     * {alias, trusted} object so older cached config payloads still work.
+     */
+    getDroneAliasEntry(uasId) {
+        const entry = this.droneAliases[uasId];
+        if (!entry) return null;
+        if (typeof entry === 'string') return { alias: entry, trusted: false };
+        return entry;
+    },
+
+    /**
      * Get display name for drone (alias or uas_id)
      */
     getDroneName(uasId) {
-        return this.droneAliases[uasId] || uasId;
+        const entry = this.getDroneAliasEntry(uasId);
+        return entry ? entry.alias : uasId;
+    },
+
+    /**
+     * True if the drone is aliased and marked trusted.
+     */
+    isDroneTrusted(uasId) {
+        const entry = this.getDroneAliasEntry(uasId);
+        return !!(entry && entry.trusted);
     },
 
     /**

@@ -52,7 +52,7 @@ global.L = {
 global.API = {
   getConfig: jest.fn().mockResolvedValue({
     map: { center_lat: 37, center_lon: -122, default_zoom: 11 },
-    drone_aliases: { 'drone-001': 'Alpha' },
+    drone_aliases: { 'drone-001': { alias: 'Alpha', trusted: false } },
   }),
   getTrack: jest.fn().mockResolvedValue({ sessions: [] }),
 };
@@ -174,7 +174,9 @@ describe('MapController', () => {
 
   describe('getDroneName', () => {
     test('returns alias if available', () => {
-      MapController.droneAliases = { 'drone-001': 'Alpha' };
+      MapController.droneAliases = {
+        'drone-001': { alias: 'Alpha', trusted: false },
+      };
       expect(MapController.getDroneName('drone-001')).toBe('Alpha');
     });
 
@@ -186,6 +188,31 @@ describe('MapController', () => {
 
     test('returns uas_id when aliases empty', () => {
       expect(MapController.getDroneName('drone-001')).toBe('drone-001');
+    });
+
+    test('tolerates the legacy string alias shape', () => {
+      MapController.droneAliases = { 'drone-001': 'Alpha' };
+      expect(MapController.getDroneName('drone-001')).toBe('Alpha');
+    });
+  });
+
+  describe('isDroneTrusted', () => {
+    test('true only for aliased drones with trusted flag', () => {
+      MapController.droneAliases = {
+        'drone-001': { alias: 'Alpha', trusted: false },
+        'drone-002': { alias: 'Trusted', trusted: true },
+      };
+      expect(MapController.isDroneTrusted('drone-001')).toBe(false);
+      expect(MapController.isDroneTrusted('drone-002')).toBe(true);
+    });
+
+    test('false for unlisted drones', () => {
+      expect(MapController.isDroneTrusted('unknown-drone')).toBe(false);
+    });
+
+    test('false for the legacy string alias shape', () => {
+      MapController.droneAliases = { 'drone-001': 'Alpha' };
+      expect(MapController.isDroneTrusted('drone-001')).toBe(false);
     });
   });
 

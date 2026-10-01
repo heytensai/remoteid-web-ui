@@ -44,7 +44,8 @@ class TestApiConfig:
         assert "stale_timeout" in data
         assert data["stale_timeout"] == 300
         assert data["map"]["center_lat"] == 37.7749
-        assert data["drone_aliases"]["drone-001"] == "Alpha"
+        assert data["drone_aliases"]["drone-001"] == {"alias": "Alpha", "trusted": False}
+        assert data["drone_aliases"]["drone-003"] == {"alias": "Trusted", "trusted": True}
         assert data["waypoints"] == []
         assert data["m_per_deg_lat"] == 111320
 

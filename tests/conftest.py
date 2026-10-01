@@ -106,7 +106,11 @@ def sample_config_yaml(_truncate_db):
                 "tile_provider": "osm",
             },
             "api_keys": {SAMPLE_API_KEY: "test-source"},
-            "drone_aliases": {"drone-001": "Alpha", "drone-002": "Bravo"},
+            "drone_aliases": {
+                "drone-001": "Alpha",
+                "drone-002": "Bravo",
+                "drone-003": {"alias": "Trusted", "trusted": True},
+            },
             "use_metric": True,
             "roles": {
                 "operator": {

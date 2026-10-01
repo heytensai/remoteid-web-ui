@@ -43,7 +43,7 @@ This file is the user's personal, gitignored configuration. Even if it contains 
 - `max_positions_per_query` - Limit to prevent browser lag
 - `use_metric` - Display units: true=metric (meters), false=imperial (feet)
 - `api_keys` - API keys for remote data submission (hot-reloadable)
-- `drone_aliases` - Map UAS IDs to friendly names
+- `drone_aliases` - Map UAS IDs to friendly names, with an optional `trusted` flag (see "Drone Trust Tiers")
 - `waypoints` - Custom map markers (name, lat, lon, icon, color, description, enabled, category)
 - `session_detection` - Background session detection settings (enabled, interval, gap_threshold, log_level)
 - `proximity_distance` - Distance for drone proximity alerts (meters if use_metric true, feet if false; default: 100)
@@ -55,6 +55,64 @@ This file is the user's personal, gitignored configuration. Even if it contains 
 - `secure_cookies` - When true, session cookies are marked Secure (set this when serving over HTTPS behind a reverse proxy). Default: false
 - `notifications` - List of notification targets (name, type, events[], webhook_url). Supported types: discord, ntfy, teams, mqtt. MQTT targets also accept `broker_url` (mqtt:// or mqtts://) and `topic_prefix` (messages publish to `{topic_prefix}/{event}` as JSON), plus optional `username`/`password`. Events: geozone_enter, geozone_exit, new_session, unrecognized_drone, drone_proximity. If empty, notifications disabled. (hot-reloadable)
   - Templates in `templates/notifications/<type>/<event>.j2` are user-customizable. They receive raw values (altitude in meters MSL, height in meters, height_type, lat/lon, use_metric). A Jinja global `format_altitude(altitude, height, height_type, use_metric)` (defined in `notifier.py`) renders a compact display string like `200ft AGL (4500ft MSL)`; use it instead of duplicating unit math in templates. All 5 events carry altitude/height data today, so templates can rely on these fields being present (may be `None` for legacy/absent telemetry — guard with `is defined and is not none`).
+
+## Drone Trust Tiers
+
+Every drone falls into exactly one of three tiers:
+
+| Tier | Meaning |
+|---|---|
+| `unknown` | No entry in `drone_aliases` |
+| `known` | Has an alias, `trusted` is false/absent |
+| `trusted` | Has an alias with `trusted: true` — trusted to fly into geozones |
+
+### Config Formats
+
+Both per-entry forms are accepted and normalize to the same internal structure:
+
+```yaml
+drone_aliases:
+  "12345": "Skydio X10"                    # legacy shorthand -> known
+  "67890":
+    alias: "DJI Mavic 3"                   # extended form -> trusted
+    trusted: true
+```
+
+`config.WebConfig._parse_drone_aliases()` parses both into
+`drone_aliases: Dict[str, DroneAlias]` (a frozen dataclass of `alias` + `trusted`;
+`DroneAlias.trust_level` returns the tier). Malformed entries (non-mapping section,
+missing/blank `alias`, non-boolean `trusted`) raise `ValueError` — the same failure
+path as other invalid config, so a hot reload keeps the last good snapshot. Unknown
+sub-keys are logged and ignored. Legacy shorthand is always untrusted.
+
+### Accessors (use these, not `drone_aliases` directly)
+
+- `get_drone_alias(uas_id)` → `DroneAlias | None`
+- `get_drone_name(uas_id)` → alias string, falling back to the raw UAS ID
+- `is_drone_known(uas_id)` → has any alias
+- `is_drone_trusted(uas_id)` → aliased **and** `trusted: true`
+- `drone_trust_level(uas_id)` → `"unknown"` / `"known"` / `"trusted"`
+- `drone_aliases_dict()` → JSON-safe `{uas_id: {alias, trusted}}` (what `/api/config` ships)
+
+`DroneAlias`, `DRONE_TRUST_*` constants live in `config.py`.
+
+### Alerting Is Unchanged By Trust
+
+Trust is **display-only** today. Any aliased drone counts as known, so
+`alerts.skip_known_drones` and the `unrecognized_drone` vs `new_session` split in
+`alert_engine.py` behave exactly as before. Introducing trust into alerting is a
+deliberate follow-up change.
+
+### Frontend
+
+`/api/config` returns the normalized `{alias, trusted}` objects.
+`MapController`/`UIController` expose `getDroneAliasEntry()` (tolerates the legacy
+string shape for cached payloads), `getDroneName()`, `isDroneTrusted()` and
+`droneTrustLevel()`. The Settings → *Drone Visibility* section has three independent
+checkboxes — `showUnknownDrones`, `showKnownDrones` (untrusted aliases only), and
+`showTrustedDrones` — persisted in `localStorage.remoteid_settings`. All drone-list
+filtering goes through `UIController._isDroneVisible(drone)`; do not re-derive
+known/unknown inline (that duplication was removed).
 
 ## Database Schema Versioning
 
