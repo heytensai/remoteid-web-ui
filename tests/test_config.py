@@ -1237,7 +1237,7 @@ def test_parse_notifications_mqtt():
                 "topic_prefix": "remoteid/alerts",
                 "username": "remoteid",
                 "password": "secret",
-                "events": ["geozone_enter", "new_session"],
+                "events": ["geozone_enter", "new_known"],
             },
         ],
     }
@@ -1252,7 +1252,7 @@ def test_parse_notifications_mqtt():
         assert nt.topic_prefix == "remoteid/alerts"
         assert nt.username == "remoteid"
         assert nt.password == "secret"
-        assert nt.events == ["geozone_enter", "new_session"]
+        assert nt.events == ["geozone_enter", "new_known"]
     finally:
         os.unlink(path)
 
@@ -1266,7 +1266,7 @@ def test_parse_notifications_ntfy():
                 "type": "ntfy",
                 "webhook_url": "https://ntfy.sh/mytopic",
                 "token": "tk_secret",
-                "events": ["geozone_enter", "new_session"],
+                "events": ["geozone_enter", "new_known"],
             },
         ],
     }
@@ -1279,7 +1279,7 @@ def test_parse_notifications_ntfy():
         assert nt.type == "ntfy"
         assert nt.webhook_url == "https://ntfy.sh/mytopic"
         assert nt.token == "tk_secret"
-        assert nt.events == ["geozone_enter", "new_session"]
+        assert nt.events == ["geozone_enter", "new_known"]
     finally:
         os.unlink(path)
 
@@ -1367,15 +1367,68 @@ def test_parse_notifications_enabled_defaults_true():
         os.unlink(path)
 
 
+def test_parse_notifications_removed_event_raises():
+    """A config still using new_session / unrecognized_drone fails loudly."""
+    for removed in ("new_session", "unrecognized_drone"):
+        config_data = {
+            "database_url": "postgresql://test:test@localhost:5432/test",
+            "notifications": [
+                {
+                    "name": "Stale Target",
+                    "type": "ntfy",
+                    "webhook_url": "https://ntfy.sh/topic",
+                    "events": ["geozone_enter", removed],
+                },
+            ],
+        }
+        path = _write_config(config_data)
+        try:
+            with pytest.raises(ValueError, match="new_unknown"):
+                WebConfig(path)
+        finally:
+            os.unlink(path)
+
+
+def test_alerts_skip_trusted_drones():
+    config_data = {
+        "database_url": "postgresql://test:test@localhost:5432/test",
+        "alerts": {
+            "stale_timeout": 300,
+            "skip_known_drones": True,
+            "skip_trusted_drones": True,
+        },
+    }
+    path = _write_config(config_data)
+    try:
+        cfg = WebConfig(path)
+        assert cfg.alerts.skip_known_drones is True
+        assert cfg.alerts.skip_trusted_drones is True
+    finally:
+        os.unlink(path)
+
+
+def test_alerts_skip_trusted_drones_defaults_false():
+    config_data = {
+        "database_url": "postgresql://test:test@localhost:5432/test",
+        "alerts": {"stale_timeout": 300},
+    }
+    path = _write_config(config_data)
+    try:
+        cfg = WebConfig(path)
+        assert cfg.alerts.skip_trusted_drones is False
+    finally:
+        os.unlink(path)
+
+
 def test_parse_notifications_multiple_types():
     config_data = {
         "database_url": "postgresql://test:test@localhost:5432/test",
         "notifications": [
             {"name": "Discord", "type": "discord", "webhook_url": "https://discord.com/api/webhooks/...", "events": ["geozone_enter"]},
-            {"name": "Discord2", "type": "discord", "webhook_url": "https://discord.com/api/webhooks/...", "events": ["new_session"]},
-            {"name": "Teams", "type": "teams", "webhook_url": "https://example.webhook.office.com/webhookb2/...", "events": ["geozone_enter", "new_session"]},
-            {"name": "ntfy", "type": "ntfy", "webhook_url": "https://ntfy.sh/t", "token": "tk_x", "events": ["geozone_enter", "new_session"]},
-            {"name": "MQTT Feed", "type": "mqtt", "broker_url": "mqtt://mqtt.example.com:1883", "topic_prefix": "remoteid/alerts", "events": ["geozone_enter", "new_session"]},
+            {"name": "Discord2", "type": "discord", "webhook_url": "https://discord.com/api/webhooks/...", "events": ["new_known"]},
+            {"name": "Teams", "type": "teams", "webhook_url": "https://example.webhook.office.com/webhookb2/...", "events": ["geozone_enter", "new_known"]},
+            {"name": "ntfy", "type": "ntfy", "webhook_url": "https://ntfy.sh/t", "token": "tk_x", "events": ["geozone_enter", "new_known"]},
+            {"name": "MQTT Feed", "type": "mqtt", "broker_url": "mqtt://mqtt.example.com:1883", "topic_prefix": "remoteid/alerts", "events": ["geozone_enter", "new_known"]},
         ],
     }
     path = _write_config(config_data)

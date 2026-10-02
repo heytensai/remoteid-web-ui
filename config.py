@@ -7,8 +7,17 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 import yaml
 
-VALID_EVENTS = {"geozone_enter", "geozone_exit", "new_session", "unrecognized_drone", "drone_proximity"}
+VALID_EVENTS = {"geozone_enter", "geozone_exit", "new_unknown", "new_known",
+                "new_trusted", "drone_proximity"}
 VALID_NOTIFIER_TYPES = {"discord", "ntfy", "teams", "mqtt"}
+
+# Event names that were replaced by the trust-tier flight events. They are
+# rejected with an explicit error rather than silently dropped so a stale
+# config surfaces the rename instead of quietly disabling an alert target.
+REMOVED_EVENTS = {
+    "new_session": ("new_unknown", "new_known", "new_trusted"),
+    "unrecognized_drone": ("new_unknown", "new_known", "new_trusted"),
+}
 
 # Map marker colors are interpolated into inline ``style="color: ...;"``
 # attributes, so only values that cannot break out of the attribute or inject
@@ -189,7 +198,7 @@ class NotificationTargetConfig:
 
     name: str
     type: str  # "discord", "ntfy", "teams", or "mqtt"
-    events: List[str]  # subset of ["geozone_enter", "geozone_exit", "new_session", "unrecognized_drone"]
+    events: List[str]  # subset of VALID_EVENTS
     enabled: bool = True
     webhook_url: str = ""
     token: str = ""  # ntfy Bearer auth token (mutually exclusive with username/password)
@@ -224,7 +233,12 @@ class AlertsConfig:
     """Alerting configuration"""
 
     stale_timeout: int = 300  # seconds without position before marking as left
-    skip_known_drones: bool = False  # skip alerts for drones with aliases
+    # Geozone alerting suppression, per drone trust tier. ``skip_known_drones``
+    # covers aliased-but-untrusted drones and ``skip_trusted_drones`` covers
+    # drones with ``trusted: true``, so operators can silence either tier
+    # independently. Unknown drones are never suppressed.
+    skip_known_drones: bool = False
+    skip_trusted_drones: bool = False
     cooldown: dict = None  # per-event cooldowns in seconds
     proximity_distance: float = 100.0  # meters — drone proximity threshold (converted at init)
 
@@ -232,6 +246,7 @@ class AlertsConfig:
         if data:
             self.stale_timeout = data.get("stale_timeout", 300)
             self.skip_known_drones = data.get("skip_known_drones", False)
+            self.skip_trusted_drones = data.get("skip_trusted_drones", False)
             self.cooldown = data.get("cooldown") or {}
             raw = data.get("proximity_distance", 100.0)
             if not use_metric:
@@ -535,10 +550,26 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         return collectors
 
     def _parse_notifications(self, data: list) -> list:
-        """Parse notification target configuration from raw data."""
+        """Parse notification target configuration from raw data.
+
+        Raises ``ValueError`` when a target still references an event that has
+        been replaced (see :data:`REMOVED_EVENTS`) so a stale config fails loudly
+        rather than quietly dropping alerts. Genuinely unrecognized events are
+        still logged and ignored, preserving the long-standing lenient behavior
+        for typos.
+        """
         targets = []
         for nt in data:
             events = nt.get("events", [])
+            for event in events:
+                if event in REMOVED_EVENTS:
+                    replacements = ", ".join(REMOVED_EVENTS[event])
+                    raise ValueError(
+                        f"Notification target {nt.get('name')!r}: event "
+                        f"{event!r} has been replaced — use one of "
+                        f"{replacements} (drone trust tier: unknown, known "
+                        f"untrusted, or trusted)"
+                    )
             unknown = [e for e in events if e not in VALID_EVENTS]
             if unknown:
                 logger.warning(
@@ -682,6 +713,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
             "alerts": {
                 "stale_timeout": self.alerts.stale_timeout,
                 "skip_known_drones": self.alerts.skip_known_drones,
+                "skip_trusted_drones": self.alerts.skip_trusted_drones,
                 "proximity_distance": self.alerts.proximity_distance,
             },
             "collectors": [
@@ -789,12 +821,14 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
 
         if (new_config.alerts.stale_timeout != self.alerts.stale_timeout
                 or new_config.alerts.skip_known_drones != self.alerts.skip_known_drones
+                or new_config.alerts.skip_trusted_drones != self.alerts.skip_trusted_drones
                 or new_config.alerts.proximity_distance != self.alerts.proximity_distance):
             logger.info(
                 "Reloaded alerts from %s (stale_timeout=%s, skip_known_drones=%s, "
-                "proximity_distance=%s)",
+                "skip_trusted_drones=%s, proximity_distance=%s)",
                 self.config_path, new_config.alerts.stale_timeout,
                 new_config.alerts.skip_known_drones,
+                new_config.alerts.skip_trusted_drones,
                 new_config.alerts.proximity_distance,
             )
             changed = True

@@ -11,18 +11,18 @@
         "body": [
           {
             "type": "TextBlock",
-            "text": "**Unrecognized Drone Detected**",
+            "text": "**Trusted Drone New Flight**",
             "weight": "Bolder",
-            "size": "Large",
-            "color": "Attention"
+            "size": "Large"
           },
           {
             "type": "TextBlock",
-            "text": "**{{ name|json_escape }}** ({{ uas_id|json_escape }}) is not in the aliases list"
+            "text": "**{{ name|json_escape }}** started a new flight{% set _alt = format_altitude(altitude, height, height_type, use_metric) %}{% if _alt %} at **{{ _alt }}**{% endif %}"
           },
           {
             "type": "FactSet",
             "facts": [
+              {"title": "Drone", "value": "{{ name|json_escape }}"},
               {"title": "UAS ID", "value": "{{ uas_id|json_escape }}"},
               {"title": "Session", "value": "{{ session_id[:8]|json_escape }}"}
               {% if altitude is not none -%}

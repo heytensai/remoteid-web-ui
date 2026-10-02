@@ -191,27 +191,27 @@ def test_init_db_upgrades_v11_database_without_frequency(db):
 
 def test_claim_alert_first_wins(db):
     """Only the first claim for a key returns True."""
-    assert db.claim_alert("new_session", "uas-001:session_abc") is True
-    assert db.claim_alert("new_session", "uas-001:session_abc") is False
+    assert db.claim_alert("new_known", "uas-001:session_abc") is True
+    assert db.claim_alert("new_known", "uas-001:session_abc") is False
 
 
 def test_claim_alert_different_keys_independent(db):
     """Different event types and keys do not interfere."""
-    assert db.claim_alert("new_session", "uas-001:session_abc") is True
-    assert db.claim_alert("unrecognized_drone", "uas-001:session_abc") is True
-    assert db.claim_alert("new_session", "uas-001:session_def") is True
+    assert db.claim_alert("new_known", "uas-001:session_abc") is True
+    assert db.claim_alert("new_unknown", "uas-001:session_abc") is True
+    assert db.claim_alert("new_known", "uas-001:session_def") is True
 
 
 def test_claim_alert_persists_across_connections(db):
     """The claim survives a new database connection (restart-safety)."""
-    assert db.claim_alert("new_session", "uas-001:session_abc") is True
+    assert db.claim_alert("new_known", "uas-001:session_abc") is True
     conn = db._get_conn()
     try:
         cur = conn.cursor()
         cur.execute(
             "SELECT COUNT(*) FROM sent_alerts WHERE alert_type = %s "
             "AND dedup_key = %s",
-            ("new_session", "uas-001:session_abc"),
+            ("new_known", "uas-001:session_abc"),
         )
         count = cur.fetchone()[0]
     finally:

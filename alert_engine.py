@@ -1,11 +1,12 @@
 """Alert engine — evaluates drone positions against configured alert conditions.
 
 Currently supports:
-  - New session detection (drone starts a new flight)
+  - New flight detection (one of new_unknown / new_known / new_trusted,
+    chosen by the drone's trust tier)
   - Geozone entry/exit (drone enters or exits an alert-enabled area)
 
-Extensible to additional triggers (altitude, unknown drone, etc.) as
-check methods added to ``evaluate()``.
+Extensible to additional triggers (altitude, etc.) as check methods added
+to ``evaluate()``.
 """
 
 import logging
@@ -14,9 +15,25 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Callable
 
-from config import WaypointConfig, M_PER_DEG_LAT
+from config import (
+    DRONE_TRUST_KNOWN,
+    DRONE_TRUST_TRUSTED,
+    DRONE_TRUST_UNKNOWN,
+    M_PER_DEG_LAT,
+    WaypointConfig,
+)
 
 logger = logging.getLogger(__name__)
+
+# New-flight alert events, one per drone trust tier. Every drone maps to
+# exactly one of these, so a target subscribed to a tier sees exactly one
+# alert per flight.
+NEW_FLIGHT_EVENTS = ("new_unknown", "new_known", "new_trusted")
+NEW_FLIGHT_EVENT_BY_TRUST = {
+    DRONE_TRUST_UNKNOWN: "new_unknown",
+    DRONE_TRUST_KNOWN: "new_known",
+    DRONE_TRUST_TRUSTED: "new_trusted",
+}
 
 
 def point_in_circle(
@@ -82,8 +99,9 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
     Callbacks (set externally):
       on_new_alert(uas_id, geozone_name, position=None)   — drone entered a geozone
       on_geozone_exit(uas_id, geozone_name, position=None) — drone left a geozone
-      on_new_session(uas_id, session_id, first_position) — drone started a new flight
-      on_unrecognized_drone(uas_id, session_id, first_position) — unknown drone started a new flight
+      on_new_flight(uas_id, session_id, event_type, first_position) — a new flight
+          started; ``event_type`` is one of ``new_unknown`` / ``new_known`` /
+          ``new_trusted``, determined by the drone's trust tier
       on_drone_proximity(uas_id_a, name_a, uas_id_b, name_b, distance_m,
                          position_a=None, position_b=None) — two drones too close
     """
@@ -95,16 +113,15 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
         self._rebuild_geozone_list()
         # Session tracking
         self._known_sessions: Dict[str, str] = {}
-        self._session_alert_cooldown: Dict[str, float] = {}  # key → monotonic timestamp of last fire
+        # (event, uas_id) → monotonic timestamp of last fire
+        self._new_flight_cooldown: Dict[tuple, float] = {}
         self._geozone_alert_cooldown: Dict[str, float] = {}
-        self._unrecognized_drone_cooldown: Dict[str, float] = {}
         self._drone_proximity_cooldown: Dict[str, float] = {}  # "uas_a:uas_b" → monotonic
         self._load_known_sessions()
         # Callbacks
         self.on_new_alert: Optional[Callable] = None
         self.on_geozone_exit: Optional[Callable] = None
-        self.on_new_session: Optional[Callable] = None
-        self.on_unrecognized_drone: Optional[Callable] = None
+        self.on_new_flight: Optional[Callable] = None
         self.on_drone_proximity: Optional[Callable] = None
 
     # --- Config loading ---
@@ -141,7 +158,7 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
         """Re-read all current session IDs from the database.
 
         Updates the internal session tracking so that subsequent calls to
-        :meth:`evaluate` will not re-fire ``on_new_session`` for sessions
+        :meth:`evaluate` will not re-fire ``on_new_flight`` for sessions
         that are already known.  Useful after session detection re-runs
         and assigns new session IDs.
         """
@@ -165,8 +182,8 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
         cooldowns = self._config.alerts.cooldown
         max_cd = max(cooldowns.values()) if cooldowns else 300
         cutoff = now - (max_cd * 2)
-        for store in (self._session_alert_cooldown, self._geozone_alert_cooldown,
-                      self._unrecognized_drone_cooldown, self._drone_proximity_cooldown):
+        for store in (self._new_flight_cooldown, self._geozone_alert_cooldown,
+                      self._drone_proximity_cooldown):
             stale = [k for k, t in store.items() if t < cutoff]
             for k in stale:
                 del store[k]
@@ -189,7 +206,7 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
     # --- Session tracking ---
 
     def _check_new_session(self, uas_id: str, positions: List[Dict]):
-        """Fire ``on_new_session`` when the drone's session ID changes.
+        """Fire exactly one tier-appropriate new-flight callback per session.
 
         Queries the latest ``computed_session_id`` from the database and
         compares it against the internally tracked value for this UAS.
@@ -200,9 +217,9 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
         fires exactly once even when multiple gunicorn workers each hold
         their own forked copy of this engine.
 
-        For unrecognized drones (no alias), ``on_unrecognized_drone`` fires
-        instead of ``on_new_session`` so that notification targets only
-        receive one alert per new flight.
+        The drone's trust tier (``drone_trust_level()``) picks exactly one of
+        ``new_unknown`` / ``new_known`` / ``new_trusted``, so a notification
+        target subscribed to a tier receives exactly one alert per new flight.
         """
         session_id = self._db.get_latest_session_id(uas_id)
         if session_id is None:
@@ -212,18 +229,15 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
         now = time.monotonic()
         first_pos = positions[0] if positions else None
 
-        if not self._config.is_drone_known(uas_id):
-            event_type = "unrecognized_drone"
-            cooldown = self._config.alerts.cooldown.get("unrecognized_drone", 300)
-            cooldown_store = self._unrecognized_drone_cooldown
-            callback = self.on_unrecognized_drone
-        else:
-            event_type = "new_session"
-            cooldown = self._config.alerts.cooldown.get("new_session", 300)
-            cooldown_store = self._session_alert_cooldown
-            callback = self.on_new_session
+        event_type = NEW_FLIGHT_EVENT_BY_TRUST[self._config.drone_trust_level(uas_id)]
+        cooldown = self._config.alerts.cooldown.get(event_type, 300)
 
-        last_fired = cooldown_store.get(uas_id)
+        # Cooldowns are tracked per (event, drone) rather than per drone so a
+        # tier change mid-window still alerts: promoting a drone from unknown
+        # to trusted (or demoting it) is a meaningful event in its own right
+        # and must not be swallowed by the cooldown of the previous tier.
+        cooldown_key = (event_type, uas_id)
+        last_fired = self._new_flight_cooldown.get(cooldown_key)
         if last_fired is not None and (now - last_fired) < cooldown:
             logger.debug(
                 "Skipping duplicate %s alert for %s: %s (cooldown %ds)",
@@ -234,7 +248,9 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
 
         # Cross-process authoritative dedup: the first process to claim
         # (uas_id, session_id) is the only one that fires, even when each
-        # gunicorn worker has its own copy of this engine.
+        # gunicorn worker has its own copy of this engine. The claim is keyed
+        # on the tier-specific event name, so a drone promoted to trusted
+        # mid-session can still raise its own new_trusted alert.
         if not self._db.claim_alert(
             event_type, f"{uas_id}:{session_id}",
             uas_id=uas_id, session_id=session_id,
@@ -246,21 +262,37 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
             self._known_sessions[uas_id] = session_id
             return
 
-        cooldown_store[uas_id] = now
+        self._new_flight_cooldown[cooldown_key] = now
         self._known_sessions[uas_id] = session_id
         logger.info(
-            "New session for %s: %s", uas_id, session_id,
+            "New flight for %s (%s): session %s",
+            uas_id, event_type, session_id,
         )
-        self._fire(callback, uas_id, session_id, first_pos)
+        self._fire(self.on_new_flight, uas_id, session_id, event_type, first_pos)
 
     # --- Geozone evaluation ---
 
     def _evaluate_geozones(self, uas_id: str, positions: List[Dict]):
-        """Check positions against all alert-enabled geozones."""
+        """Check positions against all alert-enabled geozones.
+
+        Suppression is per trust tier: ``skip_known_drones`` silences aliased
+        but untrusted drones and ``skip_trusted_drones`` silences ``trusted:
+        true`` drones, independently. Unknown drones always alert.
+
+        A suppressed drone is still evaluated for **exit** only. It never
+        opens a geozone event, but if it was already inside when it was
+        promoted into a silenced tier, its active event is closed (without a
+        notification) so the drone is not left showing as inside until
+        ``check_stale()`` times the event out.
+        """
         if not self._geozones:
             return
-        if self._config.alerts.skip_known_drones and self._config.is_drone_known(uas_id):
-            return
+        trust = self._config.drone_trust_level(uas_id)
+        suppressed = (
+            trust == DRONE_TRUST_TRUSTED and self._config.alerts.skip_trusted_drones
+        ) or (
+            trust == DRONE_TRUST_KNOWN and self._config.alerts.skip_known_drones
+        )
         for pos in positions:
             lat = pos.get("latitude")
             lon = pos.get("longitude")
@@ -280,9 +312,13 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
                         lat, lon, gz.lat, gz.lon, gz.width, gz.height
                     )
                 if inside:
-                    self._handle_entry(uas_id, gz.name, ts, pos)
+                    if not suppressed:
+                        self._handle_entry(uas_id, gz.name, ts, pos)
                 else:
-                    self._handle_exit(uas_id, gz.name, ts, pos)
+                    # Always process exits, even for suppressed drones, so an
+                    # event opened before the tier change gets closed. The
+                    # notification itself is suppressed.
+                    self._handle_exit(uas_id, gz.name, ts, pos, notify=not suppressed)
 
     def _handle_entry(self, uas_id: str, geozone_name: str, timestamp: datetime,
                       position: Optional[Dict] = None):
@@ -311,9 +347,14 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
             self._geozone_alert_cooldown[cooldown_key] = now
             self._fire(self.on_new_alert, uas_id, geozone_name, position)
 
-    def _handle_exit(self, uas_id: str, geozone_name: str, timestamp: datetime,
-                     position: Optional[Dict] = None):
-        """Called when a position is outside a geozone. Exits active event."""
+    def _handle_exit(self, uas_id: str, geozone_name: str, timestamp: datetime,  # pylint: disable=too-many-positional-arguments
+                     position: Optional[Dict] = None, notify: bool = True):
+        """Called when a position is outside a geozone. Exits active event.
+
+        ``notify=False`` still closes the event but skips the callback, which
+        is what a tier-suppressed drone needs when it leaves a geozone it
+        entered before being silenced.
+        """
         events = self._db.get_geozone_events_for_uas(uas_id)
         active = [e for e in events if e["geozone_name"] == geozone_name and e["exited_at"] is None]
         if not active:
@@ -321,6 +362,13 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
         updated = self._db.exit_geozone(active[0]["id"], timestamp, "left")
         if updated == 0:
             # Another process already exited this event and fired the alert.
+            return
+        if not notify:
+            logger.info(
+                "%s left geozone '%s' at %s (event closed, notification "
+                "suppressed for silenced trust tier)",
+                uas_id, geozone_name, timestamp.isoformat(),
+            )
             return
         logger.info(
             "ALERT: %s left geozone '%s' at %s",

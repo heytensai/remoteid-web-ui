@@ -53,7 +53,7 @@ This file is the user's personal, gitignored configuration. Even if it contains 
 - `position_stale_minutes` - Minutes without ping before collector marker turns gray (hot-reloadable)
 - `server_url` - Public base URL for notification embeds (hot-reloadable)
 - `secure_cookies` - When true, session cookies are marked Secure (set this when serving over HTTPS behind a reverse proxy). Default: false
-- `notifications` - List of notification targets (name, type, events[], webhook_url). Supported types: discord, ntfy, teams, mqtt. MQTT targets also accept `broker_url` (mqtt:// or mqtts://) and `topic_prefix` (messages publish to `{topic_prefix}/{event}` as JSON), plus optional `username`/`password`. Events: geozone_enter, geozone_exit, new_session, unrecognized_drone, drone_proximity. If empty, notifications disabled. (hot-reloadable)
+- `notifications` - List of notification targets (name, type, events[], webhook_url). Supported types: discord, ntfy, teams, mqtt. MQTT targets also accept `broker_url` (mqtt:// or mqtts://) and `topic_prefix` (messages publish to `{topic_prefix}/{event}` as JSON), plus optional `username`/`password`. Events: geozone_enter, geozone_exit, new_unknown, new_known, new_trusted, drone_proximity. If empty, notifications disabled. (hot-reloadable)
   - Templates in `templates/notifications/<type>/<event>.j2` are user-customizable. They receive raw values (altitude in meters MSL, height in meters, height_type, lat/lon, use_metric). A Jinja global `format_altitude(altitude, height, height_type, use_metric)` (defined in `notifier.py`) renders a compact display string like `200ft AGL (4500ft MSL)`; use it instead of duplicating unit math in templates. All 5 events carry altitude/height data today, so templates can rely on these fields being present (may be `None` for legacy/absent telemetry — guard with `is defined and is not none`).
 
 ## Drone Trust Tiers
@@ -96,12 +96,27 @@ sub-keys are logged and ignored. Legacy shorthand is always untrusted.
 
 `DroneAlias`, `DRONE_TRUST_*` constants live in `config.py`.
 
-### Alerting Is Unchanged By Trust
+### Trust Tiers Drive Alerting
 
-Trust is **display-only** today. Any aliased drone counts as known, so
-`alerts.skip_known_drones` and the `unrecognized_drone` vs `new_session` split in
-`alert_engine.py` behave exactly as before. Introducing trust into alerting is a
-deliberate follow-up change.
+Trust now splits new-flight alerts three ways. `AlertEngine._check_new_session()`
+looks up `NEW_FLIGHT_EVENT_BY_TRUST[config.drone_trust_level(uas_id)]` and fires
+**exactly one** of `new_unknown` / `new_known` / `new_trusted` per flight through
+the single `on_new_flight(uas_id, session_id, event_type, first_position)` callback
+(there is no per-tier callback). `app.py`'s `_on_new_flight` dispatches to
+`NOTIFIER_SERVICE.dispatch(event_type, ...)` and adds `trust_level` to the template
+context.
+
+Geozone suppression is per tier and independent: `alerts.skip_known_drones` silences
+aliased-but-untrusted, `alerts.skip_trusted_drones` silences `trusted: true`, and
+unknown drones always geozone-alert. Neither flag affects the new-flight events.
+
+Cooldowns are keyed per tier event (`cooldown.new_unknown`, `cooldown.new_known`,
+`cooldown.new_trusted`). The `sent_alerts` claim key includes the event name, so a
+drone promoted to `trusted` mid-session can still raise its own `new_trusted` alert.
+
+The old `new_session` and `unrecognized_drone` names are in `config.REMOVED_EVENTS`
+and raise `ValueError` on load — a stale config fails loudly instead of silently
+dropping alerts. Unknown event names still warn-and-drop as before.
 
 ### Frontend
 

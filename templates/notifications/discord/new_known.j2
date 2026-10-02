@@ -1,9 +1,10 @@
 {
   "embeds": [{
-    "title": "Unrecognized Drone Detected",
-    "color": 15158332,
+    "title": "Known Drone New Flight",
+    "color": 3447003,
     "description": "**{{ name|json_escape }}** started a new flight{% set _alt = format_altitude(altitude, height, height_type, use_metric) %}{% if _alt %} at {{ _alt }}{% endif %}",
     "fields": [
+      {"name": "Drone", "value": "{{ name|json_escape }}", "inline": true},
       {"name": "UAS ID", "value": "{{ uas_id|json_escape }}", "inline": true},
       {"name": "Session", "value": "{{ session_id[:8]|json_escape }}", "inline": true}
       {% if altitude is not none -%}

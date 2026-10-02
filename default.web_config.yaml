@@ -186,23 +186,30 @@ web_interface:
     # as "timed out" and the drone marker reverts to a stop icon
     # (hot-reloadable)
     stale_timeout: 300
-    # Skip geozone alerts for drones that have an alias configured in
-    # drone_aliases — trusted or not (hot-reloadable)
+    # Skip geozone alerts for drones that have an alias in drone_aliases
+    # but are NOT marked `trusted: true` (hot-reloadable)
     skip_known_drones: false
+    # Skip geozone alerts for drones marked `trusted: true` in drone_aliases.
+    # Independent of skip_known_drones, so you can silence either tier.
+    # Drones with no alias (unknown) always geozone-alert. (hot-reloadable)
+    skip_trusted_drones: false
     # Distance between two drones to trigger a proximity alert.
     # Unit depends on use_metric: meters (true) or feet (false).
     # Only considers live positions (both drones must have a position
     # within stale_timeout seconds). Set to 0 to disable. (hot-reloadable)
     proximity_distance: 100
     # Seconds before the same alert can fire again, keyed by event type.
-    # Each entry is independent — a drone can trigger new_session,
+    # Each entry is independent — a drone can trigger new_unknown,
     # geozone_enter, and geozone_exit simultaneously without interference.
+    # New-flight events are split by trust tier, and a drone fires exactly
+    # one of new_unknown / new_known / new_trusted per flight.
     # (hot-reloadable)
     cooldown:
-      new_session: 300
+      new_unknown: 300
+      new_known: 300
+      new_trusted: 300
       geozone_enter: 300
       geozone_exit: 300
-      unrecognized_drone: 300
       drone_proximity: 300
 
   # Collector positions and status
@@ -270,12 +277,22 @@ web_interface:
   #   - token      — Bearer token auth (e.g. "tk_xxx")
   #   - username/password — Basic auth for self-hosted servers
   #
-  # Event filters (subset of ["geozone_enter", "geozone_exit", "new_session", "unrecognized_drone"]):
+  # Event filters (subset of ["geozone_enter", "geozone_exit", "new_unknown",
+  # "new_known", "new_trusted", "drone_proximity"]):
   #   - geozone_enter     — drone enters an alert-enabled geozone
   #   - geozone_exit      — drone leaves an alert-enabled geozone
-  #   - new_session       — drone starts a new flight
-  #   - unrecognized_drone — drone not in the aliases list starts a new flight
+  #   - new_unknown       — drone with no drone_aliases entry starts a new flight
+  #   - new_known         — aliased but not `trusted: true` drone starts a new flight
+  #   - new_trusted       — `trusted: true` drone starts a new flight
   #   - drone_proximity   — two drones are within proximity_distance of each other
+  #
+  # Every drone fires exactly ONE of new_unknown / new_known / new_trusted per
+  # flight, based on its trust tier in drone_aliases. Geozone alerts fire
+  # independently of these and are governed by alerts.skip_known_drones and
+  # alerts.skip_trusted_drones.
+  #
+  # The old event names `new_session` and `unrecognized_drone` were replaced by
+  # the three tier events above and are rejected with a config error if present.
   #
   # Templates live in templates/notifications/<type>/<event>.j2
   # and can be customized per deployment.
@@ -299,7 +316,7 @@ web_interface:
     #   enabled: false             # temporarily disabled
     #   webhook_url: "https://discord.com/api/webhooks/..."
     #   events:
-    #     - new_session
+    #     - new_unknown
     #
     # ntfy with Bearer token (ntfy.sh or self-hosted):
     # - name: "Phone Alerts"
@@ -308,7 +325,7 @@ web_interface:
     #   token: "tk_xxx"
     #   events:
     #     - geozone_enter
-    #     - new_session
+    #     - new_unknown
     #
     # ntfy with Basic auth (self-hosted):
     # - name: "Self-Hosted Alerts"
@@ -318,7 +335,7 @@ web_interface:
     #   password: "mypassword"
     #   events:
     #     - geozone_enter
-    #     - new_session
+    #     - new_unknown
     #
     # Microsoft Teams Incoming Webhook:
     # - name: "Teams Alerts"
@@ -326,7 +343,7 @@ web_interface:
     #   webhook_url: "https://*.webhook.office.com/botid/..."
     #   events:
     #     - geozone_enter
-    #     - new_session
+    #     - new_unknown
     #
     # Teams with Bearer token (tenant-restricted webhooks):
     # - name: "Teams Secure"
@@ -335,7 +352,7 @@ web_interface:
     #   token: "eyJ0eXAiOi..."
     #   events:
     #     - geozone_enter
-    #     - new_session
+    #     - new_unknown
     #
     # MQTT broker (publish-only, QoS 0). The payload is a JSON object with
     # the UAS details (uas_id, name, altitude, height, etc.) and is published
@@ -347,7 +364,7 @@ web_interface:
     #   topic_prefix: "remoteid/alerts"
     #   events:
     #     - geozone_enter
-    #     - new_session
+    #     - new_unknown
     #
     # MQTT with username/password authentication:
     # - name: "MQTT Private"
@@ -358,4 +375,4 @@ web_interface:
     #   password: "secret"
     #   events:
     #     - geozone_enter
-    #     - new_session
+    #     - new_unknown

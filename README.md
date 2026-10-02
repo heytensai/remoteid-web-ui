@@ -123,7 +123,7 @@ notifications:
   - name: "Alert Channel"
     type: "discord"
     webhook_url: "https://discord.com/api/webhooks/..."
-    events: [geozone_enter, new_session]
+    events: [geozone_enter, new_unknown]
   - name: "Phone Alerts"
     type: "ntfy"
     webhook_url: "https://ntfy.sh/mytopic"
@@ -132,6 +132,15 @@ notifications:
 ```
 
 Supported types: `discord`, `ntfy`, `teams`. See `default.web_config.yaml` for full examples.
+
+New-flight alerts are split by drone trust tier: `new_unknown` (no `drone_aliases`
+entry), `new_known` (aliased, not `trusted`), and `new_trusted` (`trusted: true`).
+Each drone fires exactly one of them per flight. `geozone_enter` / `geozone_exit`
+fire independently, and can be silenced per tier with `alerts.skip_known_drones`
+and `alerts.skip_trusted_drones`.
+
+The pre-tier event names `new_session` and `unrecognized_drone` are no longer
+valid; a config still referencing them fails to load with an error.
 
 ## HTTPS / Reverse Proxy
 

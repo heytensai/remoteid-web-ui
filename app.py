@@ -1628,14 +1628,12 @@ def _rebuild_notifier():
     if NOTIFIER_SERVICE.has_targets():
         ALERT_ENGINE.on_new_alert = _on_new_alert
         ALERT_ENGINE.on_geozone_exit = _on_geozone_exit
-        ALERT_ENGINE.on_new_session = _on_new_session
-        ALERT_ENGINE.on_unrecognized_drone = _on_unrecognized_drone
+        ALERT_ENGINE.on_new_flight = _on_new_flight
         ALERT_ENGINE.on_drone_proximity = _on_drone_proximity
     else:
         ALERT_ENGINE.on_new_alert = None
         ALERT_ENGINE.on_geozone_exit = None
-        ALERT_ENGINE.on_new_session = None
-        ALERT_ENGINE.on_unrecognized_drone = None
+        ALERT_ENGINE.on_new_flight = None
         ALERT_ENGINE.on_drone_proximity = None
 
 
@@ -1676,8 +1674,7 @@ def _init_app(config_path: str):
     if NOTIFIER_SERVICE.has_targets():
         ALERT_ENGINE.on_new_alert = _on_new_alert
         ALERT_ENGINE.on_geozone_exit = _on_geozone_exit
-        ALERT_ENGINE.on_new_session = _on_new_session
-        ALERT_ENGINE.on_unrecognized_drone = _on_unrecognized_drone
+        ALERT_ENGINE.on_new_flight = _on_new_flight
         ALERT_ENGINE.on_drone_proximity = _on_drone_proximity
 
     logger.info("Creating session scheduler")
@@ -1802,13 +1799,21 @@ def _on_geozone_exit(uas_id: str, geozone_name: str,
     NOTIFIER_SERVICE.dispatch("geozone_exit", **ctx)
 
 
-def _on_new_session(uas_id: str, session_id: str, first_position: Optional[Dict] = None):
-    """Callback fired when a new drone session/flight is detected. Dispatches to notifier."""
+def _on_new_flight(uas_id: str, session_id: str, event_type: str,
+                   first_position: Optional[Dict] = None):
+    """Callback fired when a drone starts a new flight. Dispatches to notifier.
+
+    ``event_type`` is the trust-tier-specific alert name (``new_unknown``,
+    ``new_known``, or ``new_trusted``) chosen by the alert engine, so the
+    drone appears in exactly one tier's alert stream. It is passed through to
+    the template as ``trust_level`` so custom templates can render the tier.
+    """
     name = CONFIG.get_drone_name(uas_id)
     ctx = {
         "uas_id": uas_id,
         "name": name,
         "session_id": session_id,
+        "trust_level": event_type.removeprefix("new_"),
         "use_metric": CONFIG.use_metric,
     }
     if first_position:
@@ -1817,25 +1822,7 @@ def _on_new_session(uas_id: str, session_id: str, first_position: Optional[Dict]
         ctx["height_type"] = first_position.get("height_type")
         ctx["lat"] = first_position.get("latitude")
         ctx["lon"] = first_position.get("longitude")
-    NOTIFIER_SERVICE.dispatch("new_session", **ctx)
-
-
-def _on_unrecognized_drone(uas_id: str, session_id: str, first_position: Optional[Dict] = None):
-    """Callback fired when an unrecognized drone starts a new flight. Dispatches to notifier."""
-    name = CONFIG.get_drone_name(uas_id)
-    ctx = {
-        "uas_id": uas_id,
-        "name": name,
-        "session_id": session_id,
-        "use_metric": CONFIG.use_metric,
-    }
-    if first_position:
-        ctx["altitude"] = first_position.get("altitude")
-        ctx["height"] = first_position.get("height")
-        ctx["height_type"] = first_position.get("height_type")
-        ctx["lat"] = first_position.get("latitude")
-        ctx["lon"] = first_position.get("longitude")
-    NOTIFIER_SERVICE.dispatch("unrecognized_drone", **ctx)
+    NOTIFIER_SERVICE.dispatch(event_type, **ctx)
 
 
 def _on_drone_proximity(  # pylint: disable=too-many-positional-arguments

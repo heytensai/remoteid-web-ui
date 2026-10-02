@@ -235,17 +235,18 @@ class TestNotifierServiceNtfy:
         assert mock_send.call_args[1]["click_url"] == "https://example.com"
 
     @patch("notifier._send_ntfy")
-    def test_dispatch_ntfy_new_session(self, mock_send):
+    def test_dispatch_ntfy_new_known(self, mock_send):
         target = self._make_target(
             name="ntfy-sessions",
-            events=["new_session"],
+            events=["new_known"],
         )
         svc = NotifierService(
             notifications=[target],
             server_url="https://example.com",
         )
 
-        svc.dispatch("new_session", name="Drone-2", session_id="abc12345",
+        svc.dispatch("new_known", uas_id="drone-002", name="Drone-2",
+                      session_id="abc12345",
                       altitude=100.0, height=50.0, height_type="agl",
                       use_metric=True)
 
@@ -253,22 +254,22 @@ class TestNotifierServiceNtfy:
         payload = mock_send.call_args[0][1]
         assert "Drone-2" in payload
         assert "100m" in payload
-        assert mock_send.call_args[1]["title"] == "New Flight Detected"
+        assert mock_send.call_args[1]["title"] == "Known Drone New Flight"
         assert mock_send.call_args[1]["priority"] == 3
         assert mock_send.call_args[1]["tags"] == "drone"
 
     @patch("notifier._send_ntfy")
-    def test_dispatch_ntfy_new_session_click_url_includes_live(self, mock_send):
+    def test_dispatch_ntfy_new_known_click_url_includes_live(self, mock_send):
         target = self._make_target(
             name="ntfy-sessions",
-            events=["new_session"],
+            events=["new_known"],
         )
         svc = NotifierService(
             notifications=[target],
             server_url="https://example.com",
         )
 
-        svc.dispatch("new_session", name="Drone-2", session_id="abc12345",
+        svc.dispatch("new_known", name="Drone-2", session_id="abc12345",
                       altitude=100.0, height=50.0, height_type="agl",
                       use_metric=True)
 
@@ -346,7 +347,7 @@ class TestNotifierServiceNtfy:
             server_url="https://example.com",
         )
 
-        svc.dispatch("new_session", name="Drone", session_id="abc",
+        svc.dispatch("new_known", name="Drone", session_id="abc",
                       altitude=None, height=None, height_type=None,
                       use_metric=True)
 
@@ -355,7 +356,7 @@ class TestNotifierServiceNtfy:
     @patch("notifier._send_ntfy")
     @patch("notifier._send_discord")
     def test_dispatch_mixed_types(self, mock_discord, mock_ntfy):
-        ntfy_target = self._make_target(events=["geozone_enter", "new_session"])
+        ntfy_target = self._make_target(events=["geozone_enter", "new_known"])
         discord_target = NotificationTargetConfig(
             name="discord", type="discord",
             webhook_url="https://discord.com/api/webhooks/...",
@@ -503,17 +504,18 @@ class TestNotifierServiceTeams:
         assert any("ZoneA" in t for t in texts)
 
     @patch("notifier._send_teams")
-    def test_dispatch_teams_new_session(self, mock_send):
+    def test_dispatch_teams_new_known(self, mock_send):
         target = self._make_target(
             name="teams-sessions",
-            events=["new_session"],
+            events=["new_known"],
         )
         svc = NotifierService(
             notifications=[target],
             server_url="https://example.com",
         )
 
-        svc.dispatch("new_session", name="Drone-2", session_id="abc12345",
+        svc.dispatch("new_known", uas_id="drone-002", name="Drone-2",
+                      session_id="abc12345",
                       altitude=100.0, height=50.0, height_type="agl",
                       use_metric=True)
 
@@ -522,7 +524,7 @@ class TestNotifierServiceTeams:
         payload = json.loads(payload_str)
         card = payload["attachments"][0]["content"]
         texts = [b["text"] for b in card["body"] if b.get("type") == "TextBlock"]
-        assert any("New Flight Detected" in t for t in texts)
+        assert any("Known Drone New Flight" in t for t in texts)
         assert any("Drone-2" in t for t in texts)
         assert any("100m" in t for t in texts)
 
@@ -574,7 +576,7 @@ class TestNotifierServiceTeams:
             server_url="https://example.com",
         )
 
-        svc.dispatch("new_session", name="Drone", session_id="abc",
+        svc.dispatch("new_known", name="Drone", session_id="abc",
                       altitude=None, height=None, height_type=None,
                       use_metric=True)
 
@@ -869,16 +871,16 @@ class TestNotifierServiceMqtt:
         assert mock_send.call_args[1]["password"] == "secret"
 
     @patch("notifier._send_mqtt")
-    def test_dispatch_mqtt_new_session_payload(self, mock_send):
-        target = self._make_target(name="mqtt-sessions", events=["new_session"])
+    def test_dispatch_mqtt_new_known_payload(self, mock_send):
+        target = self._make_target(name="mqtt-sessions", events=["new_known"])
         svc = NotifierService(notifications=[target], server_url="https://example.com")
 
-        svc.dispatch("new_session", uas_id="drone-001", name="Drone-1",
+        svc.dispatch("new_known", uas_id="drone-001", name="Drone-1",
                      session_id="session_a1b2c3d4e5f6", altitude=100.0, height=50.0,
                      height_type="agl", lat=37.7749, lon=-122.4194, use_metric=True)
 
         payload = json.loads(mock_send.call_args[0][1])
-        assert payload["event"] == "new_session"
+        assert payload["event"] == "new_known"
         assert payload["uas_id"] == "drone-001"
         assert payload["session_id"] == "session_a1b2c3d4e5f6"
         assert payload["altitude"] == 100.0
@@ -888,11 +890,11 @@ class TestNotifierServiceMqtt:
         assert payload["longitude"] == -122.4194
 
     @patch("notifier._send_mqtt")
-    def test_dispatch_mqtt_new_session_without_position(self, mock_send):
-        target = self._make_target(name="mqtt-sessions", events=["new_session"])
+    def test_dispatch_mqtt_new_known_without_position(self, mock_send):
+        target = self._make_target(name="mqtt-sessions", events=["new_known"])
         svc = NotifierService(notifications=[target], server_url="https://example.com")
 
-        svc.dispatch("new_session", uas_id="drone-001", name="Drone-1",
+        svc.dispatch("new_known", uas_id="drone-001", name="Drone-1",
                      session_id="session_a1b2c3d4e5f6", use_metric=True)
 
         payload = json.loads(mock_send.call_args[0][1])
@@ -903,19 +905,20 @@ class TestNotifierServiceMqtt:
     @patch("notifier._send_mqtt")
     def test_dispatch_mqtt_renders_valid_json_for_all_events(self, mock_send):
         target = self._make_target(
-            events=["geozone_enter", "geozone_exit", "new_session",
-                    "unrecognized_drone", "drone_proximity"],
+            events=["geozone_enter", "geozone_exit", "new_unknown",
+                    "new_known", "new_trusted", "drone_proximity"],
         )
         svc = NotifierService(notifications=[target], server_url="https://example.com")
 
         svc.dispatch("geozone_enter", uas_id="d", name="Drone", geozone_name="Zone", use_metric=True)
         svc.dispatch("geozone_exit", uas_id="d", name="Drone", geozone_name="Zone", use_metric=True)
-        svc.dispatch("new_session", uas_id="d", name="Drone", session_id="session_1", use_metric=True)
-        svc.dispatch("unrecognized_drone", uas_id="d", name="d", session_id="session_2", use_metric=True)
+        svc.dispatch("new_unknown", uas_id="d", name="d", session_id="session_1", use_metric=True)
+        svc.dispatch("new_known", uas_id="d", name="Drone", session_id="session_2", use_metric=True)
+        svc.dispatch("new_trusted", uas_id="d", name="Drone", session_id="session_3", use_metric=True)
         svc.dispatch("drone_proximity", uas_id_a="a", name_a="A", uas_id_b="b",
                      name_b="B", distance_m=50.0, distance_str="50 m", use_metric=True)
 
-        assert mock_send.call_count == 5
+        assert mock_send.call_count == 6
         for call in mock_send.call_args_list:
             data = json.loads(call[0][1])
             assert data["event"]
@@ -934,7 +937,7 @@ class TestNotifierServiceMqtt:
         target = self._make_target(events=["geozone_enter"])
         svc = NotifierService(notifications=[target], server_url="https://example.com")
 
-        svc.dispatch("new_session", uas_id="d", name="Drone", session_id="s",
+        svc.dispatch("new_known", uas_id="d", name="Drone", session_id="s",
                      use_metric=True)
 
         mock_send.assert_not_called()

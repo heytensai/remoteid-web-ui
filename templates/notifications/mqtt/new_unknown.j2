@@ -1,9 +1,10 @@
 {
-  "event": "new_session",
+  "event": "new_unknown",
   "timestamp": "{{ timestamp }}",
   "uas_id": "{{ uas_id|json_escape }}",
   "name": "{{ name|json_escape }}",
-  "session_id": "{{ session_id|json_escape }}"
+  "session_id": "{{ session_id|json_escape }}",
+  "trust_level": "unknown"
 {% if altitude is defined and altitude is not none %},
   "altitude": {{ '%.2f' % altitude }}
 {% endif %}

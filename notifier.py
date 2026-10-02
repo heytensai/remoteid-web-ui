@@ -1,7 +1,8 @@
 """Notification dispatcher — routes events to configured targets.
 
 Each target type has a directory at ``templates/notifications/<type>/``
-containing Jinja2 templates for each event (``geozone_enter.j2``, ``new_session.j2``).
+containing Jinja2 templates for each event (``geozone_enter.j2``,
+``new_unknown.j2``, ``new_known.j2``, ``new_trusted.j2``).
 The rendered output is dispatched differently per type:
 
 - **discord**: the template renders a JSON payload that is POSTed to the
@@ -80,8 +81,8 @@ def format_altitude(altitude, height, height_type=None, use_metric=True):
 
 _jinja_env.globals["format_altitude"] = format_altitude
 
-VALID_EVENTS = ("geozone_enter", "geozone_exit", "new_session", "unrecognized_drone",
-                "drone_proximity")
+VALID_EVENTS = ("geozone_enter", "geozone_exit", "new_unknown", "new_known",
+                "new_trusted", "drone_proximity")
 
 _NTFY_EVENT_HEADERS = {
     "geozone_enter": {
@@ -94,15 +95,20 @@ _NTFY_EVENT_HEADERS = {
         "priority": 3,
         "tags": "drone",
     },
-    "new_session": {
-        "title": "New Flight Detected",
+    "new_unknown": {
+        "title": "Unknown Drone Detected",
+        "priority": 4,
+        "tags": "warning,drone",
+    },
+    "new_known": {
+        "title": "Known Drone New Flight",
         "priority": 3,
         "tags": "drone",
     },
-    "unrecognized_drone": {
-        "title": "Unrecognized Drone Detected",
-        "priority": 4,
-        "tags": "warning,drone",
+    "new_trusted": {
+        "title": "Trusted Drone New Flight",
+        "priority": 3,
+        "tags": "white_check_mark,drone",
     },
     "drone_proximity": {
         "title": "Drone Proximity Alert",
@@ -533,7 +539,7 @@ class NotifierService:
     def dispatch(self, event: str, **ctx):
         """Dispatch an event to all configured targets that listen for it.
 
-        ``event`` is ``"geozone_enter"`` or ``"new_session"``.
+        ``event`` is one of :data:`VALID_EVENTS`.
         Extra keyword arguments are passed to the template context.
 
         Templates are cached in memory and automatically reloaded from
