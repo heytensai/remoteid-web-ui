@@ -49,9 +49,15 @@ const MapController = {
 
     /**
      * Enable/disable live-mode drone annotation bubbles.
+     * Annotations are bound as markers are created, so flipping the mode also
+     * reconciles the markers already on the map. Without this, a track drawn
+     * while the mode was off — e.g. a notification deep-link, which loads the
+     * track in archive mode and only then switches to live — would stay bare
+     * until its next incremental update happened to rebuild the marker.
      */
     setLiveMode(enabled) {
         this.isLiveMode = !!enabled;
+        this._refreshAllDroneAnnotations();
     },
 
     escapeHtml(str) {
@@ -1257,6 +1263,34 @@ const MapController = {
             opacity: 1,
             className: 'drone-annotation'
         });
+    },
+
+    /**
+     * Bind or unbind the annotation bubble on every live-drone marker already on
+     * the map, so a live-mode switch takes effect immediately instead of waiting
+     * for the next packet to rebuild a marker.
+     *
+     * A `drone`-typed marker is always the session's newest position: the
+     * single-position path in `_addSessionMarkers` draws the drone at the only
+     * point, and `_createEndMarker` only types a marker `drone` while the
+     * position is active, placing it at the final point. So the last stored
+     * position is the right data for both.
+     */
+    _refreshAllDroneAnnotations() {
+        for (const key of Object.keys(this.tracks || {})) {
+            const positions = this.sessionPositions[key];
+            if (!positions || positions.length === 0) continue;
+            const pos = positions[positions.length - 1];
+            const markers = (this.tracks[key] || {}).markers || [];
+            for (const marker of markers) {
+                if (marker._markerType !== 'drone') continue;
+                if (this.isLiveMode) {
+                    this._bindDroneAnnotation(marker, marker._uasId || key.split(':')[0], pos);
+                } else {
+                    marker.unbindTooltip();
+                }
+            }
+        }
     },
 
     /**

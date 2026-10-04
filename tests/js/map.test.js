@@ -729,6 +729,74 @@ describe('MapController', () => {
     });
   });
 
+  describe('_refreshAllDroneAnnotations', () => {
+    const key = 'drone-001:session_abc';
+    const pos = { height: 20, timestamp: '2024-01-01T12:00:00Z' };
+
+    const setup = (markers) => {
+      MapController.tracks = { [key]: { markers } };
+      MapController.sessionPositions = { [key]: [pos] };
+    };
+
+    beforeEach(() => {
+      MapController.tracks = {};
+      MapController.sessionPositions = {};
+      MapController.isLiveMode = false;
+    });
+
+    test('binds annotations to existing drone markers when entering live mode', () => {
+      const marker = { _markerType: 'drone', _uasId: 'drone-001', bindTooltip: jest.fn() };
+      setup([marker]);
+      MapController.isLiveMode = true;
+      MapController._refreshAllDroneAnnotations();
+      expect(marker.bindTooltip).toHaveBeenCalledWith(
+        expect.stringContaining('drone-001'),
+        expect.objectContaining({ permanent: true })
+      );
+    });
+
+    test('unbinds annotations when leaving live mode', () => {
+      const marker = { _markerType: 'drone', _uasId: 'drone-001', unbindTooltip: jest.fn() };
+      setup([marker]);
+      MapController.isLiveMode = false;
+      MapController._refreshAllDroneAnnotations();
+      expect(marker.unbindTooltip).toHaveBeenCalled();
+    });
+
+    test('leaves start/stop markers untouched', () => {
+      const start = { _markerType: 'start', bindTooltip: jest.fn(), unbindTooltip: jest.fn() };
+      const stop = { _markerType: 'stop', bindTooltip: jest.fn(), unbindTooltip: jest.fn() };
+      setup([start, stop]);
+      MapController.isLiveMode = true;
+      MapController._refreshAllDroneAnnotations();
+      expect(start.bindTooltip).not.toHaveBeenCalled();
+      expect(stop.bindTooltip).not.toHaveBeenCalled();
+    });
+
+    test('skips tracks with no stored positions', () => {
+      const marker = { _markerType: 'drone', _uasId: 'drone-001', bindTooltip: jest.fn() };
+      MapController.tracks = { [key]: { markers: [marker] } };
+      MapController.sessionPositions = {};
+      MapController.isLiveMode = true;
+      MapController._refreshAllDroneAnnotations();
+      expect(marker.bindTooltip).not.toHaveBeenCalled();
+    });
+
+    test('setLiveMode(true) annotates already-drawn markers', () => {
+      const marker = { _markerType: 'drone', _uasId: 'drone-001', bindTooltip: jest.fn() };
+      setup([marker]);
+      MapController.setLiveMode(true);
+      expect(marker.bindTooltip).toHaveBeenCalled();
+    });
+
+    test('setLiveMode(false) strips annotations from already-drawn markers', () => {
+      const marker = { _markerType: 'drone', _uasId: 'drone-001', unbindTooltip: jest.fn() };
+      setup([marker]);
+      MapController.setLiveMode(false);
+      expect(marker.unbindTooltip).toHaveBeenCalled();
+    });
+  });
+
   describe('_createSessionPointPopup', () => {
     const pos = {
       latitude: 37.7749,
