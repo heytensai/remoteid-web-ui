@@ -1,0 +1,4 @@
+#!/bin/bash
+
+make build
+rsync -va --inplace --exclude=__pycache__ requirements.txt static templates docker-compose.yml Dockerfile *.py "$1"
