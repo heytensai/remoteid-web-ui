@@ -28,7 +28,15 @@ from flask_wtf.csrf import CSRFProtect, generate_csrf
 from werkzeug.exceptions import BadRequest
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from config import CollectorConfig, WebConfig, M_PER_DEG_LAT, FEET_PER_METER, normalize_frequency
+from config import (
+    CollectorConfig,
+    DEFAULT_TILE_PROVIDER,
+    TILE_PROVIDER_HOSTS,
+    WebConfig,
+    M_PER_DEG_LAT,
+    FEET_PER_METER,
+    normalize_frequency,
+)
 from database import WebDatabase
 from session_detect import process_database as redetect_sessions
 from session_scheduler import SessionScheduler
@@ -190,22 +198,48 @@ def bad_request(error):  # pylint: disable=unused-argument
     return jsonify({"error": desc}), 400
 
 
-_CSP = (
+_CSP_STATIC = (
     "default-src 'self';"
     " manifest-src 'self';"
     " script-src 'self';"
     " style-src 'self' 'unsafe-inline';"
     " font-src 'self';"
-    " img-src 'self' https://*.tile.openstreetmap.org https://*.basemaps.cartocdn.com data:;"
     " connect-src 'self';"
     " worker-src 'self';"
 )
 
 
+def _csp() -> str:
+    """Build the CSP, allowing only the enabled basemaps' tile hosts.
+
+    Tiles are the sole reason any external origin is permitted (see AGENTS.md).
+    The allowlist is the union of ``map.enabled_tile_providers`` hosts via
+    ``MapConfig.tile_host_patterns()``, so a deployment only grants image access
+    to tiles the user can actually select in Settings. Providers left out of
+    ``enabled_tile_providers`` are unreachable by design — the CSP is the backstop
+    if a client asks for them anyway.
+    """
+    img_src = " img-src 'self' data:;"
+    cfg = CONFIG
+    if cfg is not None:
+        hosts = cfg.map.tile_host_patterns()
+        # CONFIG is None until _init_app runs (gunicorn imports this module
+        # before initializing). Fall back to the default provider so a
+        # pre-initialization render still loads a basemap.
+        if not hosts:
+            hosts = [TILE_PROVIDER_HOSTS[DEFAULT_TILE_PROVIDER]]
+    else:
+        hosts = [TILE_PROVIDER_HOSTS[DEFAULT_TILE_PROVIDER]]
+    if hosts:
+        img_src = f" img-src 'self' {' '.join(hosts)} data:;"
+    # Directive order in a CSP header is not significant.
+    return f"{_CSP_STATIC}{img_src}"
+
+
 @app.after_request
 def add_security_headers(response):
     """Add CSP and security headers to every response."""
-    response.headers["Content-Security-Policy"] = _CSP
+    response.headers["Content-Security-Policy"] = _csp()
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -485,6 +519,7 @@ def api_config():
                 "center_lon": cfg.map.center_lon,
                 "default_zoom": cfg.map.default_zoom,
                 "tile_provider": cfg.map.tile_provider,
+                "enabled_tile_providers": list(cfg.map.enabled_tile_providers),
             },
             "default_hours": cfg.default_hours,
             "drone_aliases": cfg.drone_aliases_dict(),

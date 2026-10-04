@@ -3,7 +3,8 @@
 ## Quick Start
 
 ```bash
-make test          # Run all tests
+make test          # Python + JS tests (fast local gate)
+make test-all      # Above + vendored-dependency sync check
 make test-py       # Python tests only
 make test-js       # JavaScript tests only
 make test-py-cov   # Python tests with coverage report

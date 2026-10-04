@@ -1944,6 +1944,40 @@ body.dark-mode .replay-time-display {
     color: #495057;
 }
 
+/* Base Map provider picker. A <select> rather than a pill row: there can be
+   five providers, which would overflow the 300px settings panel. */
+.settings-item.base-map-item {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    cursor: default;
+}
+
+.base-map-select {
+    flex: 1;
+    min-width: 0;
+    max-width: 62%;
+    padding: 6px 8px;
+    border: 1px solid #ced4da;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    min-height: 36px;
+    background: white;
+    color: inherit;
+    cursor: pointer;
+}
+
+.base-map-select:focus {
+    outline: none;
+    border-color: #007bff;
+}
+
+body.dark-mode .base-map-select {
+    background: #2a2a3d;
+    border-color: #3a3a4d;
+    color: #dee2e6;
+}
+
 .color-mode-pill {
     display: inline-flex;
     background: #e9ecef;
@@ -3242,6 +3276,12 @@ body.dark-mode .connection-banner.recovering {
 
 body.dark-mode .leaflet-tile-pane {
     filter: invert(1) hue-rotate(180deg) saturate(0.6);
+}
+
+/* Imagery basemaps (satellite) look wrong inverted — MapController sets
+   no-tile-invert on the map container for providers that opt out. */
+body.dark-mode #map.no-tile-invert .leaflet-tile-pane {
+    filter: none;
 }
 
 /* Visible keyboard focus indicators (issue #160) */

@@ -1,11 +1,39 @@
 """Tests for app.py - Flask API endpoints"""
 
+import contextlib
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
+import app as app_module
 from app import _parse_time_range
+from config import MapConfig, TILE_PROVIDER_HOSTS
+
+
+@contextlib.contextmanager
+def _patch_map(tile_provider=None, enabled_tile_providers=None):
+    """Rebuild ``CONFIG.map`` with specific basemap settings.
+
+    Goes through MapConfig so an unknown name exercises the real
+    normalize-and-warn path rather than poking the attribute directly.
+    """
+    original = app_module.CONFIG
+    original_map = original.map
+    data = {
+        "center_lat": original_map.center_lat,
+        "center_lon": original_map.center_lon,
+        "default_zoom": original_map.default_zoom,
+    }
+    if tile_provider is not None:
+        data["tile_provider"] = tile_provider
+    if enabled_tile_providers is not None:
+        data["enabled_tile_providers"] = enabled_tile_providers
+    original.map = MapConfig(data)
+    try:
+        yield original.map
+    finally:
+        original.map = original_map
 
 
 class TestServiceWorker:
@@ -48,6 +76,91 @@ class TestApiConfig:
         assert data["drone_aliases"]["drone-003"] == {"alias": "Trusted", "trusted": True}
         assert data["waypoints"] == []
         assert data["m_per_deg_lat"] == 111320
+
+
+class TestTileProviderCsp:
+    """The CSP img-src allowlist covers every *enabled* basemap.
+
+    The user can switch basemaps client-side from Settings, so the allowlist
+    must not be narrowed to the single active provider — otherwise every
+    non-default tile host would be CSP-blocked.
+    """
+
+    @staticmethod
+    def _img_src(client):
+        csp = client.get("/api/config").headers["Content-Security-Policy"]
+        directive = [d for d in csp.split(";") if d.strip().startswith("img-src")]
+        assert len(directive) == 1, f"expected exactly one img-src directive, got {directive}"
+        return directive[0]
+
+    def test_default_allows_every_known_provider_host(self, client):
+        img_src = self._img_src(client)
+        assert TILE_PROVIDER_HOSTS["osm"] in img_src
+        assert "'self'" in img_src
+        assert "data:" in img_src
+        for host in TILE_PROVIDER_HOSTS.values():
+            assert host in img_src
+
+    def test_enabled_subset_narrows_the_allowlist(self, client):
+        with _patch_map(enabled_tile_providers=["osm"]):
+            img_src = self._img_src(client)
+        assert TILE_PROVIDER_HOSTS["osm"] in img_src
+        assert TILE_PROVIDER_HOSTS["esri-satellite"] not in img_src
+        assert TILE_PROVIDER_HOSTS["opentopomap"] not in img_src
+
+    def test_enabled_subset_permits_multiple_providers(self, client):
+        with _patch_map(
+            tile_provider="esri-satellite",
+            enabled_tile_providers=["esri-satellite", "opentopomap"],
+        ):
+            img_src = self._img_src(client)
+        assert "https://server.arcgisonline.com" in img_src
+        assert "https://*.tile.opentopomap.org" in img_src
+        assert TILE_PROVIDER_HOSTS["osm"] not in img_src
+
+    def test_active_provider_is_always_permitted(self, client):
+        """A disabled-by-list provider must not be locked out of its own tiles."""
+        with _patch_map(
+            tile_provider="opentopomap",
+            enabled_tile_providers=["osm", "esri-satellite"],
+        ):
+            img_src = self._img_src(client)
+        assert "https://*.tile.opentopomap.org" in img_src
+
+    def test_carto_host_is_never_permitted(self, client):
+        """CARTO needs an API key now; its host must not be in the CSP."""
+        for enabled in ([], ["osm"], ["osm", "esri-satellite"]):
+            with _patch_map(enabled_tile_providers=enabled):
+                img_src = self._img_src(client)
+            assert "cartocdn" not in img_src
+
+    def test_configured_provider_reaches_the_api(self, client):
+        with _patch_map(tile_provider="esri-satellite"):
+            data = client.get("/api/config").get_json()
+        assert data["map"]["tile_provider"] == "esri-satellite"
+
+    def test_enabled_providers_reach_the_api(self, client):
+        with _patch_map(enabled_tile_providers=["osm", "opentopomap"]):
+            data = client.get("/api/config").get_json()
+        assert data["map"]["enabled_tile_providers"] == ["osm", "opentopomap"]
+
+    def test_api_ships_every_provider_by_default(self, client):
+        data = client.get("/api/config").get_json()
+        assert data["map"]["enabled_tile_providers"] == list(TILE_PROVIDER_HOSTS)
+
+    def test_unknown_provider_falls_back_and_still_permits_osm(self, client):
+        with _patch_map(tile_provider="bogus-provider"):
+            data = client.get("/api/config").get_json()
+            img_src = self._img_src(client)
+        assert data["map"]["tile_provider"] == "osm"
+        assert TILE_PROVIDER_HOSTS["osm"] in img_src
+
+    def test_csp_kept_local_first(self, client):
+        csp = client.get("/api/config").headers["Content-Security-Policy"]
+        assert "script-src 'self';" in csp
+        assert "style-src 'self' 'unsafe-inline';" in csp
+        assert "font-src 'self';" in csp
+        assert "connect-src 'self';" in csp
 
 
 class TestApiAlerts:

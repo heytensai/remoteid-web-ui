@@ -1,7 +1,9 @@
 """Tests for config.py - configuration loading"""
 
 import os
+import re
 import tempfile
+from pathlib import Path
 
 import pytest
 import yaml
@@ -10,6 +12,7 @@ from config import (
     WebConfig, MapConfig, WaypointConfig, RoleConfig, MaintenanceConfig,
     NotificationTargetConfig, VALID_NOTIFIER_TYPES, _normalize_color,
     normalize_frequency, UNKNOWN_FREQUENCY, DroneAlias, DRONE_TRUST_TRUSTED,
+    TILE_PROVIDER_HOSTS, DEFAULT_TILE_PROVIDER,
 )
 
 
@@ -63,13 +66,179 @@ def test_map_config_with_data():
         "center_lat": 40.0,
         "center_lon": -74.0,
         "default_zoom": 15,
-        "tile_provider": "carto-dark",
+        "tile_provider": "opentopomap",
     }
     mc = MapConfig(data)
     assert mc.center_lat == 40.0
     assert mc.center_lon == -74.0
     assert mc.default_zoom == 15
-    assert mc.tile_provider == "carto-dark"
+    assert mc.tile_provider == "opentopomap"
+
+
+# --- tile provider ---
+
+def test_map_config_accepts_every_supported_tile_provider():
+    for name in TILE_PROVIDER_HOSTS:
+        assert MapConfig({"tile_provider": name}).tile_provider == name
+
+
+def test_map_config_unknown_tile_provider_falls_back(caplog):
+    with caplog.at_level("WARNING"):
+        mc = MapConfig({"tile_provider": "does-not-exist"})
+    assert mc.tile_provider == DEFAULT_TILE_PROVIDER
+    assert "does-not-exist" in caplog.text
+
+
+def test_map_config_non_string_tile_provider_falls_back():
+    assert MapConfig({"tile_provider": 42}).tile_provider == DEFAULT_TILE_PROVIDER
+    assert MapConfig({"tile_provider": None}).tile_provider == DEFAULT_TILE_PROVIDER
+
+
+def test_tile_provider_hosts_cover_js_registry():
+    """Every provider in the JS registry needs a CSP img-src host entry.
+
+    A provider missing from TILE_PROVIDER_HOSTS gets a normalized-away config
+    value (and no CSP allowance), so its tiles silently fail to load.
+    """
+    source = (Path(__file__).resolve().parent.parent / "static" / "js" / "map.js").read_text()
+    block = re.search(r"tileProviders:\s*\{(.*?)\n    \},", source, re.S)
+    assert block, "tileProviders registry not found in static/js/map.js"
+    # Top-level provider names sit at 8 spaces of indent.
+    js_names = set(re.findall(r"^ {8}(?:\'([^\']+)\'|([A-Za-z][\w-]*)):\s*\{", block.group(1), re.M))
+    js_names = {a or b for a, b in js_names}
+    assert js_names, "no provider names parsed from the JS registry"
+    assert js_names == set(TILE_PROVIDER_HOSTS)
+
+
+# --- enabled tile providers (Settings → Base Map picker) ---
+
+def test_enabled_tile_providers_defaults_to_all():
+    assert MapConfig({}).enabled_tile_providers == list(TILE_PROVIDER_HOSTS)
+
+
+def test_enabled_tile_providers_explicit_subset_is_preserved():
+    mc = MapConfig({
+        "enabled_tile_providers": ["opentopomap", "esri-satellite"],
+        "tile_provider": "esri-satellite",
+    })
+    assert mc.enabled_tile_providers == ["opentopomap", "esri-satellite"]
+
+
+def test_enabled_tile_providers_empty_or_null_means_all():
+    for value in (None, []):
+        mc = MapConfig({"enabled_tile_providers": value})
+        assert mc.enabled_tile_providers == list(TILE_PROVIDER_HOSTS)
+
+
+def test_enabled_tile_providers_drops_unknown_names(caplog):
+    with caplog.at_level("WARNING"):
+        mc = MapConfig({
+            "enabled_tile_providers": ["osm", "not-a-provider"],
+            "tile_provider": "osm",
+        })
+    assert mc.enabled_tile_providers == ["osm"]
+    assert "not-a-provider" in caplog.text
+
+
+def test_enabled_tile_providers_deduplicates():
+    mc = MapConfig({
+        "enabled_tile_providers": ["osm", "osm", "opentopomap"],
+        "tile_provider": "osm",
+    })
+    assert mc.enabled_tile_providers == ["osm", "opentopomap"]
+
+
+def test_enabled_tile_providers_all_invalid_falls_back_to_all(caplog):
+    with caplog.at_level("WARNING"):
+        mc = MapConfig({"enabled_tile_providers": ["nope", 7]})
+    assert mc.enabled_tile_providers == list(TILE_PROVIDER_HOSTS)
+
+
+def test_enabled_tile_providers_keeps_configured_provider_enabled(caplog):
+    """A tile_provider outside the enabled list must still be loadable.
+
+    Otherwise the configured startup basemap is not in the CSP allowlist and
+    the map renders with no tiles at all.
+    """
+    with caplog.at_level("WARNING"):
+        mc = MapConfig({
+            "tile_provider": "esri-satellite",
+            "enabled_tile_providers": ["osm", "opentopomap"],
+        })
+    assert mc.enabled_tile_providers[0] == "esri-satellite"
+    assert "esri-satellite" in mc.enabled_tile_providers
+    assert "osm" in mc.enabled_tile_providers
+
+
+def test_tile_host_patterns_have_no_duplicate_hosts():
+    """Two providers on one CDN must not emit the host twice.
+
+    No current pair shares a host, so this uses a temporary provider to
+    exercise the dedup branch that keeps the CSP header clean.
+    """
+    import config as config_module
+
+    hosts = dict(TILE_PROVIDER_HOSTS)
+    hosts["future-mirror"] = hosts["osm"]
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(config_module, "TILE_PROVIDER_HOSTS", hosts)
+    try:
+        mc = MapConfig({
+            "enabled_tile_providers": ["osm", "future-mirror"],
+            "tile_provider": "osm",
+        })
+        patterns = mc.tile_host_patterns()
+    finally:
+        monkey.undo()
+    assert patterns == [hosts["osm"]]
+    assert len(patterns) == len(set(patterns))
+
+
+def test_carto_is_no_longer_a_known_provider():
+    """CARTO withdrew keyless basemap access, so it must not stay selectable."""
+    assert "carto-light" not in TILE_PROVIDER_HOSTS
+    assert "carto-dark" not in TILE_PROVIDER_HOSTS
+
+
+@pytest.mark.parametrize("provider", ["carto-light", "carto-dark"])
+def test_stale_carto_tile_provider_warns_with_the_reason_and_falls_back(provider, caplog):
+    """An upgrading config must load on OSM, and say why — not "unknown typo"."""
+    with caplog.at_level("WARNING"):
+        mc = MapConfig({"tile_provider": provider})
+    assert mc.tile_provider == DEFAULT_TILE_PROVIDER
+    assert "API key" in caplog.text
+    assert provider in caplog.text
+
+
+@pytest.mark.parametrize("provider", ["carto-light", "carto-dark"])
+def test_stale_carto_in_enabled_list_is_dropped(provider, caplog):
+    with caplog.at_level("WARNING"):
+        mc = MapConfig({
+            "enabled_tile_providers": ["osm", provider],
+            "tile_provider": "osm",
+        })
+    assert mc.enabled_tile_providers == ["osm"]
+    assert "API key" in caplog.text
+
+
+def test_config_with_only_stale_carto_providers_still_loads(caplog):
+    """A list of nothing but withdrawn providers must not empty the picker."""
+    with caplog.at_level("WARNING"):
+        mc = MapConfig({"enabled_tile_providers": ["carto-light", "carto-dark"]})
+    assert mc.enabled_tile_providers == list(TILE_PROVIDER_HOSTS)
+
+
+def test_tile_host_patterns_covers_every_enabled_provider():
+    mc = MapConfig({"enabled_tile_providers": ["osm", "esri-satellite"]})
+    assert set(mc.tile_host_patterns()) == {
+        TILE_PROVIDER_HOSTS["osm"],
+        TILE_PROVIDER_HOSTS["esri-satellite"],
+    }
+
+
+def test_enabled_tile_providers_is_serialized():
+    cfg = WebConfig(_write_config({"map": {"enabled_tile_providers": ["osm"]}}))
+    assert cfg.to_dict()["map"]["enabled_tile_providers"] == ["osm"]
 
 
 def test_web_config_defaults():
@@ -111,7 +280,7 @@ def test_web_config_full():
                     "center_lat": 51.5,
                     "center_lon": -0.12,
                     "default_zoom": 12,
-                    "tile_provider": "carto-light",
+                    "tile_provider": "esri-satellite",
                 },
                 "api_keys": {"key1": "source1"},
                 "drone_aliases": {"abc": "Drone-ABC"},
@@ -135,7 +304,7 @@ def test_web_config_full():
             assert cfg.url_prefix == "/rid"
             assert cfg.secure_cookies is True
             assert cfg.map.center_lat == 51.5
-            assert cfg.map.tile_provider == "carto-light"
+            assert cfg.map.tile_provider == "esri-satellite"
             assert cfg.api_keys == {"key1": "source1"}
             assert cfg.drone_aliases == {"abc": DroneAlias(alias="Drone-ABC", trusted=False)}
             assert cfg.get_drone_name("abc") == "Drone-ABC"

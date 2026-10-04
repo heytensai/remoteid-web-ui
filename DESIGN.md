@@ -88,7 +88,10 @@ web_interface:
     center_lat: 40.7128
     center_lon: -74.0060
     default_zoom: 12
-    tile_provider: "osm"  # osm, carto-dark, carto-light
+    tile_provider: "osm"  # osm, esri-satellite, opentopomap
+    # Which of the above the user may switch between in Settings -> Base Map.
+    # Omit or leave empty to offer all of them.
+    # enabled_tile_providers: ["osm", "esri-satellite", "opentopomap"]
 
   # Display defaults
   default_hours: 24

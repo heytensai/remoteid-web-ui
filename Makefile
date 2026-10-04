@@ -1,10 +1,16 @@
-.PHONY: test test-py test-js test-py-cov lint lint-py lint-js build vendor vendor-check install
+.PHONY: test test-all test-py test-js test-py-cov lint lint-py lint-js build vendor vendor-check install
 
 PYTHON = env/bin/python
 NPM = npm
 NODE = node
 
-test: test-py test-js vendor-check
+# Fast local gate. vendor-check is deliberately excluded — it SHA-256s every
+# vendored asset against node_modules, which only matters after a dependency
+# change. Run `make test-all` for the full gate, or `make vendor-check` alone.
+test: test-py test-js
+
+# Full gate, including the vendor sync check.
+test-all: test vendor-check
 
 build: vendor
 	$(NPM) run build

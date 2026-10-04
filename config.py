@@ -47,6 +47,33 @@ def _normalize_color(color, fallback):
     return fallback
 
 
+# Base-map tile providers selectable via ``map.tile_provider``. The values are
+# the names of the entries in ``MapController.tileProviders`` (static/js/map.js);
+# each maps to the CSP ``img-src`` host pattern needed to load its tiles. Every
+# provider the UI may offer is added to the Content-Security-Policy, so the
+# allowlist stays tight instead of permitting hosts nobody can select.
+# tests/test_config.py asserts this covers every provider in the JS registry.
+#
+# Insertion order is the display order of the Settings → Base Map picker.
+TILE_PROVIDER_HOSTS = {
+    "osm": "https://*.tile.openstreetmap.org",
+    "esri-satellite": "https://server.arcgisonline.com",
+    "opentopomap": "https://*.tile.opentopomap.org",
+}
+
+DEFAULT_TILE_PROVIDER = "osm"
+
+# Providers that were valid but have been withdrawn, mapped to the reason. They
+# warn-and-fall-back like any unknown name (see
+# ``MapConfig._normalize_tile_provider``) rather than raising, because a bad
+# basemap cannot break alerting — but they get a specific message so an operator
+# upgrading is told *why* instead of being told their config is a typo.
+REMOVED_TILE_PROVIDERS = {
+    "carto-light": "CARTO now requires an API key for its basemaps",
+    "carto-dark": "CARTO now requires an API key for its basemaps",
+}
+
+
 @dataclass
 class MapConfig:
     """Map display configuration"""
@@ -54,14 +81,108 @@ class MapConfig:
     center_lat: Optional[float] = None
     center_lon: Optional[float] = None
     default_zoom: Optional[int] = None
-    tile_provider: str = "osm"
+    tile_provider: str = DEFAULT_TILE_PROVIDER
+    enabled_tile_providers: List[str] = field(default_factory=list)
 
     def __init__(self, data: dict = None):
+        self.enabled_tile_providers = list(TILE_PROVIDER_HOSTS)
         if data:
             self.center_lat = data.get("center_lat")
             self.center_lon = data.get("center_lon")
             self.default_zoom = data.get("default_zoom")
-            self.tile_provider = data.get("tile_provider", "osm")
+            self.tile_provider = self._normalize_tile_provider(
+                data.get("tile_provider", DEFAULT_TILE_PROVIDER)
+            )
+            self.enabled_tile_providers = self._normalize_enabled_tile_providers(
+                data.get("enabled_tile_providers"), self.tile_provider
+            )
+
+    @staticmethod
+    def _normalize_tile_provider(value) -> str:
+        """Return a supported tile provider name, falling back to the default.
+
+        Unlike options that change alerting behavior, an unknown tile provider
+        only affects which basemap renders — it must not raise, or a typo would
+        reject the entire config load (and with hot-reload, discard every other
+        pending change). It also has to normalize, because the CSP allowlist is
+        derived from this value.
+        """
+        if isinstance(value, str) and value in TILE_PROVIDER_HOSTS:
+            return value
+        if isinstance(value, str) and value in REMOVED_TILE_PROVIDERS:
+            logger.warning(
+                "map.tile_provider %r is no longer supported (%s); using %r",
+                value,
+                REMOVED_TILE_PROVIDERS[value],
+                DEFAULT_TILE_PROVIDER,
+            )
+            return DEFAULT_TILE_PROVIDER
+        logger.warning(
+            "Ignoring unknown map.tile_provider %r; using %r. Supported: %s",
+            value,
+            DEFAULT_TILE_PROVIDER,
+            ", ".join(sorted(TILE_PROVIDER_HOSTS)),
+        )
+        return DEFAULT_TILE_PROVIDER
+
+    @staticmethod
+    def _normalize_enabled_tile_providers(values, tile_provider) -> List[str]:
+        """Return the basemap providers the user may switch to.
+
+        Omitted, null, or an empty list means "every available provider". A
+        supplied list narrows the Settings → Base Map picker and, because the
+        CSP allowlist is derived from it, also narrows which tile hosts the
+        browser is permitted to load from. Unknown names are dropped with a
+        warning rather than raising (same reasoning as the provider name
+        itself), and ``tile_provider`` is always kept so the configured
+        startup basemap is one the browser is actually allowed to fetch.
+        """
+        all_names = list(TILE_PROVIDER_HOSTS)
+        if not isinstance(values, list) or not values:
+            return all_names
+
+        selected: List[str] = []
+        for value in values:
+            if isinstance(value, str) and value in REMOVED_TILE_PROVIDERS:
+                logger.warning(
+                    "Dropping withdrawn map.enabled_tile_providers entry %r (%s)",
+                    value,
+                    REMOVED_TILE_PROVIDERS[value],
+                )
+                continue
+            if not isinstance(value, str) or value not in TILE_PROVIDER_HOSTS:
+                logger.warning(
+                    "Ignoring unknown map.enabled_tile_providers entry %r. Supported: %s",
+                    value,
+                    ", ".join(sorted(TILE_PROVIDER_HOSTS)),
+                )
+                continue
+            if value not in selected:
+                selected.append(value)
+
+        if not selected:
+            logger.warning(
+                "map.enabled_tile_providers had no valid entries; offering all providers"
+            )
+            return all_names
+
+        if tile_provider not in selected:
+            logger.warning(
+                "map.tile_provider %r is not in map.enabled_tile_providers; enabling it "
+                "so the configured basemap can load",
+                tile_provider,
+            )
+            selected.insert(0, tile_provider)
+        return selected
+
+    def tile_host_patterns(self) -> List[str]:
+        """Distinct CSP ``img-src`` host patterns for the enabled providers."""
+        hosts: List[str] = []
+        for name in self.enabled_tile_providers:
+            host = TILE_PROVIDER_HOSTS.get(name)
+            if host and host not in hosts:
+                hosts.append(host)
+        return hosts
 
 
 FEET_PER_METER = 3.28084
@@ -688,6 +809,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
                 "center_lon": self.map.center_lon,
                 "default_zoom": self.map.default_zoom,
                 "tile_provider": self.map.tile_provider,
+                "enabled_tile_providers": list(self.map.enabled_tile_providers),
             },
             "waypoints": [
                 {

@@ -4,6 +4,59 @@
  */
 
 const MapController = {
+    /**
+     * Built-in base-map providers, keyed by the `map.tile_provider` config value.
+     * Pure data so it can be unit-tested without Leaflet. `label` is the
+     * Settings → Base Map display name. Insertion order is not significant
+     * here — the server sends the enabled subset in display order.
+     *
+     * `maxNativeZoom` is the provider's true tile limit. The map itself always
+     * allows `tileMaxZoom`, so Leaflet up-scales the deepest native tiles past
+     * a provider's limit instead of leaving a blank basemap (OpenTopoMap stops
+     * at 17, satellite/OSM at 19). `invertInDarkMode` is false for imagery
+     * layers, which look wrong under the dark-mode tile-pane CSS filter.
+     *
+     * Every entry MUST have a matching host in `config.TILE_PROVIDER_HOSTS`,
+     * or the browser CSP blocks its tiles. tests/js/map.test.js enforces this.
+     */
+    tileProviders: {
+        osm: {
+            label: 'OpenStreetMap',
+            url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+            maxNativeZoom: 19,
+            invertInDarkMode: true
+        },
+        'esri-satellite': {
+            label: 'Esri Satellite',
+            // ArcGIS endpoint ordering is {z}/{y}/{x}, not slippy-map {z}/{x}/{y}.
+            // Esri's public tiles are free for non-commercial use only.
+            url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+            attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+            maxNativeZoom: 19,
+            invertInDarkMode: false
+        },
+        'opentopomap': {
+            label: 'OpenTopoMap',
+            url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+            attribution: 'Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)',
+            maxNativeZoom: 17,
+            invertInDarkMode: true
+        }
+    },
+    tileMaxZoom: 19,
+    defaultTileProvider: 'osm',
+    /**
+     * Provider currently rendered. Distinct from `config.tile_provider` (the
+     * server's startup default) because the user can switch basemaps at
+     * runtime from Settings without mutating config.
+     */
+    activeTileProvider: null,
+    /**
+     * Providers the user may switch to, in display order. Sent as
+     * `map.enabled_tile_providers`; empty/absent means "all of them".
+     */
+    enabledTileProviders: [],
     map: null,
     markers: {},
     tracks: {},
@@ -89,6 +142,7 @@ const MapController = {
         try {
             const response = await API.getConfig();
             this.config = response.map;
+            this.enabledTileProviders = (response.map && response.map.enabled_tile_providers) || [];
             this.droneAliases = response.drone_aliases || {};
             this.waypoints = response.waypoints || [];
             this.staleTimeout = response.stale_timeout || 300;
@@ -146,46 +200,97 @@ const MapController = {
     },
 
     /**
-     * Add appropriate tile layer
+     * Resolve a `map.tile_provider` config value to a provider definition,
+     * falling back to `defaultTileProvider` for anything unrecognized so a
+     * typo in the config still renders a usable basemap.
+     * @param {string} name
+     * @returns {Object} Provider definition plus its resolved `name`.
      */
-    _addTileLayer() {
-        const provider = this.config.tile_provider || 'osm';
-
-        let tileUrl, attribution;
-
-        switch (provider) {
-            case 'carto-dark':
-                tileUrl = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
-                attribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
-                break;
-            case 'carto-light':
-                tileUrl = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
-                attribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
-                break;
-            case 'osm':
-            default:
-                tileUrl = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-                attribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
-                break;
-        }
-
-        this.tileLayer = L.tileLayer(tileUrl, {
-            attribution: attribution,
-            maxZoom: 19
-        }).addTo(this.map);
+    _resolveTileProvider(name) {
+        const provider = this.tileProviders[name];
+        if (provider) return Object.assign({}, provider, { name });
+        const fallback = this.defaultTileProvider;
+        return Object.assign({}, this.tileProviders[fallback], { name: fallback });
     },
 
     /**
-     * Switch tile provider (e.g. from light to dark tiles)
+     * Providers the user may switch to, in display order. An empty or absent
+     * `map.enabled_tile_providers` means every known provider is offered.
+     * @returns {string[]}
      */
-    setTileProvider(provider) {
-        if (this.tileLayer) {
-            this.map.removeLayer(this.tileLayer);
+    getEnabledTileProviders() {
+        const requested = Array.isArray(this.enabledTileProviders)
+            ? this.enabledTileProviders.filter(n => this.tileProviders[n])
+            : [];
+        return requested.length > 0 ? requested : Object.keys(this.tileProviders);
+    },
+
+    /**
+     * Add appropriate tile layer
+     */
+    _addTileLayer() {
+        if (!this.activeTileProvider) {
+            const configured = (this.config && this.config.tile_provider)
+                || this.defaultTileProvider;
+            this.activeTileProvider = this._clampToEnabled(configured).name;
         }
-        const prevProvider = this.config.tile_provider;
-        this.config.tile_provider = provider;
-        this._addTileLayer();
-        this.config.tile_provider = prevProvider;
+        const provider = this._resolveTileProvider(this.activeTileProvider);
+
+        this.tileLayer = L.tileLayer(provider.url, {
+            attribution: provider.attribution,
+            maxZoom: this.tileMaxZoom,
+            // Up-scale the deepest native tiles beyond a provider's own limit
+            // instead of blanking the basemap (OpenTopoMap stops at z17).
+            maxNativeZoom: provider.maxNativeZoom
+        }).addTo(this.map);
+
+        // Imagery basemaps look wrong under the dark-mode tile-pane filter,
+        // so mark the map container to opt them out.
+        const container = (this.map && typeof this.map.getContainer === 'function')
+            ? this.map.getContainer()
+            : document.getElementById('map');
+        if (container) {
+            container.classList.toggle('no-tile-invert', !provider.invertInDarkMode);
+        }
+    },
+
+    /**
+     * Clamp a requested provider name to one the user is allowed to select.
+     * Falls back to the configured startup provider, then to the registry
+     * default, so a stale localStorage choice can never leave a blank basemap.
+     * @param {string} name
+     * @returns {Object} Provider definition plus its resolved `name`.
+     */
+    _clampToEnabled(name) {
+        const enabled = this.getEnabledTileProviders();
+        if (name && enabled.indexOf(name) !== -1 && this.tileProviders[name]) {
+            return this._resolveTileProvider(name);
+        }
+        const configured = (this.config && this.config.tile_provider)
+            || this.defaultTileProvider;
+        if (enabled.indexOf(configured) !== -1) {
+            return this._resolveTileProvider(configured);
+        }
+        return this._resolveTileProvider(enabled[0]);
+    },
+
+    /**
+     * Switch the basemap (Settings → Base Map).
+     * Unknown or admin-disabled names fall back to an enabled provider, so the
+     * select and the map can never disagree.
+     * @param {string} name
+     * @returns {string} The provider actually applied.
+     */
+    setTileProvider(name) {
+        const provider = this._clampToEnabled(name);
+        this.activeTileProvider = provider.name;
+        // Gate on the map, not on the current layer: a previous layer that
+        // failed to materialize must not lock the user out of switching.
+        if (this.map) {
+            if (this.tileLayer) this.map.removeLayer(this.tileLayer);
+            this._addTileLayer();
+        }
+        return provider.name;
     },
 
     /**

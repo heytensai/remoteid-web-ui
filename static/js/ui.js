@@ -223,6 +223,13 @@ const UIController = {
             if (this._pendingSettings.colorMode !== undefined) {
                 this.setColorMode(this._pendingSettings.colorMode);
             }
+            // Render the picker from the server-enabled providers first, then
+            // apply the stored choice so a now-disabled provider is clamped and
+            // the select shows whatever actually took effect.
+            this._renderBaseMapOptions();
+            if (this._pendingSettings.baseMap !== undefined) {
+                this.setBaseMap(this._pendingSettings.baseMap);
+            }
             this._pendingSettings = null;
         }
 
@@ -459,6 +466,7 @@ const UIController = {
             showMobileCollectorsCheckbox: document.getElementById('showMobileCollectors'),
             trackOpacitySlider: document.getElementById('trackOpacity'),
             colorModePill: document.getElementById('colorModePill'),
+            baseMapSelect: document.getElementById('baseMapSelect'),
             timePresets: document.querySelectorAll('.header-time-presets button'),
             settingsPanel: document.getElementById('settingsPanel'),
 
@@ -731,6 +739,14 @@ const UIController = {
                 btn.addEventListener('click', () => {
                     this.setColorMode(btn.dataset.mode);
                 });
+            });
+        }
+
+        // Base map picker. Options are rendered after MapController is ready
+        // (see _initialize), so only the listener is wired here.
+        if (this.elements.baseMapSelect) {
+            this.elements.baseMapSelect.addEventListener('change', (e) => {
+                this.setBaseMap(e.target.value);
             });
         }
 
@@ -1076,6 +1092,52 @@ const UIController = {
     },
 
     /**
+     * Populate the Settings → Base Map picker from the providers the server
+     * enabled, and select whichever basemap is currently rendered.
+     *
+     * Options are built with createElement/textContent rather than innerHTML:
+     * provider labels come from the JS registry, but building them as DOM nodes
+     * keeps this path immune to injection regardless of origin.
+     * @param {string} [selected] - Provider to mark selected (defaults to active).
+     */
+    _renderBaseMapOptions(selected) {
+        const select = this.elements.baseMapSelect;
+        if (!select) return;
+
+        const providers = MapController.getEnabledTileProviders();
+        const current = selected
+            || MapController.activeTileProvider
+            || MapController.defaultTileProvider;
+
+        select.textContent = '';
+        for (const name of providers) {
+            const def = MapController.tileProviders[name];
+            if (!def) continue;
+            const option = document.createElement('option');
+            option.value = name;
+            option.textContent = def.label || name;
+            if (name === current) option.selected = true;
+            select.appendChild(option);
+        }
+        select.value = current;
+    },
+
+    /**
+     * Switch the basemap and sync the picker.
+     *
+     * MapController clamps unknown/disabled names, so we read back what was
+     * actually applied rather than trusting the requested value — that keeps
+     * the select and the rendered basemap from ever disagreeing.
+     * @param {string} provider
+     */
+    setBaseMap(provider) {
+        const applied = MapController.setTileProvider(provider);
+        this._renderBaseMapOptions(applied);
+        this._saveSettings();
+        return applied;
+    },
+
+    /**
      * Show or hide the height-band legend overlay based on the current color mode.
      */
     _updateHeightLegend() {
@@ -1191,6 +1253,7 @@ const UIController = {
                 showUnknownDrones: this.elements.showUnknownDrones.checked,
                 darkMode: this.elements.darkModeCheckbox.checked,
                 colorMode: MapController.colorMode === 'height' ? 'height' : 'drone',
+                baseMap: MapController.activeTileProvider || undefined,
             };
             localStorage.setItem('remoteid_settings', JSON.stringify(settings));
         } catch {
@@ -1241,6 +1304,9 @@ const UIController = {
             if (saved.colorMode !== undefined) {
                 // Defer color mode to pending settings (needs MapController)
             }
+            if (saved.baseMap !== undefined) {
+                // Defer base map to pending settings (needs MapController)
+            }
             // keepScreenOn is intentionally NOT restored - always starts off
 
             // Defer MapController-applied settings until after map is ready
@@ -1265,6 +1331,9 @@ const UIController = {
             }
             if (saved.colorMode !== undefined) {
                 this._pendingSettings.colorMode = saved.colorMode;
+            }
+            if (saved.baseMap !== undefined) {
+                this._pendingSettings.baseMap = saved.baseMap;
             }
         } catch {
             // ignore

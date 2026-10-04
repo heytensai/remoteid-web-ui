@@ -843,4 +843,325 @@ describe('MapController', () => {
       expect(html).not.toContain('Node<1>');
     });
   });
+
+  describe('tileProviders registry', () => {
+    test('every provider declares url, attribution and maxNativeZoom', () => {
+      const names = Object.keys(MapController.tileProviders);
+      expect(names.length).toBeGreaterThan(0);
+      for (const name of names) {
+        const p = MapController.tileProviders[name];
+        expect(typeof p.url).toBe('string');
+        expect(p.url).toMatch(/^https:\/\//);
+        // Attribution strings are license-required, never optional.
+        expect(typeof p.attribution).toBe('string');
+        expect(p.attribution.length).toBeGreaterThan(0);
+        expect(Number.isInteger(p.maxNativeZoom)).toBe(true);
+        expect(typeof p.invertInDarkMode).toBe('boolean');
+      }
+    });
+
+    test('no provider exceeds the shared map maxZoom', () => {
+      for (const [name, p] of Object.entries(MapController.tileProviders)) {
+        expect(p.maxNativeZoom).toBeLessThanOrEqual(MapController.tileMaxZoom);
+        // Otherwise the map would zoom past what it is allowed to request.
+        expect(name).toBeTruthy();
+      }
+    });
+
+    test('esri uses the ArcGIS {z}/{y}/{x} ordering', () => {
+      const url = MapController.tileProviders['esri-satellite'].url;
+      expect(url).toContain('/tile/{z}/{y}/{x}');
+      expect(url).not.toContain('{z}/{x}/{y}');
+    });
+
+    test('esri has no {s} subdomain placeholder', () => {
+      expect(MapController.tileProviders['esri-satellite'].url).not.toContain('{s}');
+    });
+
+    test('satellite opts out of the dark-mode tile invert', () => {
+      expect(MapController.tileProviders['esri-satellite'].invertInDarkMode).toBe(false);
+    });
+
+    test('raster providers stay inverted in dark mode', () => {
+      expect(MapController.tileProviders.osm.invertInDarkMode).toBe(true);
+      expect(MapController.tileProviders.opentopomap.invertInDarkMode).toBe(true);
+    });
+
+    test('opentopomap declares its native z17 limit', () => {
+      expect(MapController.tileProviders.opentopomap.maxNativeZoom).toBe(17);
+    });
+
+    test('includes the two providers added for issue #152', () => {
+      expect(Object.keys(MapController.tileProviders)).toEqual(
+        expect.arrayContaining(['esri-satellite', 'opentopomap'])
+      );
+    });
+
+    test('every provider has a human-readable label', () => {
+      // The Settings → Base Map picker shows this verbatim.
+      for (const [name, p] of Object.entries(MapController.tileProviders)) {
+        expect(typeof p.label).toBe('string');
+        expect(p.label.length).toBeGreaterThan(0);
+        // A label identical to its key means nobody wrote one.
+        expect(p.label).not.toBe(name);
+      }
+    });
+
+    test('no provider points at a CARTO host', () => {
+      // CARTO withdrew keyless basemap access; leaving an entry would render a
+      // layer that never loads.
+      for (const [name, p] of Object.entries(MapController.tileProviders)) {
+        expect(p.url).not.toContain('cartocdn');
+        expect(name).not.toMatch(/^carto-/);
+      }
+    });
+  });
+
+  describe('getEnabledTileProviders', () => {
+    afterEach(() => {
+      MapController.enabledTileProviders = [];
+    });
+
+    test('an empty list means every known provider', () => {
+      expect(MapController.getEnabledTileProviders()).toEqual(
+        Object.keys(MapController.tileProviders)
+      );
+    });
+
+    test('a missing list means every known provider', () => {
+      MapController.enabledTileProviders = null;
+      expect(MapController.getEnabledTileProviders()).toEqual(
+        Object.keys(MapController.tileProviders)
+      );
+    });
+
+    test('honors the server-supplied subset in order', () => {
+      MapController.enabledTileProviders = ['opentopomap', 'osm'];
+      expect(MapController.getEnabledTileProviders()).toEqual(['opentopomap', 'osm']);
+    });
+
+    test('drops names that are not in the registry', () => {
+      MapController.enabledTileProviders = ['osm', 'not-a-provider'];
+      expect(MapController.getEnabledTileProviders()).toEqual(['osm']);
+    });
+
+    test('falls back to all when every entry is unknown', () => {
+      MapController.enabledTileProviders = ['nope', 'also-nope'];
+      expect(MapController.getEnabledTileProviders()).toEqual(
+        Object.keys(MapController.tileProviders)
+      );
+    });
+  });
+
+  describe('_clampToEnabled', () => {
+    beforeEach(() => {
+      MapController.config = { tile_provider: 'osm' };
+      MapController.enabledTileProviders = ['osm', 'esri-satellite'];
+    });
+
+    afterEach(() => {
+      MapController.enabledTileProviders = [];
+      MapController.config = { tile_provider: 'osm' };
+    });
+
+    test('passes an enabled provider through', () => {
+      expect(MapController._clampToEnabled('esri-satellite').name).toBe('esri-satellite');
+    });
+
+    test('rejects a provider the admin disabled', () => {
+      // Falls back to the configured startup provider, never to a blocked one.
+      expect(MapController._clampToEnabled('opentopomap').name).toBe('osm');
+    });
+
+    test('falls back to the configured provider when the default is disabled', () => {
+      MapController.config = { tile_provider: 'esri-satellite' };
+      expect(MapController._clampToEnabled('opentopomap').name).toBe('esri-satellite');
+    });
+
+    test('never returns a provider outside the enabled set', () => {
+      for (const candidate of [undefined, null, '', 'bogus', 'opentopomap']) {
+        expect(MapController.getEnabledTileProviders()).toContain(
+          MapController._clampToEnabled(candidate).name
+        );
+      }
+    });
+  });
+
+  describe('setTileProvider', () => {
+    let container;
+
+    beforeEach(() => {
+      L.tileLayer.mockClear();
+      container = document.createElement('div');
+      document.body.appendChild(container);
+      const removed = [];
+      MapController.map = {
+        getContainer: () => container,
+        removeLayer: (layer) => removed.push(layer),
+      };
+      MapController._removedLayers = removed;
+      MapController.config = { tile_provider: 'osm' };
+      MapController.activeTileProvider = null;
+      MapController.enabledTileProviders = [];
+    });
+
+    afterEach(() => {
+      container.remove();
+      MapController.map = null;
+      MapController.tileLayer = null;
+      MapController.activeTileProvider = null;
+      MapController.enabledTileProviders = [];
+    });
+
+    test('swaps the rendered layer and records the active provider', () => {
+      MapController.tileLayer = { id: 'old' };
+      const applied = MapController.setTileProvider('esri-satellite');
+      expect(applied).toBe('esri-satellite');
+      expect(MapController.activeTileProvider).toBe('esri-satellite');
+      expect(MapController._removedLayers).toContainEqual({ id: 'old' });
+      expect(L.tileLayer).toHaveBeenCalledWith(
+        MapController.tileProviders['esri-satellite'].url,
+        expect.anything()
+      );
+    });
+
+    test('does not mutate the server-provided startup config', () => {
+      // config.tile_provider must keep meaning "startup default".
+      MapController.tileLayer = { id: 'old' };
+      MapController.setTileProvider('opentopomap');
+      expect(MapController.config.tile_provider).toBe('osm');
+    });
+
+    test('clamps a disabled provider instead of rendering blocked tiles', () => {
+      MapController.enabledTileProviders = ['osm'];
+      MapController.tileLayer = { id: 'old' };
+      expect(MapController.setTileProvider('esri-satellite')).toBe('osm');
+      expect(L.tileLayer).toHaveBeenCalledWith(
+        MapController.tileProviders.osm.url,
+        expect.anything()
+      );
+    });
+
+    test('records the active provider without a map yet', () => {
+      MapController.map = null;
+      MapController.tileLayer = null;
+      expect(MapController.setTileProvider('opentopomap')).toBe('opentopomap');
+      expect(MapController.activeTileProvider).toBe('opentopomap');
+      expect(L.tileLayer).not.toHaveBeenCalled();
+    });
+
+    test('still swaps the layer when no prior layer exists', () => {
+      // Guards the gate on `this.map` rather than `this.tileLayer`.
+      MapController.tileLayer = null;
+      expect(MapController.setTileProvider('opentopomap')).toBe('opentopomap');
+      expect(L.tileLayer).toHaveBeenCalledWith(
+        MapController.tileProviders.opentopomap.url,
+        expect.anything()
+      );
+      expect(MapController._removedLayers).toEqual([]);
+    });
+
+    test('toggles the dark-mode invert class with the provider', () => {
+      MapController.tileLayer = { id: 'old' };
+      MapController.setTileProvider('esri-satellite');
+      expect(container.classList.contains('no-tile-invert')).toBe(true);
+      MapController.setTileProvider('osm');
+      expect(container.classList.contains('no-tile-invert')).toBe(false);
+    });
+  });
+
+  describe('_resolveTileProvider', () => {
+    test('resolves a known provider', () => {
+      const p = MapController._resolveTileProvider('opentopomap');
+      expect(p.name).toBe('opentopomap');
+      expect(p.maxNativeZoom).toBe(17);
+    });
+
+    test('falls back to osm for an unknown provider', () => {
+      const p = MapController._resolveTileProvider('not-a-provider');
+      expect(p.name).toBe(MapController.defaultTileProvider);
+      expect(p.url).toBe(MapController.tileProviders.osm.url);
+    });
+
+    test('falls back for undefined/null/empty input', () => {
+      for (const bad of [undefined, null, '']) {
+        expect(MapController._resolveTileProvider(bad).name).toBe('osm');
+      }
+    });
+
+    test('a provider entry cannot spoof its own resolved name', () => {
+      // The config key is authoritative: a stray `name` field in a registry
+      // entry must not win, or attribution/debug output would mislabel the layer.
+      const saved = MapController.tileProviders.opentopomap;
+      MapController.tileProviders.opentopomap = Object.assign({}, saved, { name: 'spoofed' });
+      try {
+        expect(MapController._resolveTileProvider('opentopomap').name).toBe('opentopomap');
+      } finally {
+        MapController.tileProviders.opentopomap = saved;
+      }
+    });
+  });
+
+  describe('_addTileLayer', () => {
+    let container;
+
+    beforeEach(() => {
+      L.tileLayer.mockClear();
+      container = document.createElement('div');
+      container.id = 'map';
+      document.body.appendChild(container);
+      MapController.map = { getContainer: () => container };
+      MapController.config = { tile_provider: 'osm' };
+      // No runtime choice yet: the layer must follow config.tile_provider.
+      MapController.activeTileProvider = null;
+      MapController.enabledTileProviders = [];
+    });
+
+    afterEach(() => {
+      container.remove();
+      MapController.map = null;
+      MapController.activeTileProvider = null;
+      MapController.enabledTileProviders = [];
+    });
+
+    test('uses the configured provider url and attribution', () => {
+      MapController.config.tile_provider = 'esri-satellite';
+      MapController._addTileLayer();
+      expect(L.tileLayer).toHaveBeenCalledWith(
+        MapController.tileProviders['esri-satellite'].url,
+        expect.objectContaining({
+          attribution: MapController.tileProviders['esri-satellite'].attribution,
+        })
+      );
+    });
+
+    test('passes maxNativeZoom so low-zoom-limit providers up-scale', () => {
+      MapController.config.tile_provider = 'opentopomap';
+      MapController._addTileLayer();
+      const [, opts] = L.tileLayer.mock.calls[0];
+      expect(opts.maxNativeZoom).toBe(17);
+      expect(opts.maxZoom).toBe(MapController.tileMaxZoom);
+    });
+
+    test('unknown provider still renders the default basemap', () => {
+      MapController.config.tile_provider = 'bogus';
+      MapController._addTileLayer();
+      expect(L.tileLayer).toHaveBeenCalledWith(
+        MapController.tileProviders.osm.url,
+        expect.anything()
+      );
+    });
+
+    test('marks the container to skip the dark-mode invert for imagery', () => {
+      MapController.config.tile_provider = 'esri-satellite';
+      MapController._addTileLayer();
+      expect(container.classList.contains('no-tile-invert')).toBe(true);
+    });
+
+    test('does not mark the container for raster providers', () => {
+      MapController.config.tile_provider = 'osm';
+      MapController._addTileLayer();
+      expect(container.classList.contains('no-tile-invert')).toBe(false);
+    });
+  });
 });

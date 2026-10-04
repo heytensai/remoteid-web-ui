@@ -38,7 +38,7 @@ This file is the user's personal, gitignored configuration. Even if it contains 
 - `host` - Web server host (default: "0.0.0.0")
 - `port` - Web server port (default: 5000)
 - `database_url` - PostgreSQL connection URL (e.g. `postgresql://remoteid:pass@db:5432/remoteid`)
-- `map` - Map configuration (center_lat, center_lon, default_zoom, tile_provider)
+- `map` - Map configuration (center_lat, center_lon, default_zoom, tile_provider — one of `osm`, `esri-satellite`, `opentopomap`; unknown values warn and fall back to `osm`; `enabled_tile_providers` optionally restricts which basemaps Settings offers, omitted/empty = all)
 - `default_hours` - Default time window for queries
 - `max_positions_per_query` - Limit to prevent browser lag
 - `use_metric` - Display units: true=metric (meters), false=imperial (feet)
@@ -128,6 +128,100 @@ checkboxes — `showUnknownDrones`, `showKnownDrones` (untrusted aliases only), 
 `showTrustedDrones` — persisted in `localStorage.remoteid_settings`. All drone-list
 filtering goes through `UIController._isDroneVisible(drone)`; do not re-derive
 known/unknown inline (that duplication was removed).
+
+## Base Map Tile Providers
+
+`map.tile_provider` selects the Leaflet basemap. Provider definitions live in the
+**JS registry** `MapController.tileProviders` (`static/js/map.js`); the **CSP host
+allowlist** lives in `config.TILE_PROVIDER_HOSTS` (`config.py`). The two must stay
+in sync — `tests/test_config.py::test_tile_provider_hosts_cover_js_registry` parses
+the JS registry and fails if any provider is missing a Python host entry, because
+such a provider would be normalized away *and* blocked by the CSP (tiles silently
+never load).
+
+| Provider | Notes |
+|---|---|
+| `osm` | Default. OpenStreetMap standard, native max zoom 19 |
+| `esri-satellite` | Esri World Imagery. **Non-commercial use only.** ArcGIS URL ordering is `{z}/{y}/{x}`, not slippy `{z}/{x}/{y}`, and there is no `{s}` subdomain |
+| `opentopomap` | Topographic, **native max zoom 17** (CC-BY-SA attribution required) |
+
+### Adding a Provider
+
+1. Add the entry to `MapController.tileProviders` — `label`, `url`, `attribution`,
+   `maxNativeZoom`, `invertInDarkMode`. Attribution strings are license-required
+   (OpenTopoMap is CC-BY-SA; Esri mandates a long source list) — never blank them.
+   `label` is the Settings → Base Map display name and must differ from the key
+   (`tests/js/map.test.js` enforces both).
+2. Add the matching host to `config.TILE_PROVIDER_HOSTS`.
+3. Document it in `default.web_config.yaml`, `README.md`, `DESIGN.md`, and the
+   config options list above (each independently restates the list).
+
+### Removing a Provider
+
+Delete it from **both** registries (`MapController.tileProviders` and
+`config.TILE_PROVIDER_HOSTS`) — `test_tile_provider_hosts_cover_js_registry`
+requires the two to stay identical, and a leftover JS entry with no host entry
+is normalized away *and* CSP-blocked.
+
+Then record the withdrawal in `config.REMOVED_TILE_PROVIDERS` with the reason.
+Removed providers **warn and fall back to `osm`**, they do *not* raise — unlike
+`REMOVED_EVENTS`, a bad basemap cannot break alerting, and raising would reject
+the whole config load and discard every other pending hot-reloaded change. The
+dedicated mapping exists only so the warning explains *why* ("CARTO now requires
+an API key") instead of telling an upgrading operator their config is a typo.
+`tests/test_config.py` covers both the fallback and the message.
+
+Withdrawn: `carto-light` / `carto-dark` — CARTO now requires an API key for its
+basemaps.
+
+### Runtime Switching (`enabled_tile_providers`)
+
+`map.enabled_tile_providers` (omitted/empty = **all** providers) controls which
+basemaps appear in Settings → Base Map. Two config values, two distinct jobs:
+
+- `map.tile_provider` — the **startup default** only. Never mutated at runtime.
+- `map.enabled_tile_providers` — the **allowed set**, shipped to the browser as
+  `map.enabled_tile_providers` in `/api/config`.
+
+State lives in `MapController`: `enabledTileProviders` (allowed set, from the
+server) and `activeTileProvider` (currently rendered). `setTileProvider()` is the
+single runtime entry point; it clamps through `_clampToEnabled()` so a stale
+`localStorage.remoteid_settings.baseMap` or an admin-disabled provider can never
+produce a CSP-blocked basemap — it falls back to `tile_provider`, then to the
+first enabled provider. `UIController.setBaseMap()` persists the choice and
+re-renders the picker from the provider **actually applied**, so the select can
+never disagree with the map.
+
+1. **The CSP `img-src` allowlist is the union of every *enabled* provider's
+   hosts**, not the active one (`_csp()` in `app.py`). A runtime switch cannot
+   re-request headers, so a provider left out of the union is blocked the moment
+   the user selects it. `MapConfig.tile_host_patterns()` builds that union
+   (deduplicated — CARTO light/dark share a host).
+2. **A configured `tile_provider` is force-inserted into `enabled_tile_providers`.**
+   Otherwise the startup basemap's host is absent from the CSP and the map loads
+   with no tiles at all.
+3. **`_addTileLayer()` reads `activeTileProvider`, not `config.tile_provider`**, and
+   `setTileProvider()` gates on `this.map` (not `this.tileLayer`) so a layer that
+   failed to materialize cannot lock the user out of switching.
+
+### Rules
+
+1. **The map's own `maxZoom` is shared** (`MapController.tileMaxZoom`, 19) so
+   switching providers never changes the map's zoom behavior. A provider's own
+   limit goes in `maxNativeZoom`, which makes Leaflet *up-scale* its deepest tiles
+   past that level. Setting a lower `maxZoom` instead leaves a blank basemap
+   beyond the provider's native limit.
+2. **`invertInDarkMode: false`** disables the dark-mode tile-pane filter for that
+   layer — required for imagery, which looks wrong inverted. `static/css/style.css`
+   overrides the filter for `#map.no-tile-invert`, a class
+   `MapController._addTileLayer()` toggles on the map container.
+3. **Unknown providers warn and fall back to `osm`** (`MapConfig._normalize_tile_provider`),
+   they do *not* raise. Unlike `REMOVED_EVENTS`, a bad tile name cannot break
+   alerting, and raising would reject the whole config load — discarding every
+   other pending change on a hot reload.
+4. **`CONFIG` is `None` until `_init_app()` runs** (gunicorn imports `app.py`
+   first), so `_csp()` falls back to the default provider's host. Never assume it
+   is set when reading it outside a request that has initialized.
 
 ## Database Schema Versioning
 
@@ -489,7 +583,7 @@ Leaflet, Flatpickr, and Font Awesome are **vendored locally** into `static/vendo
 
 - Dependencies are **exact-pinned devDependencies** in `package.json` (locked by `package-lock.json`) — never edit `static/vendor/` by hand.
 - `make vendor` runs `scripts/vendor-deps.mjs`, which copies the pinned dist files from `node_modules/` into `static/vendor/` (CSS, JS, Font Awesome webfonts, and each library's LICENSE).
-- `make vendor-check` SHA-256-compares `static/vendor/` against `node_modules/` and fails if anything is out of sync. It runs automatically as part of `make test` and `make build`.
+- `make vendor-check` SHA-256-compares `static/vendor/` against `node_modules/` and fails if anything is out of sync. It runs as part of `make test-all` and `make build` — **not** `make test`, since the check only matters after a dependency change.
 
 ### Updating a Dependency
 
@@ -502,13 +596,14 @@ git diff --stat static/vendor/   # review exactly what changed
 1. Bump only the intended package (`--save-exact` pins the version).
 2. Rebuild so `static/vendor/` is regenerated from `node_modules/`.
 3. Review the `static/vendor/` diff and commit it with the version bump.
-4. Re-run `make test` (includes `vendor-check`).
+4. Re-run `make test-all` (or `make vendor-check`) — `make test` alone skips the
+   vendor sync check, so it will not catch a stale `static/vendor/`.
 
 ### Rules
 
 1. **Never edit `static/vendor/` by hand** — always regenerate via `make vendor`.
 2. **Never add a new CDN URL** to `templates/index.html` — new frontend deps must be vendored the same way (add as an exact-pinned devDependency + a `FILE_MAP` entry in `scripts/vendor-deps.mjs`).
-3. **CSP** (`_CSP` in `app.py`) must stay local-first: `script-src 'self'`, `style-src 'self' 'unsafe-inline'`, `font-src 'self'`. Only `img-src` (map tiles) may reference external hosts.
+3. **CSP** (`_csp()` in `app.py`) must stay local-first: `script-src 'self'`, `style-src 'self' 'unsafe-inline'`, `font-src 'self'`. Only `img-src` (map tiles) may reference external hosts, and it is built per-request to allow **only** the configured basemap's tile host (see "Base Map Tile Providers").
 4. **`static/sw.js`** precaches every vendored asset; when a new asset is added, add it to `PRECACHE` and bump the `CACHE` version so clients re-cache.
 
 ## Testing Strategy
@@ -552,7 +647,8 @@ Run `make lint` and fix all errors before committing.
 ### Running
 
 ```bash
-make test        # All tests (759 total)
+make test        # Python + JS tests (fast local gate)
+make test-all    # Above + vendor-check (full gate)
 make test-py     # Python only
 make test-js     # JS only
 make lint        # All linters

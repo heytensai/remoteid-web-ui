@@ -4,7 +4,7 @@ A standalone web interface for visualizing Remote ID drone data on an interactiv
 
 ## Features
 
-- Interactive map with OpenStreetMap, Carto Dark/Light tile providers
+- Interactive map with OpenStreetMap, Carto Dark/Light, Esri satellite, and OpenTopoMap tile providers
 - Drone position markers with deterministic color-coding
 - Flight track visualization with adjustable opacity
 - Operator location display linked to drones
@@ -86,7 +86,8 @@ Copy `default.web_config.yaml` to `config/web_config.yaml` and customize. The co
 | `host` / `port` | `0.0.0.0` / `5000` | Server bind address |
 | `database_path` | `./data/web.db` | SQLite database location |
 | `map.center_lat` / `center_lon` | — | Initial map center (auto-fits if unset) |
-| `map.tile_provider` | `osm` | Options: `osm`, `carto-dark`, `carto-light` |
+| `map.tile_provider` | `osm` | Basemap at startup. Options: `osm`, `esri-satellite`, `opentopomap` |
+| `map.enabled_tile_providers` | all | Subset offered in Settings → Base Map. Empty/omitted = every provider above |
 | `default_hours` | `24` | Default time window |
 | `max_positions_per_query` | `5000` | Limit to prevent browser lag |
 | `use_metric` | `true` | `true` = meters, `false` = feet |
@@ -403,6 +404,9 @@ make install
 
 # Run all tests
 make test
+
+# Full gate: tests + vendored-dependency sync check
+make test-all
 
 # Run by language
 make test-py          # Python only

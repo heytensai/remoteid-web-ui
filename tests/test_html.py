@@ -1,8 +1,16 @@
 """Tests for HTML template rendering"""
 
+from pathlib import Path
+
 from bs4 import BeautifulSoup
 
 import app as app_module
+
+_CSS_PATH = Path(__file__).resolve().parent.parent / "static" / "css" / "style.css"
+
+
+def _css() -> str:
+    return _CSS_PATH.read_text()
 
 
 def _app_js_srcs(soup):
@@ -42,6 +50,36 @@ class TestIndexTemplate:
         assert "script-src 'self';" in csp
         assert "style-src 'self' 'unsafe-inline';" in csp
         assert "font-src 'self';" in csp
+
+    def test_dark_mode_tile_filter_has_imagery_opt_out(self):
+        """Imagery basemaps must be able to escape the dark-mode invert.
+
+        MapController toggles `no-tile-invert` on #map for providers with
+        invertInDarkMode: false; without the matching CSS rule, satellite tiles
+        render inverted and look wrong.
+        """
+        css = _css()
+        assert "body.dark-mode .leaflet-tile-pane" in css
+        assert "body.dark-mode #map.no-tile-invert .leaflet-tile-pane" in css
+
+    def test_base_map_picker_present(self, client):
+        """Settings exposes the basemap picker built from the enabled providers."""
+        soup = BeautifulSoup(client.get("/").data, "html.parser")
+        select = soup.find(id="baseMapSelect")
+        assert select is not None
+        assert select.name == "select"
+        assert select.get("aria-label") == "Base map"
+        # Options come from map.enabled_tile_providers via UIController, not HTML.
+        assert select.find_all("option") == []
+        assert soup.find("span", string="Base Map") is not None
+        # It belongs to the settings panel, next to the drone-color pill.
+        panel = soup.find(id="settingsPanel")
+        assert panel is not None and select in panel.find_all("select")
+
+    def test_base_map_select_is_styled(self, client):
+        css = _css()
+        assert ".base-map-select" in css
+        assert "body.dark-mode .base-map-select" in css
 
     def test_key_elements_present(self, client):
         resp = client.get("/")

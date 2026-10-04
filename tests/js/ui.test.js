@@ -58,6 +58,19 @@ global.MapController = {
   setColorMode: jest.fn(mode => {
     MapController.colorMode = mode === 'height' ? 'height' : 'drone';
   }),
+  tileProviders: {
+    osm: { url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', label: 'OpenStreetMap', invertInDarkMode: true },
+    'esri-satellite': { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', label: 'Esri Satellite', invertInDarkMode: false },
+    opentopomap: { url: 'https://a.tile.opentopomap.org/{z}/{x}/{y}.png', label: 'OpenTopoMap', invertInDarkMode: true },
+  },
+  defaultTileProvider: 'osm',
+  activeTileProvider: null,
+  enabledTileProviders: [],
+  getEnabledTileProviders: jest.fn(() => Object.keys(global.MapController.tileProviders)),
+  setTileProvider: jest.fn(name => {
+    global.MapController.activeTileProvider = name;
+    return name;
+  }),
   getHeightColor: jest.fn().mockReturnValue('#22c55e'),
   getHeightBandLabel: jest.fn().mockReturnValue('0-100 ft'),
   updateDrones: jest.fn(),
@@ -1632,6 +1645,101 @@ describe('UIController', () => {
       sidebar.classList.add('open');
       keyEvent('Escape');
       expect(sidebar.classList.contains('open')).toBe(true);
+    });
+  });
+
+  describe('base map picker', () => {
+    let select;
+
+    beforeEach(() => {
+      select = document.createElement('select');
+      select.id = 'baseMapSelect';
+      document.body.appendChild(select);
+      MapController.activeTileProvider = null;
+      MapController.enabledTileProviders = [];
+      MapController.setTileProvider.mockClear();
+      MapController.getEnabledTileProviders.mockImplementation(
+        () => Object.keys(MapController.tileProviders)
+      );
+      UIController._saveSettings = jest.fn();
+      UIController.elements = { baseMapSelect: select };
+    });
+
+    afterEach(() => {
+      select.remove();
+    });
+
+    test('_renderBaseMapOptions lists every enabled provider with a label', () => {
+      UIController._renderBaseMapOptions();
+      const values = Array.from(select.options).map(o => o.value);
+      expect(values).toEqual(['osm', 'esri-satellite', 'opentopomap']);
+      expect(Array.from(select.options).map(o => o.textContent)).toEqual([
+        'OpenStreetMap', 'Esri Satellite', 'OpenTopoMap',
+      ]);
+    });
+
+    test('_renderBaseMapOptions only lists admin-enabled providers', () => {
+      MapController.enabledTileProviders = ['osm', 'opentopomap'];
+      MapController.getEnabledTileProviders.mockImplementation(
+        () => MapController.enabledTileProviders
+      );
+      UIController._renderBaseMapOptions();
+      expect(Array.from(select.options).map(o => o.value)).toEqual(['osm', 'opentopomap']);
+    });
+
+    test('_renderBaseMapOptions selects the active provider', () => {
+      MapController.activeTileProvider = 'esri-satellite';
+      UIController._renderBaseMapOptions();
+      expect(select.value).toBe('esri-satellite');
+    });
+
+    test('_renderBaseMapOptions marks the selection, not just the value', () => {
+      MapController.activeTileProvider = 'opentopomap';
+      UIController._renderBaseMapOptions();
+      const selected = Array.from(select.options).filter(o => o.selected);
+      expect(selected).toHaveLength(1);
+      expect(selected[0].value).toBe('opentopomap');
+    });
+
+    test('_renderBaseMapOptions clears stale options on re-render', () => {
+      UIController._renderBaseMapOptions();
+      MapController.getEnabledTileProviders.mockImplementation(() => ['osm']);
+      UIController._renderBaseMapOptions();
+      expect(select.options).toHaveLength(1);
+    });
+
+    test('_renderBaseMapOptions is a no-op without the element', () => {
+      UIController.elements = {};
+      expect(() => UIController._renderBaseMapOptions()).not.toThrow();
+    });
+
+    test('setBaseMap delegates and persists', () => {
+      UIController.setBaseMap('esri-satellite');
+      expect(MapController.setTileProvider).toHaveBeenCalledWith('esri-satellite');
+      expect(UIController._saveSettings).toHaveBeenCalled();
+    });
+
+    test('setBaseMap re-renders from the provider actually applied', () => {
+      // A clamped request must not leave the select showing a disabled provider.
+      MapController.setTileProvider.mockImplementationOnce(() => 'osm');
+      const applied = UIController.setBaseMap('opentopomap');
+      expect(applied).toBe('osm');
+      expect(select.value).toBe('osm');
+    });
+
+    test('setBaseMap escapes nothing into HTML', () => {
+      const xss = '<img src=x onerror=alert(1)>';
+      const original = MapController.tileProviders.osm.label;
+      MapController.tileProviders.osm.label = xss;
+      try {
+        UIController._renderBaseMapOptions();
+        const opt = Array.from(select.options).find(o => o.value === 'osm');
+        // Built with textContent, so the markup stays inert text.
+        expect(opt.querySelector('img')).toBeNull();
+        expect(opt.textContent).toBe(xss);
+      } finally {
+        MapController.tileProviders.osm.label = original;
+      }
     });
   });
 });

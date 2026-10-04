@@ -23,8 +23,31 @@ web_interface:
     center_lat: 37.7749
     center_lon: -122.4194
     default_zoom: 11
-    # Options: "osm", "carto-light", "carto-dark"
+    # Base map tiles. Options:
+    #   "osm"             — OpenStreetMap standard (default)
+    #   "esri-satellite"  — Esri World Imagery (satellite). Note: Esri's public
+    #                        tile service is free for non-commercial use only,
+    #                        and imagery is not inverted in dark mode.
+    #   "opentopomap"     — OpenTopoMap (topographic, native max zoom 17)
+    # An unrecognized value logs a warning and falls back to "osm".
+    #
+    # The former "carto-light" / "carto-dark" options were withdrawn: CARTO now
+    # requires an API key for its basemaps. They still fall back to "osm" with a
+    # warning naming the reason, so an old config keeps working.
     tile_provider: "osm"
+
+    # Base maps the user may switch between at runtime (Settings -> Base Map).
+    # Leave empty / omit to offer all of the providers listed above; the choice
+    # is stored per-browser, so this only controls which options appear.
+    # Unknown names are dropped with a warning, and "tile_provider" above is
+    # always kept enabled so the startup basemap can actually load.
+    #
+    # The Content-Security-Policy allows the tile hosts of every provider in
+    # this list, so narrowing it also narrows the user's options.
+    # enabled_tile_providers:
+    #   - "osm"
+    #   - "esri-satellite"
+    #   - "opentopomap"
 
   # Default time window for queries (in hours)
   default_hours: 24
