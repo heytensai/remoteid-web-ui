@@ -404,6 +404,10 @@ The frontend runs **two independent pollers** (see `ui.js`):
 - CSS: Use 4-space indentation
 - Python: Follow PEP 8
 
+**Docker Build Requirements**
+- When adding or removing Python files (`.py`), remember to update the Dockerfile COPY command at Dockerfile:16 (currently `COPY requirements.txt .` — only updates the requirements file, not the source code)
+- The Docker build does not automatically sync changes to the Python source files; rebuild the container after adding/removing `.py` files: `docker build -t remoteid-web-ui .`
+
 ## Unit Display
 
 When displaying distances/altitudes/speeds, always use the `Units` module:
