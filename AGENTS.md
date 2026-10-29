@@ -218,7 +218,8 @@ never disagree with the map.
 3. **Unknown providers warn and fall back to `osm`** (`MapConfig._normalize_tile_provider`),
    they do *not* raise. Unlike `REMOVED_EVENTS`, a bad tile name cannot break
    alerting, and raising would reject the whole config load — discarding every
-   other pending change on a hot reload.
+   other pending change on a hot reload. `REMOVED_TILE_PROVIDERS` entries take
+   the same path but log the withdrawal reason instead of "unknown value".
 4. **`CONFIG` is `None` until `_init_app()` runs** (gunicorn imports `app.py`
    first), so `_csp()` falls back to the default provider's host. Never assume it
    is set when reading it outside a request that has initialized.

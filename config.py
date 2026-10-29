@@ -1,6 +1,7 @@
 """Configuration loader for web interface"""
 
 import logging
+import os
 import re
 
 from dataclasses import dataclass, field
@@ -383,6 +384,7 @@ class MaintenanceConfig:
     """Background maintenance task configuration.
 
     Runs periodic cleanup of stale auth data (expired tokens, orphaned users).
+    Note: Retention/archival configuration is now handled by RetentionConfig.
     """
 
     enabled: bool = False
@@ -398,6 +400,47 @@ class MaintenanceConfig:
             self.delete_expired_tokens = data.get("delete_expired_tokens", True)
             self.delete_expired_login_tokens = data.get("delete_expired_login_tokens", True)
             self.delete_orphaned_ephemeral_users = data.get("delete_orphaned_ephemeral_users", True)
+
+
+@dataclass
+class RetentionConfig:
+    """Data retention and archival configuration.
+
+    Enables automatic archival of old data and enforces retention policies.
+    """
+
+    enabled: bool = False
+    interval: int = 86400  # seconds between runs (default 24 hours)
+    days_to_keep: int = 90  # Number of days of data to retain before archival/deletion
+    archive_to: str = "./archives/webdb"  # Directory for archived files
+    archive_format: str = "csv"  # Format: "csv" or "json"
+    vacuum_enabled: bool = True  # Enable periodic VACUUM to reclaim space
+    vacuum_schedule: str = "0 2 * * *"  # Cron-style schedule (at 2 AM daily)
+
+    def __init__(self, data: dict = None):
+        if data:
+            self.enabled = data.get("enabled", False)
+            self.interval = data.get("interval", 86400)
+            self.days_to_keep = data.get("days_to_keep", 90)
+            self.archive_to = data.get("archive_to", "./archives/webdb")
+            self.archive_format = data.get("archive_format", "csv")
+            self.vacuum_enabled = data.get("vacuum_enabled", True)
+            self.vacuum_schedule = data.get("vacuum_schedule", "0 2 * * *")
+
+    def __post_init__(self):
+        # Validate configuration
+        if self.days_to_keep < 1:
+            raise ValueError("days_to_keep must be at least 1")
+        if self.archive_format not in ("csv", "json"):
+            raise ValueError("archive_format must be 'csv' or 'json'")
+        if self.interval < 3600:
+            raise ValueError("interval must be at least 3600 seconds (1 hour)")
+
+    def validate_config(self):
+        """Validate and fix configuration as needed."""
+        # Create archive directory if it doesn't exist and not empty
+        if self.archive_to and self.archive_to.strip():
+            os.makedirs(self.archive_to, exist_ok=True)
 
 
 @dataclass
@@ -418,6 +461,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
     use_metric: bool = True
     session_detection: SessionDetectionConfig = field(default_factory=SessionDetectionConfig)
     maintenance: MaintenanceConfig = field(default_factory=MaintenanceConfig)
+    retention: RetentionConfig = field(default_factory=RetentionConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
     collectors: List[CollectorConfig] = field(default_factory=list)
     position_stale_minutes: int = 30
@@ -486,6 +530,10 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         # Maintenance configuration
         maint_data = web_data.get("maintenance") or {}
         self.maintenance = MaintenanceConfig(maint_data)
+
+        # Retention configuration
+        retention_data = web_data.get("retention") or {}
+        self.retention = RetentionConfig(retention_data)
 
         # Alerts configuration
         alerts_data = web_data.get("alerts") or {}
@@ -832,6 +880,15 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
             ],
             "use_metric": self.use_metric,
             "drone_aliases": self.drone_aliases_dict(),
+            "retention": {
+                "enabled": self.retention.enabled,
+                "interval": self.retention.interval,
+                "days_to_keep": self.retention.days_to_keep,
+                "archive_to": self.retention.archive_to,
+                "archive_format": self.retention.archive_format,
+                "vacuum_enabled": self.retention.vacuum_enabled,
+                "vacuum_schedule": self.retention.vacuum_schedule,
+            },
             "alerts": {
                 "stale_timeout": self.alerts.stale_timeout,
                 "skip_known_drones": self.alerts.skip_known_drones,

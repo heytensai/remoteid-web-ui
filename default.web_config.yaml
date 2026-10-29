@@ -235,6 +235,21 @@ web_interface:
       geozone_exit: 300
       drone_proximity: 300
 
+  # Data retention and archival (hot-reloadable)
+  # Enables automated archival and cleanup of old data based on age
+  retention:
+    enabled: false
+    # Seconds between retention runs (hot-reloadable)
+    interval: 86400  # 24 hours
+    days_to_keep: 90
+    archive_to: "./archives/webdb"
+    # Archive format: "csv" or "json"
+    archive_format: "csv"
+    # Whether to run periodic VACUUM to reclaim space
+    vacuum_enabled: true
+    # Cron-style schedule for vacuum (0 2 * * * = daily at 2 AM)
+    vacuum_schedule: "0 2 * * *"
+
   # Collector positions and status
   # Each collector can be either:
   #   type: "mobile" — reports position via /api/submit/ping?lat=&lon= (requires api_key)

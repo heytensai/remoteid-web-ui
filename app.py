@@ -41,6 +41,7 @@ from database import WebDatabase
 from session_detect import process_database as redetect_sessions
 from session_scheduler import SessionScheduler
 from maintenance_scheduler import MaintenanceScheduler
+from retention_scheduler import RetentionScheduler
 from alert_engine import AlertEngine
 from notifier import NotifierService
 
@@ -55,6 +56,7 @@ CONFIG: WebConfig = None
 DATABASE: WebDatabase = None
 SESSION_SCHEDULER: Optional[SessionScheduler] = None
 MAINTENANCE_SCHEDULER: Optional[MaintenanceScheduler] = None
+RETENTION_SCHEDULER: Optional[RetentionScheduler] = None
 ALERT_ENGINE: Optional[AlertEngine] = None
 NOTIFIER_SERVICE: Optional[NotifierService] = None
 
@@ -1716,8 +1718,10 @@ def _init_app(config_path: str):
     SESSION_SCHEDULER = SessionScheduler(CONFIG, db_url, alert_engine=ALERT_ENGINE, database=DATABASE)
     logger.info("Creating maintenance scheduler")
     MAINTENANCE_SCHEDULER = MaintenanceScheduler(CONFIG, DATABASE)
+    global RETENTION_SCHEDULER
 
     global _config_snapshot  # noqa: PLW0603  # pylint: disable=global-statement
+    RETENTION_SCHEDULER = RetentionScheduler(CONFIG, DATABASE)
     _config_snapshot = CONFIG
 
     return app
@@ -1903,6 +1907,9 @@ def start_background_services():
 
     if MAINTENANCE_SCHEDULER:
         MAINTENANCE_SCHEDULER.start()
+
+    if RETENTION_SCHEDULER:
+        RETENTION_SCHEDULER.start()
 
     start_config_watcher()
 

@@ -1,13 +1,16 @@
 """Database layer for web interface — PostgreSQL backend"""
 # pylint: disable=too-many-lines
 
+import csv
 import hashlib
+import json
+import logging
+import os
 import secrets as _secrets
 import time
 import uuid
-import logging
 from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 import psycopg2
@@ -1417,6 +1420,242 @@ class WebDatabase:
             )
             self._commit(conn)
             return count
+        finally:
+            self._put_conn(conn)
+
+    def archive_old_data(self, days_to_keep: int, archive_to: str, archive_format: str) -> dict:
+        """Archive data older than the specified number of days.
+
+        Archives records from remoteid, geozone_events, and sync_log tables
+        to files in the specified directory.
+
+        Returns a dict with statistics about the archival operation.
+        """
+        # Calculate cutoff timestamp
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_to_keep)
+
+        # Create archive directory if it doesn't exist
+        os.makedirs(archive_to, exist_ok=True)
+
+        stats = {
+            "archived_records": 0,
+            "archived_alerts": 0,
+            "archived_sync_logs": 0,
+            "archive_files": [],
+        }
+
+        conn = self._get_conn()
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
+            # Archive remoteid table
+            if archive_format == "csv":
+                timestamp_str = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+                csv_file = os.path.join(archive_to, f"remoteid_{timestamp_str}.csv")
+                with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.writer(f)
+                    # Write header
+                    writer.writerow([
+                        "id", "source", "timestamp", "mac_address", "uas_id",
+                        "session_id", "latitude", "longitude", "altitude",
+                        "height", "height_type", "frequency", "operator_id",
+                        "operator_latitude", "operator_longitude",
+                        "computed_session_id", "session_detected_at",
+                        "collector_latitude", "collector_longitude"
+                    ])
+
+                    # Fetch and write archived records
+                    query = """
+                        SELECT * FROM remoteid
+                        WHERE timestamp < %s
+                        ORDER BY timestamp
+                    """
+                    cutoff = cutoff_date
+                    cur.execute(query, (cutoff,))
+
+                    for row in cur.fetchall():
+                        writer.writerow([row[col] for col in [
+                            "id", "source", "timestamp", "mac_address", "uas_id",
+                            "session_id", "latitude", "longitude", "altitude",
+                            "height", "height_type", "frequency", "operator_id",
+                            "operator_latitude", "operator_longitude",
+                            "computed_session_id", "session_detected_at",
+                            "collector_latitude", "collector_longitude"
+                        ]])
+                        stats["archived_records"] += 1
+
+                stats["archive_files"].append(csv_file)
+
+            # Archive geozone_events table
+            try:
+                if archive_format == "csv":
+                    timestamp_str = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+                    csv_file = os.path.join(archive_to, f"geozone_events_{timestamp_str}.csv")
+                    with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+                        writer = csv.writer(f)
+                        writer.writerow([
+                            "id", "uas_id", "geozone_name", "entered_at",
+                            "last_seen_at", "exited_at", "exited_reason", "created_at"
+                        ])
+
+                        query = """
+                            SELECT * FROM geozone_events
+                            WHERE entered_at < %s
+                            ORDER BY entered_at
+                        """
+                        cutoff = cutoff_date
+                        cur.execute(query, (cutoff,))
+
+                        for row in cur.fetchall():
+                            writer.writerow([row[col] for col in [
+                                "id", "uas_id", "geozone_name", "entered_at",
+                                "last_seen_at", "exited_at", "exited_reason", "created_at"
+                            ]])
+                            stats["archived_alerts"] += 1
+
+                    stats["archive_files"].append(csv_file)
+            except (OSError, ValueError, json.JSONDecodeError, psycopg2.Error) as e:
+                logger.warning("Failed to archive geozone_events: %s", e)
+
+            # Delete archived records
+            try:
+                cur.execute("DELETE FROM remoteid WHERE timestamp < %s", (cutoff_date,))
+                stats["archived_records"] -= cur.rowcount
+
+                cur.execute("DELETE FROM geozone_events WHERE entered_at < %s", (cutoff_date,))
+                stats["archived_alerts"] -= cur.rowcount
+
+                # Note: sync_log is small and doesn't need archiving
+            except Exception as e:
+                logger.error("Failed to delete archived data: %s", e)
+                raise
+
+            # Commit changes
+            self._commit(conn)
+
+            return stats
+        finally:
+            self._put_conn(conn)
+
+    def cleanup_old_data(self, days_to_keep: int) -> dict:
+        """Clean up data older than the specified number of days.
+
+        Deletes records older than the retention period from the database.
+        This is a permanent deletion operation.
+
+        Returns a dict with statistics about the cleanup operation.
+        """
+        conn = self._get_conn()
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
+            # Calculate cutoff timestamp
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_to_keep)
+
+            stats = {
+                "deleted_records": 0,
+                "deleted_alerts": 0,
+                "deleted_sync_logs": 0,
+            }
+
+            # Delete old alerts
+            try:
+                cur.execute("DELETE FROM geozone_events WHERE entered_at < %s", (cutoff_date,))
+                stats["deleted_alerts"] = cur.rowcount
+            except Exception as e:
+                logger.warning("Failed to delete old alerts: %s", e)
+                raise
+
+            # Delete old remoteid records
+            try:
+                cur.execute("DELETE FROM remoteid WHERE timestamp < %s", (cutoff_date,))
+                stats["deleted_records"] = cur.rowcount
+            except Exception as e:
+                logger.warning("Failed to delete old remoteid records: %s", e)
+                raise
+
+            # sync_log only has one row per source, typically very recent
+            # It doesn't need cleanup as it's more of a status table
+
+            # Commit changes
+            self._commit(conn)
+
+            return stats
+        finally:
+            self._put_conn(conn)
+
+    def run_vacuum(self):
+        """Run PostgreSQL VACUUM to reclaim space and optimize the database.
+
+        VACUUM reclaims storage occupied by dead tuples left by DELETE or UPDATE operations.
+        It also updates statistics used by the PostgreSQL query planner.
+
+        Returns a dict with information about the vacuum operation.
+        """
+        conn = self._get_conn()
+        try:
+            cur = conn.cursor()
+
+            # Get initial stats
+            cur.execute("SELECT count(*) as total_records FROM remoteid")
+            initial_count = cur.fetchone()["total_records"]
+
+            # Run VACUUM
+            cur.execute("VACUUM ANALYZE")
+
+            # Get stats after VACUUM
+            cur.execute("SELECT count(*) as total_records FROM remoteid")
+            final_count = cur.fetchone()["total_records"]
+
+            return {
+                "initial_records": initial_count,
+                "final_records": final_count,
+                "records_removed": initial_count - final_count,
+                "status": "completed",
+            }
+        finally:
+            self._put_conn(conn)
+
+    def get_retention_stats(self) -> Dict:
+        """Get statistics about the data for retention purposes.
+
+        Returns record counts and timestamps for data retention operations.
+        """
+        conn = self._get_conn()
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
+            # Get overall counts
+            cur.execute("SELECT COUNT(*) as total_records FROM remoteid")
+            total_records = cur.fetchone()["total_records"]
+
+            cur.execute("SELECT COUNT(DISTINCT uas_id) as unique_uas_count FROM remoteid")
+            unique_uas_count = cur.fetchone()["unique_uas_count"]
+
+            cur.execute("SELECT COUNT(*) as total_alerts FROM geozone_events")
+            total_alerts = cur.fetchone()["total_alerts"]
+
+            # Get oldest and newest timestamps
+            cur.execute("SELECT MIN(timestamp) as oldest_ts, MAX(timestamp) as newest_ts FROM remoteid")
+            timestamps = cur.fetchone()
+            oldest_timestamp = timestamps["oldest_ts"]
+            newest_timestamp = timestamps["newest_ts"]
+
+            # Get database size (in bytes) - PostgreSQL specific
+            try:
+                cur.execute("SELECT pg_size_pretty(pg_database_size(current_database())) as db_size")
+                db_size = cur.fetchone()["db_size"]
+            except (psycopg2.OperationalError, psycopg2.ProgrammingError, psycopg2.InterfaceError):
+                db_size = "N/A"
+
+            return {
+                "total_records": total_records,
+                "unique_uas_count": unique_uas_count,
+                "total_alerts": total_alerts,
+                "oldest_timestamp": oldest_timestamp,
+                "newest_timestamp": newest_timestamp,
+                "database_size": db_size,
+            }
         finally:
             self._put_conn(conn)
 
