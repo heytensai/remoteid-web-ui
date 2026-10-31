@@ -1,0 +1,337 @@
+# Plan: Split Python tests into DB-independent and DB-dependent suites
+
+## Background
+
+Commit `85ec3fa` ("implement postgresql as database backend. remove sqlite.")
+replaced the temporary SQLite test database with a real PostgreSQL server:
+
+- `tests/conftest.py` now defaults to
+  `postgresql://postgres:postgres@localhost:5432/remoteid_test`.
+- `setup_test_db` is `scope="session", autouse=True`, so it runs before every
+  test and immediately tries to connect.
+- `sample_config_yaml` depends on `_truncate_db` -> `pg_conn` -> `setup_test_db`,
+  so even pure config tests pull in PostgreSQL.
+
+Result: with no local PostgreSQL, every Python test fails during fixture setup.
+
+Branch `fix-test` (`f254b36`) started this work but only added a Makefile target
+that passes `--db`; no pytest option, marker, or test split was implemented.
+The empty `tests/py/` and `tests/py-db/` directories are not needed.
+
+## Goal
+
+- `make test-py` and `make test` run DB-independent Python tests without
+  PostgreSQL.
+- `make test-py-db` runs only tests that require PostgreSQL.
+- `make test-py-all` runs the complete Python suite with PostgreSQL.
+- `make test-all` runs the complete Python suite, JS tests, and vendor check.
+- DB tests fail clearly (not silently) when run with `--db` and PostgreSQL is
+  unavailable.
+
+## Approach
+
+Use pytest markers and an opt-in `--db` flag. Do **not** physically move test
+files into `tests/py/` and `tests/py-db/`: several files are mixed
+(`test_app.py`, `test_alert_engine.py`, `test_session_scheduler.py`), so moving
+would require splitting files and fixing imports for little benefit.
+
+Do not modify `config/web_config.yaml` under any circumstances.
+
+## Step 1: Add pytest configuration
+
+Create `pytest.ini` at the repo root:
+
+```ini
+[pytest]
+testpaths = tests
+markers =
+    db: requires a running PostgreSQL test database (run with --db)
+```
+
+This registers the marker so `pytest.mark.db` does not produce warnings.
+
+## Step 2: Decouple non-DB fixtures in `tests/conftest.py`
+
+Current structure:
+
+```python
+@pytest.fixture(scope="session", autouse=True)
+def setup_test_db(pg_admin): ...
+
+@pytest.fixture(scope="session")
+def pg_conn(setup_test_db): ...
+
+@pytest.fixture(scope="function")
+def _truncate_db(pg_conn): ...
+
+@pytest.fixture
+def sample_config_yaml(_truncate_db): ...
+
+@pytest.fixture
+def app(sample_config_yaml): ...
+
+@pytest.fixture
+def db(app): ...
+```
+
+Make these changes:
+
+1. Remove `autouse=True` from `setup_test_db`:
+
+   ```python
+   @pytest.fixture(scope="session")
+   def setup_test_db(pg_admin):
+   ```
+
+   DB fixtures already depend on it transitively through `pg_conn`, so DB tests
+   still create the database. Non-DB tests will no longer touch PostgreSQL.
+
+2. Remove the DB dependency from `sample_config_yaml`:
+
+   ```python
+   @pytest.fixture
+   def sample_config_yaml():
+   ```
+
+   It should still write `database_url: TEST_DATABASE_URL` into the temp YAML;
+   it just must not connect or truncate.
+
+3. Keep database isolation by moving `_truncate_db` onto `app`:
+
+   ```python
+   @pytest.fixture
+   def app(sample_config_yaml, _truncate_db):
+   ```
+
+   This preserves the old behaviour where every app/client/db test starts with
+   truncated tables. `db(app)` continues to depend on `app`, so it is covered.
+
+4. Leave `pg_admin`, `pg_conn`, `_truncate_db`, and `db` otherwise unchanged.
+
+## Step 3: Add `--db` / `--db-only` support to `tests/conftest.py`
+
+Add near the top of `tests/conftest.py`, after `TEST_DATABASE_URL`:
+
+```python
+DB_FIXTURES = frozenset({
+    "pg_admin",
+    "setup_test_db",
+    "pg_conn",
+    "_truncate_db",
+    "db",
+    "app",
+    "client",
+    "engine_db",
+    "engine",
+    "overlapping_engine",
+    "proximity_engine",
+    "populated_db",
+    "empty_db",
+})
+
+
+def pytest_addoption(parser):
+    """Add opt-in flags for PostgreSQL-backed tests."""
+    parser.addoption(
+        "--db",
+        action="store_true",
+        default=False,
+        help="include tests that require PostgreSQL",
+    )
+    parser.addoption(
+        "--db-only",
+        action="store_true",
+        default=False,
+        help="run only tests that require PostgreSQL",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Mark DB tests and skip them unless --db/--db-only was requested."""
+    run_db = config.getoption("--db") or config.getoption("--db-only")
+    only_db = config.getoption("--db-only")
+
+    skip_needs_db = pytest.mark.skip(
+        reason="requires PostgreSQL; run with --db (make test-py-db)"
+    )
+    skip_no_db = pytest.mark.skip(
+        reason="not a database test; omit --db-only"
+    )
+
+    for item in items:
+        needs_db = (
+            item.get_closest_marker("db") is not None
+            or bool(DB_FIXTURES.intersection(item.fixturenames))
+        )
+
+        if needs_db:
+            item.add_marker(pytest.mark.db)
+            if not run_db:
+                item.add_marker(skip_needs_db)
+        elif only_db:
+            item.add_marker(skip_no_db)
+```
+
+Why auto-mark by fixture closure: `item.fixturenames` includes transitive
+dependencies, so tests using `client` (which needs `app`, which needs
+`_truncate_db`) are automatically DB tests. This keeps pure tests inside mixed
+files (`test_database.py`, `test_app.py`, `test_alert_engine.py`) in the fast
+suite.
+
+## Step 4: Manually mark tests that bypass fixtures
+
+A few tests call PostgreSQL directly without a DB fixture, so the fixture
+scanner cannot detect them. Add `@pytest.mark.db` to these known cases:
+
+- `tests/test_alert_engine.py::test_proximity_imperial_config`
+  (constructs `WebDatabase(TEST_DB_URL)` inside the test body).
+- `tests/test_session_scheduler.py::TestSessionSchedulerLifecycle::test_runs_when_enabled`
+  (scheduler connects to `TEST_DATABASE_URL` even though `process_database` is
+  mocked).
+
+After implementing, audit by running with PostgreSQL stopped:
+
+```bash
+env/bin/python -m pytest tests/ -v
+```
+
+Any failure that attempts a PostgreSQL connection means a test needs either a
+DB fixture dependency or `@pytest.mark.db`. Add the marker only for tests that
+truly require a live database.
+
+## Step 5: Update the Makefile
+
+Use `--db-only` rather than `-m db` so marker filtering does not depend on
+pytest hook ordering.
+
+```makefile
+.PHONY: test test-all test-py test-py-db test-py-all test-js test-py-cov lint lint-py lint-js build vendor vendor-check install
+
+# Fast local gate: no PostgreSQL required.
+test: test-py test-js
+
+# Full gate: complete Python suite (including DB tests) + JS + vendor check.
+test-all: test-py-all test-js vendor-check
+
+# DB-independent Python tests only.
+test-py:
+	$(PYTHON) -m pytest tests/ -v
+
+# PostgreSQL-backed Python tests only.
+test-py-db:
+	$(PYTHON) -m pytest tests/ -v --db-only
+
+# Complete Python suite, including PostgreSQL-backed tests.
+test-py-all:
+	$(PYTHON) -m pytest tests/ -v --db
+
+# Coverage for the DB-independent suite (keeps the fast path DB-free).
+test-py-cov:
+	$(PYTHON) -m pytest tests/ --cov=. --cov-report=term --cov-report=html
+```
+
+Notes:
+
+- `make test` must succeed with PostgreSQL stopped.
+- `make test-all` intentionally requires PostgreSQL because it is the full gate.
+- If a coverage target for all Python tests is desired, add
+  `test-py-cov-all: $(PYTHON) -m pytest tests/ --db --cov=. ...`.
+
+## Step 6: Update documentation
+
+### `TESTING.md`
+
+- Fix stale SQLite references: the suite uses PostgreSQL, not temp SQLite files.
+- Document prerequisites: PostgreSQL is required only for DB tests.
+- Document `TEST_DATABASE_URL` and the default
+  `postgresql://postgres:postgres@localhost:5432/remoteid_test`.
+- Update quick-start commands:
+
+  ```bash
+  make test          # Python (no DB) + JS
+  make test-py       # Python, no PostgreSQL required
+  make test-py-db    # Python tests requiring PostgreSQL
+  make test-py-all   # Complete Python suite (requires PostgreSQL)
+  make test-all      # Everything + vendor check (requires PostgreSQL)
+  ```
+
+- Update the Fixtures section: `app`/`client`/`db` are DB-backed;
+  `sample_config_yaml` alone is not.
+- Update the CI example: run the non-DB job normally; run the DB job with a
+  `postgres:16-alpine` service and `TEST_DATABASE_URL` set.
+
+### `AGENTS.md`
+
+- Update the "Testing Strategy" item that incorrectly says fixtures create temp
+  SQLite databases.
+- Document the `db` marker, `--db`, `--db-only`, and the new Makefile targets in
+  the "Running" section.
+- Note that new tests using `app`, `client`, `db`, `pg_conn`, or
+  `_truncate_db` are auto-marked as DB tests.
+
+### `README.md`
+
+- Update only the test-command block if desired. Do not broaden this change into
+  unrelated SQLite documentation cleanup.
+
+## Step 7: Verification
+
+With PostgreSQL stopped:
+
+```bash
+make test-py
+make test
+env/bin/python -m pytest tests/test_config.py -v
+```
+
+Expected: all pass, DB tests are reported as skipped, and no
+`psycopg2.OperationalError` appears.
+
+With PostgreSQL running and `TEST_DATABASE_URL` pointing at a test database:
+
+```bash
+make test-py-db
+make test-py-all
+make test-all
+make lint
+```
+
+Expected: DB-only tests pass, full suite passes, lint passes.
+
+Also confirm collection counts:
+
+```bash
+env/bin/python -m pytest tests/ --collect-only -q
+env/bin/python -m pytest tests/ --collect-only -q --db-only
+env/bin/python -m pytest tests/ --collect-only -q --db
+```
+
+The `--db` count should equal the no-flag count (which includes skipped DB
+tests). The `--db-only` count should be a strict subset.
+
+## Optional follow-up (not required for the split)
+
+`tests/test_html.py` only renders HTML, but it currently uses the `client`
+fixture, which initializes `WebDatabase` and therefore requires PostgreSQL. If
+you want HTML tests in the fast suite, add a stub app fixture that monkeypatches
+`app.WebDatabase` with a no-op object and have `test_html.py` use a
+`client_no_db` fixture. Keep this separate from the main split; the stub must
+cover the objects `_init_app()` constructs (`AlertEngine`, `SessionScheduler`,
+`MaintenanceScheduler`, `RetentionScheduler`).
+
+## Files expected to change
+
+- `pytest.ini` (new)
+- `tests/conftest.py`
+- `tests/test_alert_engine.py` (one manual marker)
+- `tests/test_session_scheduler.py` (one manual marker)
+- `Makefile`
+- `TESTING.md`
+- `AGENTS.md`
+- `README.md` (test command block only)
+
+## Do not change
+
+- `config/web_config.yaml` (user-local, gitignored)
+- Application behaviour, database schema, or `database.py`
+- Existing test semantics; this is a test-runner/fixture change only
