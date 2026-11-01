@@ -623,7 +623,7 @@ Tests live in `tests/` with Python (`pytest`) and JavaScript (`Jest` + `jsdom`) 
 
 ### Testing Conventions
 
-1. **Isolated test DB** — fixtures in `conftest.py` create temp SQLite databases and tear them down after each test.
+1. **DB-independent fixtures** — `sample_config_yaml` fixture does NOT connect to PostgreSQL. Tests using `app`, `client`, `db`, `pg_conn`, or `_truncate_db` fixtures are automatically marked as `@pytest.mark.db` and require PostgreSQL. Non-DB fixtures run without PostgreSQL.
 2. **API tests** use Flask's test client with `TESTING=True` and `WTF_CSRF_ENABLED=False` (except when explicitly testing CSRF).
 3. **JS tests** load source files via `eval` (with `const` stripped) into the `jsdom` global scope. Mock `global.fetch`, `global.L`, and `global.flatpickr` as needed.
 4. **HTML escaping** — test that `escapeHtml()` handles `<`, `>`, `&`, `"` via the `textContent` → `innerHTML` round-trip. jsdom escapes `"` as `\"` not `&quot;`, so tests check for `not.toContain('<')` rather than exact equality.
@@ -652,9 +652,11 @@ Run `make lint` and fix all errors before committing.
 ### Running
 
 ```bash
-make test        # Python + JS tests (fast local gate)
-make test-all    # Above + vendor-check (full gate)
-make test-py     # Python only
+make test        # Python (no DB) + JS tests (fast local gate)
+make test-all    # Complete Python suite + JS + vendor check (requires PostgreSQL)
+make test-py     # DB-independent Python tests only
+make test-py-db    # PostgreSQL-backed Python tests only
+make test-py-all   # Complete Python suite including DB tests (requires PostgreSQL)
 make test-js     # JS only
 make lint        # All linters
 make lint-py     # Pylint only

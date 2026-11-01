@@ -1,13 +1,26 @@
-.PHONY: test test-all test-py test-js test-py-cov lint lint-py lint-js build vendor vendor-check install
+.PHONY: test test-all test-py test-py-db test-py-all test-js test-py-cov lint lint-py lint-js build vendor vendor-check install
 
 PYTHON = env/bin/python
 NPM = npm
 NODE = node
 
-# Fast local gate. vendor-check is deliberately excluded — it SHA-256s every
-# vendored asset against node_modules, which only matters after a dependency
-# change. Run `make test-all` for the full gate, or `make vendor-check` alone.
+# Fast local gate: no PostgreSQL required.
 test: test-py test-js
+
+# Full gate: complete Python suite (including DB tests) + JS + vendor check.
+test-all: test-py-all test-js vendor-check
+
+# DB-independent Python tests only.
+test-py:
+	$(PYTHON) -m pytest tests/ -v
+
+# PostgreSQL-backed Python tests only.
+test-py-db:
+	$(PYTHON) -m pytest tests/ -v --db-only
+
+# Complete Python suite, including PostgreSQL-backed tests.
+test-py-all:
+	$(PYTHON) -m pytest tests/ -v --db
 
 # Full gate, including the vendor sync check.
 test-all: test vendor-check
@@ -20,9 +33,6 @@ vendor:
 
 vendor-check:
 	$(NODE) scripts/vendor-deps.mjs --check
-
-test-py:
-	$(PYTHON) -m pytest tests/ -v
 
 test-py-cov:
 	$(PYTHON) -m pytest tests/ --cov=. --cov-report=term --cov-report=html

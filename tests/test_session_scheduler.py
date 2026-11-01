@@ -131,6 +131,7 @@ class TestSessionSchedulerLifecycle:
         # process_database should never have been called (disabled)
         mock_process_database.assert_not_called()
 
+    @pytest.mark.db
     def test_runs_when_enabled(self, mock_process_database):
         """When enabled, process_database is called"""
         from config import SessionDetectionConfig

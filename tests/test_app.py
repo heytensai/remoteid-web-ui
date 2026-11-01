@@ -4,7 +4,10 @@ import contextlib
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from urllib.parse import urlencode
+
+import pytest
 
 import app as app_module
 from app import _parse_time_range
@@ -1002,6 +1005,15 @@ class TestApiLastTimestamp:
 
 class TestParseTimeRange:
     """Regression tests for _parse_time_range timezone handling"""
+
+    @pytest.fixture(autouse=True)
+    def _default_config(self, monkeypatch):
+        """Provide default_hours without requiring _init_app (PostgreSQL)."""
+        monkeypatch.setattr(
+            app_module,
+            "_get_config",
+            lambda: SimpleNamespace(default_hours=24),
+        )
 
     def test_naive_datetime(self):
         """Naive input → naive output"""
