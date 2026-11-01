@@ -3,9 +3,11 @@
 ## Quick Start
 
 ```bash
-make test          # Python + JS tests (fast local gate)
-make test-all      # Above + vendored-dependency sync check
-make test-py       # Python tests only
+make test          # Python + JS tests (fast local gate, no PostgreSQL required)
+make test-all      # Full gate: complete Python suite + JS + vendor check
+make test-py       # DB-independent Python tests only
+make test-py-db    # PostgreSQL-backed Python tests only
+make test-py-all   # Complete Python suite including DB tests (requires PostgreSQL)
 make test-js       # JavaScript tests only
 make test-py-cov   # Python tests with coverage report
 make lint          # Run all linters
@@ -25,6 +27,20 @@ pip install -r dev-requirements.txt
 ```
 
 The test suite uses `pytest`, `pytest-cov`, `pytest-flask`, and `beautifulsoup4`.
+
+### PostgreSQL (for DB tests only)
+
+Only tests marked with `@pytest.mark.db` require PostgreSQL. By default, `make test` and `make test-py` skip DB tests and run without PostgreSQL.
+
+To run PostgreSQL-backed tests:
+
+```bash
+make test-py-db    # Only tests that require PostgreSQL
+make test-py-all   # All Python tests including DB tests
+make test-all      # Python + JS + vendor check (requires PostgreSQL)
+```
+
+Set `TEST_DATABASE_URL` to override the test database connection (default: `postgresql://postgres:postgres@localhost:5432/remoteid_test`).
 
 ### JavaScript
 
@@ -81,11 +97,13 @@ pytest tests/test_app.py::TestApiDrones -v  # Single class
 
 ### Fixtures
 
-- `app` — Flask app with temp SQLite database and test config
-- `client` — Flask test client
-- `db` — Database pre-populated with 4 sample drone records
+- `sample_config_yaml` — Reusable YAML config fixture, does NOT require PostgreSQL
+- `app` — Flask app with PostgreSQL database and test config (requires `--db`/`--db-only`)
+- `client` — Flask test client (requires `app`, so it is a DB test)
+- `db` — Database pre-populated with 4 sample drone records (requires PostgreSQL)
 - `sample_records` — Clean records for insertion tests
-- `sample_config_yaml` — Reusable YAML config fixture
+
+**Note:** Tests that use `app`, `client`, `db`, `pg_conn`, or `_truncate_db` fixtures are automatically marked as `@pytest.mark.db` and will be skipped unless you run with `--db` or `--db-only`.
 
 ### HTML Testing
 

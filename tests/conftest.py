@@ -21,6 +21,64 @@ TEST_DATABASE_URL = os.environ.get(
     "postgresql://postgres:postgres@localhost:5432/remoteid_test",
 )
 
+DB_FIXTURES = frozenset({
+    "pg_admin",
+    "setup_test_db",
+    "pg_conn",
+    "_truncate_db",
+    "db",
+    "app",
+    "client",
+    "engine_db",
+    "engine",
+    "overlapping_engine",
+    "proximity_engine",
+    "populated_db",
+    "empty_db",
+})
+
+
+def pytest_addoption(parser):
+    """Add opt-in flags for PostgreSQL-backed tests."""
+    parser.addoption(
+        "--db",
+        action="store_true",
+        default=False,
+        help="include tests that require PostgreSQL",
+    )
+    parser.addoption(
+        "--db-only",
+        action="store_true",
+        default=False,
+        help="run only tests that require PostgreSQL",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Mark DB tests and skip them unless --db/--db-only was requested."""
+    run_db = config.getoption("--db") or config.getoption("--db-only")
+    only_db = config.getoption("--db-only")
+
+    skip_needs_db = pytest.mark.skip(
+        reason="requires PostgreSQL; run with --db (make test-py-db)"
+    )
+    skip_no_db = pytest.mark.skip(
+        reason="not a database test; omit --db-only"
+    )
+
+    for item in items:
+        needs_db = (
+            item.get_closest_marker("db") is not None
+            or bool(DB_FIXTURES.intersection(item.fixturenames))
+        )
+
+        if needs_db:
+            item.add_marker(pytest.mark.db)
+            if not run_db:
+                item.add_marker(skip_needs_db)
+        elif only_db:
+            item.add_marker(skip_no_db)
+
 
 @pytest.fixture(scope="session")
 def pg_admin():
@@ -33,7 +91,7 @@ def pg_admin():
     conn.close()
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def setup_test_db(pg_admin):
     """Create the test database if it doesn't exist, drop it on teardown."""
     db_name = TEST_DATABASE_URL.rsplit("/", 1)[1]
@@ -89,7 +147,7 @@ def _truncate_db(pg_conn):
 
 
 @pytest.fixture
-def sample_config_yaml(_truncate_db):
+def sample_config_yaml():
     """Create a temporary config YAML file for testing."""
     import tempfile
     config = {
@@ -152,7 +210,7 @@ def sample_config_yaml(_truncate_db):
 
 
 @pytest.fixture
-def app(sample_config_yaml):
+def app(sample_config_yaml, _truncate_db):
     """Create a Flask app instance for testing."""
     config_path = sample_config_yaml
 

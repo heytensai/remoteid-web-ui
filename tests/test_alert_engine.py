@@ -998,6 +998,7 @@ def test_proximity_does_not_run_via_evaluate(proximity_engine):
     assert len(calls) == 0
 
 
+@pytest.mark.db
 def test_proximity_imperial_config():
     """Imperial config (feet) is converted to meters internally."""
     config_data = {
