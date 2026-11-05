@@ -136,6 +136,7 @@ web_interface/
 | `/api/tracks/<uas_id>` | GET | Get GeoJSON track for specific drone |
 | `/api/operators` | GET | Get operator positions |
 | `/api/config` | GET | Get map config (center, zoom defaults) |
+| `/health` | GET | Health check (`health_check_endpoint.enabled`; `detail` adds DB stats/sources) |
 | `/api/bounds` | GET | Get bounding box of all positions |
 | `/api/last-timestamp` | GET | Get most recent timestamp (for bootstrapping clients) |
 | `/api/submit` | POST | Submit data from remote nodes (requires API key) |

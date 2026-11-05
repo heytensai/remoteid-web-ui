@@ -53,6 +53,7 @@ This file is the user's personal, gitignored configuration. Even if it contains 
 - `position_stale_minutes` - Minutes without ping before collector marker turns gray (hot-reloadable)
 - `server_url` - Public base URL for notification embeds (hot-reloadable)
 - `secure_cookies` - When true, session cookies are marked Secure (set this when serving over HTTPS behind a reverse proxy). Default: false
+- `health_check_endpoint` - `/health` monitoring settings: `enabled` (default: false) exposes the endpoint; `detail` (default: false) adds DB size, an estimated record count, and source names. Nested mapping only (the old boolean form is rejected with a warning). (hot-reloadable)
 - `notifications` - List of notification targets (name, type, events[], webhook_url). Supported types: discord, ntfy, teams, mqtt. MQTT targets also accept `broker_url` (mqtt:// or mqtts://) and `topic_prefix` (messages publish to `{topic_prefix}/{event}` as JSON), plus optional `username`/`password`. Events: geozone_enter, geozone_exit, new_unknown, new_known, new_trusted, drone_proximity. If empty, notifications disabled. (hot-reloadable)
   - Templates in `templates/notifications/<type>/<event>.j2` are user-customizable. They receive raw values (altitude in meters MSL, height in meters, height_type, lat/lon, use_metric). A Jinja global `format_altitude(altitude, height, height_type, use_metric)` (defined in `notifier.py`) renders a compact display string like `200ft AGL (4500ft MSL)`; use it instead of duplicating unit math in templates. All 5 events carry altitude/height data today, so templates can rely on these fields being present (may be `None` for legacy/absent telemetry — guard with `is defined and is not none`).
 
@@ -648,6 +649,75 @@ Tests live in `tests/` with Python (`pytest`) and JavaScript (`Jest` + `jsdom`) 
 ### When Adding/Changing Code
 
 Run `make lint` and fix all errors before committing.
+
+### Health Check Endpoint
+
+**`GET /health`**
+
+Monitoring endpoint for health checks and alerting systems.
+
+**Requirements:**
+- `web_interface.health_check_endpoint.enabled` must be `true` in config
+  (default: `false`)
+- `web_interface.health_check_endpoint.detail` (default: `false`) adds DB size,
+  an estimated record count, and the source list
+- Rate limited to 10/minute
+- No authentication required. Keep `detail` off unless exposing database
+  statistics and source names publicly is acceptable
+
+**Response (`enabled: true`, `detail: false`):**
+```json
+{
+  "status": "healthy",
+  "uptime_seconds": 86400,
+  "database": {
+    "connection_ok": true
+  }
+}
+```
+
+**Response (`detail: true` additionally):**
+```json
+{
+  "status": "healthy",
+  "uptime_seconds": 86400,
+  "database": {
+    "connection_ok": true,
+    "size": "1.2 GB",
+    "record_count": 150000
+  },
+  "sources": [
+    {
+      "name": "Pi-Field-1",
+      "type": "collector",
+      "last_sync": "2026-11-01T15:30:00Z",
+      "last_data": "2026-11-01T15:30:00Z",
+      "total_records": 45000,
+      "online": true,
+      "frequencies": ["2.4ghz", "5.8ghz"]
+    }
+  ]
+}
+```
+
+`record_count` is an estimate from `pg_stat_user_tables.n_live_tup`, not an
+exact `COUNT(*)`. Source shaping is shared with `/api/sources`.
+
+**Error responses:**
+- `403 Forbidden` when `health_check_endpoint.enabled` is false
+- `503 Service Unavailable` with `"status": "degraded"` when the database
+  connection fails or a requested detail query fails (this is what lets
+  orchestrators mark the container unhealthy)
+
+**Config option:**
+```yaml
+web_interface:
+  health_check_endpoint:
+    enabled: false
+    detail: false
+```
+
+**See issue #151** for implementation details.
 
 ### Running
 

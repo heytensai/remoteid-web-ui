@@ -334,6 +334,19 @@ VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 
 
 @dataclass
+class HealthCheckConfig:
+    """Health endpoint configuration.
+
+    ``enabled`` exposes ``/health``; ``detail`` additionally includes database
+    size, an estimated record count, and the source list. Detail is only
+    honored when ``enabled`` is true.
+    """
+
+    enabled: bool = False
+    detail: bool = False
+
+
+@dataclass
 class SessionDetectionConfig:
     """Background session detection configuration"""
 
@@ -469,6 +482,7 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
     server_url: str = ""
     secure_cookies: bool = False
     notifications: List[NotificationTargetConfig] = field(default_factory=list)
+    health_check_endpoint: HealthCheckConfig = field(default_factory=HealthCheckConfig)
 
     def __init__(self, yaml_file: str):
         self.config_path = yaml_file
@@ -503,6 +517,9 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         self.default_hours = web_data.get("default_hours", 24)
         self.max_positions_per_query = web_data.get("max_positions_per_query", 5000)
         self.url_prefix = web_data.get("url_prefix", "")
+        self.health_check_endpoint = self._parse_health_check_endpoint(
+            web_data.get("health_check_endpoint")
+        )
 
         # Map configuration
         map_data = web_data.get("map") or {}
@@ -647,6 +664,50 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
             uas_id: {"alias": entry.alias, "trusted": entry.trusted}
             for uas_id, entry in self.drone_aliases.items()
         }
+
+    @staticmethod
+    def _parse_health_check_endpoint(value) -> HealthCheckConfig:
+        """Parse the nested ``health_check_endpoint`` mapping.
+
+        A non-mapping (including the old boolean form) disables the endpoint
+        with a warning rather than rejecting the entire config — health is
+        non-critical, like tile-provider selection.
+        """
+        if value is None:
+            return HealthCheckConfig()
+        if not isinstance(value, dict):
+            logger.warning(
+                "health_check_endpoint must be a mapping with 'enabled' and "
+                "'detail'; got %r — endpoint disabled",
+                value,
+            )
+            return HealthCheckConfig()
+
+        unknown = set(value) - {"enabled", "detail"}
+        for key in sorted(unknown):
+            logger.warning("Ignoring unknown health_check_endpoint key %r", key)
+
+        enabled = value.get("enabled", False)
+        detail = value.get("detail", False)
+        if not isinstance(enabled, bool):
+            logger.warning(
+                "health_check_endpoint.enabled must be a boolean, got %r; "
+                "using false",
+                enabled,
+            )
+            enabled = False
+        if not isinstance(detail, bool):
+            logger.warning(
+                "health_check_endpoint.detail must be a boolean, got %r; "
+                "using false",
+                detail,
+            )
+            detail = False
+        if detail and not enabled:
+            logger.warning(
+                "health_check_endpoint.detail is ignored while enabled is false"
+            )
+        return HealthCheckConfig(enabled=enabled, detail=detail)
 
     def _parse_roles(self, roles_data: dict) -> Dict[str, RoleConfig]:
         """Parse role configuration from raw data."""
@@ -849,6 +910,10 @@ class WebConfig:  # pylint: disable=too-many-instance-attributes
         return {
             "host": self.host,
             "port": self.port,
+            "health_check_endpoint": {
+                "enabled": self.health_check_endpoint.enabled,
+                "detail": self.health_check_endpoint.detail,
+            },
             "database_url": self.database_url,
             "default_hours": self.default_hours,
             "max_positions_per_query": self.max_positions_per_query,

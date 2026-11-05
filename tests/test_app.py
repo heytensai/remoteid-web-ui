@@ -8,10 +8,11 @@ from types import SimpleNamespace
 from urllib.parse import urlencode
 
 import pytest
+import psycopg2
 
 import app as app_module
 from app import _parse_time_range
-from config import MapConfig, TILE_PROVIDER_HOSTS
+from config import HealthCheckConfig, MapConfig, TILE_PROVIDER_HOSTS
 
 
 @contextlib.contextmanager
@@ -2135,6 +2136,100 @@ class TestAuth:
         assert data["token"] != existing_token
         assert data["user"]["name"] == "Dave"
         assert data["user"]["role"] == "operator"
+
+
+class TestHealthEndpoint:
+    def test_health_disabled_by_default(self, client):
+        """Health endpoint returns 403 when health_check_endpoint is disabled."""
+        resp = client.get("/health")
+        assert resp.status_code == 403
+        data = resp.get_json()
+        assert "error" in data
+        assert "disabled" in data["error"]
+
+    def test_health_detail_without_enabled_is_forbidden(self, client, monkeypatch):
+        """detail=true does not enable the endpoint on its own."""
+        monkeypatch.setattr(
+            app_module._config_snapshot,
+            "health_check_endpoint",
+            HealthCheckConfig(enabled=False, detail=True),
+        )
+
+        resp = client.get("/health")
+        assert resp.status_code == 403
+
+    def test_health_enabled_returns_minimal_payload(self, client, monkeypatch):
+        """Enabled health endpoint returns only status, uptime, and DB status."""
+        monkeypatch.setattr(
+            app_module._config_snapshot,
+            "health_check_endpoint",
+            HealthCheckConfig(enabled=True),
+        )
+
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        health_data = resp.get_json()
+        assert health_data["status"] == "healthy"
+        assert isinstance(health_data["uptime_seconds"], int)
+        assert health_data["database"] == {"connection_ok": True}
+        assert "sources" not in health_data
+
+    def test_health_detail_includes_database_and_sources(self, client, monkeypatch):
+        """detail=true adds database size/estimate and the source list."""
+        monkeypatch.setattr(
+            app_module._config_snapshot,
+            "health_check_endpoint",
+            HealthCheckConfig(enabled=True, detail=True),
+        )
+
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        health_data = resp.get_json()
+        assert health_data["status"] == "healthy"
+        assert health_data["database"]["connection_ok"] is True
+        assert "size" in health_data["database"]
+        assert isinstance(health_data["database"]["record_count"], int)
+        assert isinstance(health_data["sources"], list)
+
+    def test_health_returns_503_when_database_unavailable(self, client, monkeypatch):
+        """A failed DB connection must be reported as 503, not 200 degraded."""
+        monkeypatch.setattr(
+            app_module._config_snapshot,
+            "health_check_endpoint",
+            HealthCheckConfig(enabled=True),
+        )
+        monkeypatch.setattr(
+            app_module.DATABASE,
+            "get_db_health",
+            lambda: {"connection_ok": False},
+        )
+
+        resp = client.get("/health")
+        assert resp.status_code == 503
+        health_data = resp.get_json()
+        assert health_data["status"] == "degraded"
+        assert health_data["database"] == {"connection_ok": False}
+
+    def test_health_detail_failure_returns_503(self, client, monkeypatch):
+        """A failed detail query must degrade rather than return partial data."""
+        monkeypatch.setattr(
+            app_module._config_snapshot,
+            "health_check_endpoint",
+            HealthCheckConfig(enabled=True, detail=True),
+        )
+
+        def raise_detail_error():
+            raise psycopg2.OperationalError("detail query failed")
+
+        monkeypatch.setattr(
+            app_module.DATABASE,
+            "get_db_health_details",
+            raise_detail_error,
+        )
+
+        resp = client.get("/health")
+        assert resp.status_code == 503
+        assert resp.get_json()["status"] == "degraded"
 
 
 class TestSecureCookies:

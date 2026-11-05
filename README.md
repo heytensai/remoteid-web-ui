@@ -429,6 +429,7 @@ make lint-js          # ESLint only
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/config` | GET | Map config, CSRF token, aliases, waypoints |
+| `/health` | GET | Health check (`health_check_endpoint.enabled`; `detail` adds DB stats/sources) |
 | `/api/drones` | GET | List drones in time window |
 | `/api/positions` | GET | Positions (filtered by time, optional uas_id) |
 | `/api/tracks/<uas_id>` | GET | GeoJSON track, grouped by session |

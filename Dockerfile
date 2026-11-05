@@ -34,7 +34,7 @@ USER appuser
 # Expose the application port
 EXPOSE 5000
 
-# Health check
+# Health check - /api/config is always available, unlike the opt-in /health endpoint
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/config')" || exit 1
 

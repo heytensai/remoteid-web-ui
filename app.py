@@ -45,6 +45,9 @@ from retention_scheduler import RetentionScheduler
 from alert_engine import AlertEngine
 from notifier import NotifierService
 
+# Global app startup time for uptime tracking
+APP_START_TIME = datetime.now(timezone.utc)
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -541,6 +544,56 @@ def api_config():
     )
 
 
+@app.route("/health", methods=["GET"])
+@limiter.limit("10/minute")
+def health():
+    """Health monitoring endpoint for orchestrators and alerting systems.
+
+    Requires ``web_interface.health_check_endpoint.enabled`` to be true
+    (default: false). Set ``detail: true`` to include database size, an
+    estimated record count, and the source status list.
+
+    Unauthenticated by design. With ``detail: true`` the payload exposes
+    database statistics and source names, so enable it only where that is
+    acceptable.
+
+    Query params: none
+    Response: JSON with:
+        - status: "healthy" or "degraded"
+        - uptime_seconds: number of seconds since app start
+        - database: {connection_ok[, size, record_count]}
+        - sources: source list (detail only)
+
+    Returns 503 when the database is unreachable so orchestrators mark the
+    container unhealthy.
+    """
+    cfg = _get_config()
+    health_cfg = cfg.health_check_endpoint
+    if not health_cfg.enabled:
+        return jsonify({"error": "Health check endpoint disabled"}), 403
+
+    try:
+        db_health = DATABASE.get_db_health()
+        uptime = int((datetime.now(timezone.utc) - APP_START_TIME).total_seconds())
+        sources = None
+        if db_health["connection_ok"] and health_cfg.detail:
+            db_health = {**db_health, **DATABASE.get_db_health_details()}
+            sources = _collect_source_status(cfg)
+    except psycopg2.Error:
+        logger.exception("Error in health check")
+        return jsonify({"status": "degraded", "error": "database unreachable"}), 503
+
+    healthy = db_health["connection_ok"]
+    body = {
+        "status": "healthy" if healthy else "degraded",
+        "uptime_seconds": uptime,
+        "database": db_health,
+    }
+    if sources is not None:
+        body["sources"] = sources
+    return jsonify(body), 200 if healthy else 503
+
+
 def _format_utc_ts(dt):
     """Format a datetime as an ISO 8601 UTC string with Z suffix.
 
@@ -587,10 +640,8 @@ def _source_is_online(
     return (now - best).total_seconds() <= window_seconds
 
 
-@app.route("/api/sources")
-@require_permission("view_sources")
-def get_sources():
-    """Get status of all data sources: API submitters and configured collectors.
+def _collect_source_status(config) -> List[Dict]:
+    """Build the shared source-status list used by /api/sources and /health.
 
     Collector items (``type`` == ``"collector"``) additionally carry
     ``kind`` (``fixed``/``mobile``), ``color``, ``latitude``, ``longitude`` and
@@ -603,58 +654,65 @@ def get_sources():
         - collector: within ``position_stale_minutes``
         - other/API submitter: within 20 minutes
     """
+    collector_by_name = {c.name: c for c in config.collectors}
+    positions = DATABASE.get_collector_positions()
+    pos_by_name = {p["name"]: p for p in positions}
+    now = datetime.now(timezone.utc)
+
+    items = []
+    seen = set()
+    for source_info in DATABASE.get_all_sources():
+        name = source_info["source"]
+        collector = collector_by_name.get(name)
+        is_collector = collector is not None
+        window = (
+            config.position_stale_minutes * 60
+            if is_collector
+            else API_SOURCE_ONLINE_WINDOW_SECONDS
+        )
+        item = {
+            "name": name,
+            "type": "collector" if is_collector else "api",
+            "last_sync": _format_utc_ts(source_info["last_sync"]),
+            "last_data": _format_utc_ts(source_info["last_data"]),
+            "total_records": source_info["total_records"],
+            "online": _source_is_online(
+                source_info["last_sync"], source_info["last_data"], window, now
+            ),
+            "frequencies": source_info.get("frequencies") or [],
+        }
+        if collector:
+            _attach_collector_fields(item, collector, pos_by_name.get(name, {}))
+        items.append(item)
+        seen.add(name)
+
+    # Configured collectors that have never submitted must still appear
+    # (e.g. map markers for a never-heard-from station).
+    for collector in config.collectors:
+        if collector.name in seen:
+            continue
+        item = {
+            "name": collector.name,
+            "type": "collector",
+            "last_sync": "Never",
+            "last_data": "Never",
+            "total_records": None,
+            "online": False,
+            "frequencies": [],
+        }
+        _attach_collector_fields(item, collector, pos_by_name.get(collector.name, {}))
+        items.append(item)
+
+    return sorted(items, key=lambda s: s["name"])
+
+
+@app.route("/api/sources")
+@require_permission("view_sources")
+def get_sources():
+    """Get status of all data sources: API submitters and configured collectors."""
     try:
-        config = _get_config()
-        collector_by_name = {c.name: c for c in config.collectors}
-        positions = DATABASE.get_collector_positions()
-        pos_by_name = {p["name"]: p for p in positions}
-        now = datetime.now(timezone.utc)
-
-        items = []
-        seen = set()
-        for source_info in DATABASE.get_all_sources():
-            name = source_info["source"]
-            collector = collector_by_name.get(name)
-            is_collector = collector is not None
-            window = (
-                config.position_stale_minutes * 60
-                if is_collector
-                else API_SOURCE_ONLINE_WINDOW_SECONDS
-            )
-            item = {
-                "name": name,
-                "type": "collector" if is_collector else "api",
-                "last_sync": _format_utc_ts(source_info["last_sync"]),
-                "last_data": _format_utc_ts(source_info["last_data"]),
-                "total_records": source_info["total_records"],
-                "online": _source_is_online(
-                    source_info["last_sync"], source_info["last_data"], window, now
-                ),
-                "frequencies": source_info.get("frequencies") or [],
-            }
-            if collector:
-                _attach_collector_fields(item, collector, pos_by_name.get(name, {}))
-            items.append(item)
-            seen.add(name)
-
-        # Configured collectors that have never submitted must still appear
-        # (e.g. map markers for a never-heard-from station).
-        for collector in config.collectors:
-            if collector.name in seen:
-                continue
-            item = {
-                "name": collector.name,
-                "type": "collector",
-                "last_sync": "Never",
-                "last_data": "Never",
-                "total_records": None,
-                "online": False,
-                "frequencies": [],
-            }
-            _attach_collector_fields(item, collector, pos_by_name.get(collector.name, {}))
-            items.append(item)
-
-        return jsonify({"sources": sorted(items, key=lambda s: s["name"])})
+        items = _collect_source_status(_get_config())
+        return jsonify({"sources": items})
     except psycopg2.Error:
         logger.exception("Error getting sources")
         return jsonify({"error": "Internal server error"}), 500

@@ -638,6 +638,127 @@ def _write_raw(content):
         return f.name
 
 
+def test_health_check_endpoint_defaults_disabled():
+    path = _write_config({
+        "database_url": "postgresql://test:test@localhost:5432/test",
+    })
+    try:
+        health = WebConfig(path).health_check_endpoint
+        assert health.enabled is False
+        assert health.detail is False
+    finally:
+        os.unlink(path)
+
+
+def test_health_check_endpoint_enabled_only():
+    path = _write_config({
+        "database_url": "postgresql://test:test@localhost:5432/test",
+        "health_check_endpoint": {"enabled": True},
+    })
+    try:
+        health = WebConfig(path).health_check_endpoint
+        assert health.enabled is True
+        assert health.detail is False
+    finally:
+        os.unlink(path)
+
+
+def test_health_check_endpoint_detail_without_enabled_warns():
+    path = _write_config({
+        "database_url": "postgresql://test:test@localhost:5432/test",
+        "health_check_endpoint": {"detail": True},
+    })
+    try:
+        health = WebConfig(path).health_check_endpoint
+        assert health.enabled is False
+        assert health.detail is True
+    finally:
+        os.unlink(path)
+
+
+def test_health_check_endpoint_enabled_with_detail():
+    path = _write_config({
+        "database_url": "postgresql://test:test@localhost:5432/test",
+        "health_check_endpoint": {"enabled": True, "detail": True},
+    })
+    try:
+        health = WebConfig(path).health_check_endpoint
+        assert health.enabled is True
+        assert health.detail is True
+    finally:
+        os.unlink(path)
+
+
+def test_health_check_endpoint_rejects_legacy_boolean(caplog):
+    path = _write_config({
+        "database_url": "postgresql://test:test@localhost:5432/test",
+        "health_check_endpoint": True,
+    })
+    try:
+        health = WebConfig(path).health_check_endpoint
+        assert health.enabled is False
+        assert health.detail is False
+        assert "must be a mapping" in caplog.text
+    finally:
+        os.unlink(path)
+
+
+def test_health_check_endpoint_non_bool_values_disable(caplog):
+    path = _write_config({
+        "database_url": "postgresql://test:test@localhost:5432/test",
+        "health_check_endpoint": {"enabled": "yes", "detail": 1},
+    })
+    try:
+        health = WebConfig(path).health_check_endpoint
+        assert health.enabled is False
+        assert health.detail is False
+        assert "enabled must be a boolean" in caplog.text
+        assert "detail must be a boolean" in caplog.text
+    finally:
+        os.unlink(path)
+
+
+def test_health_check_endpoint_ignores_unknown_keys(caplog):
+    path = _write_config({
+        "database_url": "postgresql://test:test@localhost:5432/test",
+        "health_check_endpoint": {"enabled": True, "bogus": True},
+    })
+    try:
+        health = WebConfig(path).health_check_endpoint
+        assert health.enabled is True
+        assert "unknown health_check_endpoint key" in caplog.text
+    finally:
+        os.unlink(path)
+
+
+def test_health_check_endpoint_in_to_dict():
+    path = _write_config({
+        "database_url": "postgresql://test:test@localhost:5432/test",
+        "health_check_endpoint": {"enabled": True, "detail": True},
+    })
+    try:
+        assert WebConfig(path).to_dict()["health_check_endpoint"] == {
+            "enabled": True,
+            "detail": True,
+        }
+    finally:
+        os.unlink(path)
+
+
+def test_alerts_imperial_proximity_conversion():
+    """proximity_distance in feet must be converted to meters when use_metric=False."""
+    path = _write_config({
+        "database_url": "postgresql://test:test@localhost:5432/test",
+        "use_metric": False,
+        "alerts": {"proximity_distance": 328.084},
+    })
+    try:
+        cfg = WebConfig(path)
+        assert abs(cfg.alerts.proximity_distance - 100.0) < 0.01
+    finally:
+        os.unlink(path)
+
+
 class TestValidation:
     """Validation tests for WebConfig"""
 

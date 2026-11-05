@@ -1802,3 +1802,37 @@ def test_get_live_positions_skips_old(db):
     _insert_latest_position(db, "drone-old", "session_1", now - timedelta(hours=2))
     result = db.get_live_positions(now - timedelta(minutes=5))
     assert result == []
+
+# --- Health check methods ---
+
+def test_get_db_health(db):
+    """Test that a working database reports a healthy connection."""
+    assert db.get_db_health() == {"connection_ok": True}
+
+
+def test_get_db_health_returns_false_on_connection_error(db, monkeypatch):
+    """Test that a connection error is reported as unhealthy, not raised."""
+
+    def raise_connection_error():
+        raise psycopg2.OperationalError("database unreachable")
+
+    monkeypatch.setattr(db, "_get_conn", raise_connection_error)
+    assert db.get_db_health() == {"connection_ok": False}
+
+
+def test_get_db_health_details(db):
+    """Extended health metrics include DB size and an estimated record count."""
+    details = db.get_db_health_details()
+    assert isinstance(details["size"], str)
+    assert isinstance(details["record_count"], int)
+
+
+def test_get_db_health_details_raises_on_connection_error(db, monkeypatch):
+    """Detail failures propagate so the route can report degraded health."""
+
+    def raise_connection_error():
+        raise psycopg2.OperationalError("database unreachable")
+
+    monkeypatch.setattr(db, "_get_conn", raise_connection_error)
+    with pytest.raises(psycopg2.OperationalError):
+        db.get_db_health_details()

@@ -3099,8 +3099,62 @@ class WebDatabase:
                 (target["name"], target["email"], target["role_name"], ephemeral_user_id),
             )
             cur.execute("DELETE FROM auth_tokens WHERE user_id = %s", (target_user_id,))
-            cur.execute("UPDATE users SET is_active = 0 WHERE id = %s", (target_user_id,))
+            cur.execute("UPDATE users SET is_active = 0 WHERE id=%s", (target_user_id,))
             self._commit(conn)
             return True
+        finally:
+            self._put_conn(conn)
+
+    def get_db_health(self) -> dict:
+        """Return database connectivity status for health monitoring.
+
+        Returns:
+            dict with a single ``connection_ok`` boolean. Deliberately cheap —
+            health checks run frequently and must not scan large tables.
+        """
+        try:
+            conn = self._get_conn()
+        except pool.PoolError:
+            logger.warning("Database pool unavailable during health check", exc_info=True)
+            return {"connection_ok": False}
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            return {"connection_ok": True}
+        except psycopg2.Error:
+            logger.warning("Database health check failed", exc_info=True)
+            conn.rollback()
+            return {"connection_ok": False}
+        finally:
+            self._put_conn(conn)
+
+    def get_db_health_details(self) -> dict:
+        """Return extended health metrics for the opt-in detailed payload.
+
+        ``record_count`` comes from PostgreSQL planner statistics
+        (``pg_stat_user_tables.n_live_tup``) and is therefore an estimate —
+        avoiding a full-table ``COUNT(*)`` on every health poll.
+
+        Raises ``psycopg2.Error`` on failure so the caller can report degraded
+        health rather than silently returning stale/partial data.
+        """
+        try:
+            conn = self._get_conn()
+        except pool.PoolError:
+            raise psycopg2.OperationalError("connection pool unavailable") from None
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT pg_size_pretty(pg_database_size(current_database()))")
+            db_size = cur.fetchone()[0]
+            cur.execute(
+                "SELECT COALESCE(n_live_tup, 0) FROM pg_stat_user_tables "
+                "WHERE schemaname = current_schema() AND relname = 'remoteid'"
+            )
+            row = cur.fetchone()
+            record_count = int(row[0]) if row else 0
+            return {"size": db_size, "record_count": record_count}
+        except psycopg2.Error:
+            conn.rollback()
+            raise
         finally:
             self._put_conn(conn)
