@@ -99,18 +99,18 @@ const MapController = {
     alertUasIds: new Set(),
     colorMode: 'drone', // 'drone' = per-UAS-ID color, 'height' = height-band color
     isLiveMode: false,
+    droneAnnotations: {}, // uas_id -> { tooltip, content, lat, lon }
 
     /**
      * Enable/disable live-mode drone annotation bubbles.
-     * Annotations are bound as markers are created, so flipping the mode also
-     * reconciles the markers already on the map. Without this, a track drawn
-     * while the mode was off — e.g. a notification deep-link, which loads the
-     * track in archive mode and only then switches to live — would stay bare
-     * until its next incremental update happened to rebuild the marker.
+     * Annotations are standalone tooltips reconciled from stored positions, so
+     * flipping the mode immediately adds or removes them without waiting for a
+     * marker rebuild (e.g. a notification deep-link that loads a track in
+     * archive mode and only then switches to live).
      */
     setLiveMode(enabled) {
         this.isLiveMode = !!enabled;
-        this._refreshAllDroneAnnotations();
+        this._syncDroneAnnotations();
     },
 
     escapeHtml(str) {
@@ -185,6 +185,7 @@ const MapController = {
         // Reset marker tracking objects
         this.dronePositions = {};
         this.tracks = {};
+        this.droneAnnotations = {};
         this.operatorMarkers = {};
         this.sessionOperatorMarkers = {};
 
@@ -813,6 +814,7 @@ const MapController = {
      * Clear all tracks
      */
     clearAllTracks() {
+        this._removeAllDroneAnnotations();
         if (!this.ready || !this.layers.tracks) return;
         this.layers.tracks.clearLayers();
         this.tracks = {};
@@ -1008,6 +1010,8 @@ const MapController = {
                 }
             }
         }
+
+        this._syncDroneAnnotations();
     },
 
     /**
@@ -1145,6 +1149,7 @@ const MapController = {
 
         // Move the end marker forward; start/operator markers stay put.
         this._updateEndMarker(uasId, sessionId, this.sessionPositions[sessionKey], color, sessionKey);
+        this._syncDroneAnnotations();
         return true;
     },
 
@@ -1207,6 +1212,9 @@ const MapController = {
 
         // Add session-specific operator markers
         this.updateSessionOperators(uasId, sessionId, positions, color);
+
+        // Keep the live-mode annotation in sync with the newly drawn position.
+        this._syncDroneAnnotations();
     },
 
     /**
@@ -1355,46 +1363,104 @@ const MapController = {
     },
 
     /**
-     * Bind a permanent annotation bubble to a drone marker so it follows the
-     * drone as it moves. Only active in live mode. The bubble is re-bound with
-     * fresh height/time each time the marker is rebuilt for a new packet.
+     * Newest recorded position for each UAS across every drawn session.
+     * A drone can have more than one session on the map (for example a track
+     * kept from a notification deep-link), so the annotation always follows
+     * the newest observation.
+     * @returns {Object<string, {pos: Object, ts: number}>}
      */
-    _bindDroneAnnotation(marker, uasId, pos) {
-        if (!this.isLiveMode) return;
-        marker.bindTooltip(this._droneAnnotationContent(uasId, pos), {
-            permanent: true,
-            direction: 'top',
-            offset: [0, -10],
-            opacity: 1,
-            className: 'drone-annotation'
-        });
+    _latestPositionByUas() {
+        const latest = {};
+        for (const key of Object.keys(this.sessionPositions || {})) {
+            const positions = this.sessionPositions[key];
+            if (!positions || positions.length === 0) continue;
+            const uasId = key.split(':')[0];
+            const pos = positions[positions.length - 1];
+            const ts = new Date(pos.timestamp).getTime();
+            if (!latest[uasId] || ts > latest[uasId].ts) {
+                latest[uasId] = { pos, ts };
+            }
+        }
+        return latest;
     },
 
     /**
-     * Bind or unbind the annotation bubble on every live-drone marker already on
-     * the map, so a live-mode switch takes effect immediately instead of waiting
-     * for the next packet to rebuild a marker.
+     * Reconcile the live-mode drone annotation bubbles.
      *
-     * A `drone`-typed marker is always the session's newest position: the
-     * single-position path in `_addSessionMarkers` draws the drone at the only
-     * point, and `_createEndMarker` only types a marker `drone` while the
-     * position is active, placing it at the final point. So the last stored
-     * position is the right data for both.
+     * Annotations are standalone Leaflet tooltips owned by this controller and
+     * keyed by UAS ID, not bound to track markers. Track markers are rebuilt
+     * constantly (the end marker moves with every packet), so a marker-bound
+     * bubble could leave one bubble per marker instance. Keying by UAS makes
+     * this idempotent: repeated calls update the existing bubble in place and a
+     * drone can never show more than one.
      */
-    _refreshAllDroneAnnotations() {
-        for (const key of Object.keys(this.tracks || {})) {
-            const positions = this.sessionPositions[key];
-            if (!positions || positions.length === 0) continue;
-            const pos = positions[positions.length - 1];
-            const markers = (this.tracks[key] || {}).markers || [];
-            for (const marker of markers) {
-                if (marker._markerType !== 'drone') continue;
-                if (this.isLiveMode) {
-                    this._bindDroneAnnotation(marker, marker._uasId || key.split(':')[0], pos);
-                } else {
-                    marker.unbindTooltip();
-                }
+    _syncDroneAnnotations() {
+        if (!this.isLiveMode) {
+            this._removeAllDroneAnnotations();
+            return;
+        }
+        if (!this.ready || !this.map) return;
+
+        const latest = this._latestPositionByUas();
+        const seen = new Set();
+
+        for (const uasId of Object.keys(latest)) {
+            seen.add(uasId);
+            const pos = latest[uasId].pos;
+            const lat = pos.latitude;
+            const lon = pos.longitude;
+            const content = this._droneAnnotationContent(uasId, pos);
+            const entry = this.droneAnnotations[uasId];
+
+            if (!entry) {
+                const tooltip = L.tooltip({
+                    permanent: true,
+                    direction: 'top',
+                    offset: [0, -10],
+                    opacity: 1,
+                    className: 'drone-annotation'
+                }).setLatLng([lat, lon]).setContent(content).addTo(this.map);
+                this.droneAnnotations[uasId] = { tooltip, content, lat, lon };
+                continue;
             }
+
+            if (entry.lat !== lat || entry.lon !== lon) {
+                entry.tooltip.setLatLng([lat, lon]);
+                entry.lat = lat;
+                entry.lon = lon;
+            }
+            if (entry.content !== content) {
+                entry.tooltip.setContent(content);
+                entry.content = content;
+            }
+        }
+
+        for (const uasId of Object.keys(this.droneAnnotations)) {
+            if (!seen.has(uasId)) this._removeDroneAnnotation(uasId);
+        }
+    },
+
+    /**
+     * Remove a single drone annotation bubble.
+     * @param {string} uasId
+     */
+    _removeDroneAnnotation(uasId) {
+        const entry = this.droneAnnotations[uasId];
+        if (!entry) return;
+        if (this.map && typeof this.map.removeLayer === 'function') {
+            this.map.removeLayer(entry.tooltip);
+        } else if (entry.tooltip && typeof entry.tooltip.remove === 'function') {
+            entry.tooltip.remove();
+        }
+        delete this.droneAnnotations[uasId];
+    },
+
+    /**
+     * Remove every live-mode drone annotation bubble.
+     */
+    _removeAllDroneAnnotations() {
+        for (const uasId of Object.keys(this.droneAnnotations || {})) {
+            this._removeDroneAnnotation(uasId);
         }
     },
 
@@ -1473,7 +1539,6 @@ const MapController = {
             marker._uasId = uasId;
             marker._height = pos.height != null ? pos.height : pos.altitude;
             marker.bindPopup(this._createSessionPointPopup(uasId, sessionId, pos, 'Position', color, collectorNames, frequencies));
-            this._bindDroneAnnotation(marker, uasId, pos);
             this.tracks[trackKey].markers.push(marker);
             return;
         }
@@ -1516,9 +1581,6 @@ const MapController = {
         endMarker._uasId = uasId;
         endMarker._height = endPos.height != null ? endPos.height : endPos.altitude;
         endMarker.bindPopup(this._createSessionPointPopup(uasId, sessionId, endPos, 'End', color, collectorNames, frequencies));
-        if (isActive) {
-            this._bindDroneAnnotation(endMarker, uasId, endPos);
-        }
         return endMarker;
     },
 

@@ -41,6 +41,18 @@ global.L = {
     _latlngs: points,
   })),
   divIcon: jest.fn().mockReturnValue({}),
+  tooltip: jest.fn().mockImplementation((options) => {
+    const t = {
+      _options: options,
+      _content: null,
+      _latlng: null,
+      setContent: jest.fn(function (content) { t._content = content; return t; }),
+      setLatLng: jest.fn(function (latlng) { t._latlng = latlng; return t; }),
+      addTo: jest.fn(function () { return t; }),
+      remove: jest.fn(),
+    };
+    return t;
+  }),
   layerGroup: jest.fn().mockReturnValue({
     addTo: jest.fn(),
     clearLayers: jest.fn(),
@@ -433,6 +445,7 @@ describe('MapController', () => {
       MapController.ready = true;
       MapController.isLiveMode = false;
       MapController.colorMode = 'drone';
+      MapController.droneAnnotations = {};
       MapController.layers.tracks = { removeLayer: jest.fn() };
       MapController.collectorConfigs = [];
       MapController.alertUasIds = new Set();
@@ -701,99 +714,122 @@ describe('MapController', () => {
     });
   });
 
-  describe('_bindDroneAnnotation', () => {
+  describe('_syncDroneAnnotations', () => {
+    const pos = {
+      latitude: 1,
+      longitude: 2,
+      height: 20,
+      timestamp: '2024-01-01T12:00:00Z',
+    };
+    const newer = {
+      latitude: 3,
+      longitude: 4,
+      height: 30,
+      timestamp: '2024-01-01T12:00:10Z',
+    };
+
     beforeEach(() => {
+      MapController.tracks = {};
+      MapController.sessionPositions = {};
+      MapController.droneAnnotations = {};
       MapController.isLiveMode = false;
+      MapController.ready = true;
+      MapController.map = { removeLayer: jest.fn() };
+      MapController.droneAliases = {};
+      L.tooltip.mockClear();
     });
 
     test('does nothing outside live mode', () => {
-      const marker = { bindTooltip: jest.fn() };
-      MapController._bindDroneAnnotation(marker, 'drone-001', {});
-      expect(marker.bindTooltip).not.toHaveBeenCalled();
+      MapController.sessionPositions = { 'drone-001:session_abc': [pos] };
+      MapController._syncDroneAnnotations();
+      expect(L.tooltip).not.toHaveBeenCalled();
+      expect(MapController.droneAnnotations).toEqual({});
     });
 
-    test('binds a permanent top tooltip in live mode', () => {
+    test('creates exactly one annotation per drone in live mode', () => {
       MapController.isLiveMode = true;
-      MapController.droneAliases = { 'drone-001': 'Alpha' };
-      const marker = { bindTooltip: jest.fn() };
-      const pos = { height: 20, timestamp: '2024-01-01T12:00:00Z' };
-      MapController._bindDroneAnnotation(marker, 'drone-001', pos);
-      expect(marker.bindTooltip).toHaveBeenCalledWith(
-        expect.stringContaining('Alpha'),
+      MapController.sessionPositions = { 'drone-001:session_abc': [pos] };
+      MapController._syncDroneAnnotations();
+      expect(L.tooltip).toHaveBeenCalledTimes(1);
+      expect(L.tooltip).toHaveBeenCalledWith(
         expect.objectContaining({
           permanent: true,
           direction: 'top',
           className: 'drone-annotation',
         })
       );
-    });
-  });
-
-  describe('_refreshAllDroneAnnotations', () => {
-    const key = 'drone-001:session_abc';
-    const pos = { height: 20, timestamp: '2024-01-01T12:00:00Z' };
-
-    const setup = (markers) => {
-      MapController.tracks = { [key]: { markers } };
-      MapController.sessionPositions = { [key]: [pos] };
-    };
-
-    beforeEach(() => {
-      MapController.tracks = {};
-      MapController.sessionPositions = {};
-      MapController.isLiveMode = false;
+      expect(Object.keys(MapController.droneAnnotations)).toEqual(['drone-001']);
     });
 
-    test('binds annotations to existing drone markers when entering live mode', () => {
-      const marker = { _markerType: 'drone', _uasId: 'drone-001', bindTooltip: jest.fn() };
-      setup([marker]);
+    test('is idempotent across repeated syncs (never duplicates a bubble)', () => {
       MapController.isLiveMode = true;
-      MapController._refreshAllDroneAnnotations();
-      expect(marker.bindTooltip).toHaveBeenCalledWith(
-        expect.stringContaining('drone-001'),
-        expect.objectContaining({ permanent: true })
-      );
+      MapController.sessionPositions = { 'drone-001:session_abc': [pos] };
+      MapController._syncDroneAnnotations();
+      const tooltip = MapController.droneAnnotations['drone-001'].tooltip;
+      MapController._syncDroneAnnotations();
+      MapController._syncDroneAnnotations();
+      expect(L.tooltip).toHaveBeenCalledTimes(1);
+      expect(MapController.droneAnnotations['drone-001'].tooltip).toBe(tooltip);
     });
 
-    test('unbinds annotations when leaving live mode', () => {
-      const marker = { _markerType: 'drone', _uasId: 'drone-001', unbindTooltip: jest.fn() };
-      setup([marker]);
-      MapController.isLiveMode = false;
-      MapController._refreshAllDroneAnnotations();
-      expect(marker.unbindTooltip).toHaveBeenCalled();
-    });
-
-    test('leaves start/stop markers untouched', () => {
-      const start = { _markerType: 'start', bindTooltip: jest.fn(), unbindTooltip: jest.fn() };
-      const stop = { _markerType: 'stop', bindTooltip: jest.fn(), unbindTooltip: jest.fn() };
-      setup([start, stop]);
+    test('two sessions for the same drone still produce one bubble at the newest position', () => {
       MapController.isLiveMode = true;
-      MapController._refreshAllDroneAnnotations();
-      expect(start.bindTooltip).not.toHaveBeenCalled();
-      expect(stop.bindTooltip).not.toHaveBeenCalled();
+      MapController.sessionPositions = {
+        'drone-001:session_abc': [pos],
+        'drone-001:session_def': [newer],
+      };
+      MapController._syncDroneAnnotations();
+      expect(L.tooltip).toHaveBeenCalledTimes(1);
+      const entry = MapController.droneAnnotations['drone-001'];
+      expect(entry.tooltip.setLatLng).toHaveBeenCalledWith([3, 4]);
+      expect(entry.lat).toBe(3);
+      expect(entry.lon).toBe(4);
     });
 
-    test('skips tracks with no stored positions', () => {
-      const marker = { _markerType: 'drone', _uasId: 'drone-001', bindTooltip: jest.fn() };
-      MapController.tracks = { [key]: { markers: [marker] } };
-      MapController.sessionPositions = {};
+    test('updates an existing bubble in place when a newer packet arrives', () => {
       MapController.isLiveMode = true;
-      MapController._refreshAllDroneAnnotations();
-      expect(marker.bindTooltip).not.toHaveBeenCalled();
+      MapController.sessionPositions = { 'drone-001:session_abc': [pos] };
+      MapController._syncDroneAnnotations();
+      const tooltip = MapController.droneAnnotations['drone-001'].tooltip;
+
+      MapController.sessionPositions = { 'drone-001:session_abc': [pos, newer] };
+      MapController._syncDroneAnnotations();
+
+      expect(L.tooltip).toHaveBeenCalledTimes(1);
+      expect(tooltip.setLatLng).toHaveBeenCalledWith([3, 4]);
+      expect(tooltip.setContent).toHaveBeenCalled();
     });
 
-    test('setLiveMode(true) annotates already-drawn markers', () => {
-      const marker = { _markerType: 'drone', _uasId: 'drone-001', bindTooltip: jest.fn() };
-      setup([marker]);
+    test('removes annotations for drones no longer present', () => {
+      MapController.isLiveMode = true;
+      MapController.sessionPositions = {
+        'drone-001:session_abc': [pos],
+        'drone-002:session_def': [pos],
+      };
+      MapController._syncDroneAnnotations();
+      const removed = MapController.droneAnnotations['drone-001'].tooltip;
+
+      delete MapController.sessionPositions['drone-001:session_abc'];
+      MapController._syncDroneAnnotations();
+
+      expect(MapController.map.removeLayer).toHaveBeenCalledWith(removed);
+      expect(Object.keys(MapController.droneAnnotations)).toEqual(['drone-002']);
+    });
+
+    test('setLiveMode(true) annotates already-drawn positions', () => {
+      MapController.sessionPositions = { 'drone-001:session_abc': [pos] };
       MapController.setLiveMode(true);
-      expect(marker.bindTooltip).toHaveBeenCalled();
+      expect(L.tooltip).toHaveBeenCalledTimes(1);
+      expect(MapController.droneAnnotations['drone-001']).toBeDefined();
     });
 
-    test('setLiveMode(false) strips annotations from already-drawn markers', () => {
-      const marker = { _markerType: 'drone', _uasId: 'drone-001', unbindTooltip: jest.fn() };
-      setup([marker]);
+    test('setLiveMode(false) removes all annotations', () => {
+      MapController.sessionPositions = { 'drone-001:session_abc': [pos] };
+      MapController.setLiveMode(true);
+      const tooltip = MapController.droneAnnotations['drone-001'].tooltip;
       MapController.setLiveMode(false);
-      expect(marker.unbindTooltip).toHaveBeenCalled();
+      expect(MapController.map.removeLayer).toHaveBeenCalledWith(tooltip);
+      expect(MapController.droneAnnotations).toEqual({});
     });
   });
 
