@@ -1,1 +1,1 @@
-Trusted drone {{ name }} ({{ uas_id }}) started a new flight{% set _alt = format_altitude(altitude, height, height_type, use_metric) %}{% if _alt %} at {{ _alt }}{% endif %}
+Trusted drone {{ name }} ({{ uas_id }}) started a new flight{% set _alt = format_altitude(altitude, height, height_type, use_metric) %}{% if _alt %} at {{ _alt }}{% endif }, {% if collector_distance %}{{ '%.0f' % collector_distance }}m from {{ collector_name }} (heading {{ collector_bearing }}°){% endif %}

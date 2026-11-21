@@ -92,6 +92,66 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
+def calculate_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Return compass bearing in degrees (0 = North, 90 = East, 180 = South, 270 = West).
+
+    Uses the standard navigation formula: atan2(
+        sin(delta_lon) * cos(lat2),
+        cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(delta_lon)
+    )
+    """
+    delta_lon = math.radians(lon2 - lon1)
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+
+    x = math.sin(delta_lon) * math.cos(lat2_rad)
+    y = math.cos(lat1_rad) * math.sin(lat2_rad) - math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(delta_lon)
+
+    bearing = math.degrees(math.atan2(x, y))
+    return (bearing + 360) % 360  # Normalize to 0-360
+
+
+def _find_nearest_collector(_uas_id: str, lat: float, lon: float,
+                             collectors: list) -> Optional[Dict]:
+    """Find the nearest configured collector to a drone position.
+
+    Returns dict with: {distance_m, bearing_deg, name, lat, lon} or None if no collectors configured.
+    """
+    min_distance = None
+    nearest = None
+
+    for collector in collectors:
+        if collector.lat is None or collector.lon is None:
+            continue
+        distance = haversine_distance(lat, lon, collector.lat, collector.lon)
+        bearing = calculate_bearing(lat, lon, collector.lat, collector.lon)
+
+        if min_distance is None or distance < min_distance:
+            min_distance = distance
+            nearest = {
+                "distance_m": round(distance, 1),
+                "bearing_deg": int(bearing),
+                "name": collector.name,
+                "lat": collector.lat,
+                "lon": collector.lon,
+            }
+
+    return nearest
+
+
+def _get_nearest_collector_from_db(uas_id: str,
+                                    collectors: List) -> Optional[Dict]:
+    """Find the nearest configured collector using first_position coordinates (fallback when unavailable).
+
+    When lat/lon from first_position are None, this function currently uses the same
+    logic as _find_nearest_collector. If an actual DB lookup is desired, query
+    latest_positions for the drone's last known position and compare against
+    configured collectors.
+    """
+    # uas_id is unused in this implementation; it's kept for API compatibility
+    # and future DB lookup implementation if needed
+    return _find_nearest_collector(None, None, None, collectors)
+
 
 class AlertEngine:  # pylint: disable=too-many-instance-attributes
     """Evaluates drone positions against configured alert conditions.
@@ -268,7 +328,14 @@ class AlertEngine:  # pylint: disable=too-many-instance-attributes
             "New flight for %s (%s): session %s",
             uas_id, event_type, session_id,
         )
-        self._fire(self.on_new_flight, uas_id, session_id, event_type, first_pos)
+        nearest_collector = None
+        if first_pos:
+            lat = first_pos.get("latitude")
+            lon = first_pos.get("longitude")
+            if lat is not None and lon is not None:
+                nearest_collector = _find_nearest_collector(uas_id, lat, lon, self._config.collectors)
+            # If lat/lon is None, we don't have location data, so skip collector lookup
+        self._fire(self.on_new_flight, uas_id, session_id, event_type, first_pos, nearest_collector)
 
     # --- Geozone evaluation ---
 

@@ -17,7 +17,7 @@
           },
           {
             "type": "TextBlock",
-            "text": "**{{ name_a|json_escape }}** and **{{ name_b|json_escape }}** are **{{ distance_str }}** apart"
+             "text": "**{{ name_a|json_escape }}** and **{{ name_b|json_escape }}** are **{{ distance_str }}** apart{% if collector_distance_a or collector_distance_b -%} at {% if collector_distance_a %}{{ '%.0f' % collector_distance_a }}m from {{ collector_name_a|json_escape }} (heading {{ collector_bearing_a }}°){% endif }, {% if collector_distance_b %}{{ '%.0f' % collector_distance_b }}m from {{ collector_name_b|json_escape }} (heading {{ collector_bearing_b }}°){% endif }}{% endif %}"
           },
           {
             "type": "FactSet",

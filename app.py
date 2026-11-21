@@ -1897,7 +1897,8 @@ def _on_geozone_exit(uas_id: str, geozone_name: str,
 
 
 def _on_new_flight(uas_id: str, session_id: str, event_type: str,
-                   first_position: Optional[Dict] = None):
+                   first_position: Optional[Dict] = None,
+                   nearest_collector: Optional[Dict] = None):
     """Callback fired when a drone starts a new flight. Dispatches to notifier.
 
     ``event_type`` is the trust-tier-specific alert name (``new_unknown``,
@@ -1912,6 +1913,7 @@ def _on_new_flight(uas_id: str, session_id: str, event_type: str,
         "session_id": session_id,
         "trust_level": event_type.removeprefix("new_"),
         "use_metric": CONFIG.use_metric,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     if first_position:
         ctx["altitude"] = first_position.get("altitude")
@@ -1919,6 +1921,10 @@ def _on_new_flight(uas_id: str, session_id: str, event_type: str,
         ctx["height_type"] = first_position.get("height_type")
         ctx["lat"] = first_position.get("latitude")
         ctx["lon"] = first_position.get("longitude")
+    if nearest_collector:
+        ctx["collector_distance"] = nearest_collector["distance_m"]
+        ctx["collector_name"] = nearest_collector["name"]
+        ctx["collector_bearing"] = nearest_collector["bearing_deg"]
     NOTIFIER_SERVICE.dispatch(event_type, **ctx)
 
 
@@ -1928,6 +1934,8 @@ def _on_drone_proximity(  # pylint: disable=too-many-positional-arguments
     distance_m: float,
     position_a: Optional[Dict] = None,
     position_b: Optional[Dict] = None,
+    _nearest_collector_a: Optional[Dict] = None,
+    _nearest_collector_b: Optional[Dict] = None,
 ):
     """Callback fired when two drones are within proximity distance. Dispatches to notifier."""
     if CONFIG.use_metric:
@@ -1943,6 +1951,7 @@ def _on_drone_proximity(  # pylint: disable=too-many-positional-arguments
         "distance_m": distance_m,
         "distance_str": distance_str,
         "use_metric": CONFIG.use_metric,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     for prefix, position in (("a", position_a), ("b", position_b)):
         if position:
@@ -1951,6 +1960,14 @@ def _on_drone_proximity(  # pylint: disable=too-many-positional-arguments
             ctx[f"height_type_{prefix}"] = position.get("height_type")
             ctx[f"lat_{prefix}"] = position.get("latitude")
             ctx[f"lon_{prefix}"] = position.get("longitude")
+    if _nearest_collector_a:
+        ctx["collector_distance_a"] = _nearest_collector_a["distance_m"]
+        ctx["collector_name_a"] = _nearest_collector_a["name"]
+        ctx["collector_bearing_a"] = _nearest_collector_a["bearing_deg"]
+    if _nearest_collector_b:
+        ctx["collector_distance_b"] = _nearest_collector_b["distance_m"]
+        ctx["collector_name_b"] = _nearest_collector_b["name"]
+        ctx["collector_bearing_b"] = _nearest_collector_b["bearing_deg"]
     NOTIFIER_SERVICE.dispatch("drone_proximity", **ctx)
 
 

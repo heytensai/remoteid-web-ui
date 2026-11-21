@@ -2,7 +2,7 @@
   "embeds": [{
     "title": "Drone Proximity Alert",
     "color": 15158332,
-    "description": "{{ name_a|json_escape }} and {{ name_b|json_escape }} are {{ distance_str }} apart",
+    "description": "{{ name_a|json_escape }} and {{ name_b|json_escape }} are {{ distance_str }} apart{% if collector_distance_a or collector_distance_b -%} at {% if collector_distance_a %}{{ '%.0f' % collector_distance_a }}m from {{ collector_name_a|json_escape }} (heading {{ collector_bearing_a }}°){% endif }}, {% if collector_distance_b %}{{ '%.0f' % collector_distance_b }}m from {{ collector_name_b|json_escape }} (heading {{ collector_bearing_b }}°){% endif }}{% endif %}",
     "fields": [
       {"name": "Drone A", "value": "{{ name_a|json_escape }}", "inline": true},
       {"name": "Drone B", "value": "{{ name_b|json_escape }}", "inline": true},
